@@ -19,14 +19,13 @@ from reportlab.pdfgen import canvas
 # ====================== НАСТРОЙКИ ======================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAI_API_KEY = os.getenv("XAI_API_KEY")
-ADMIN_IDS = [909828109]  # ← СЮДА ВПИШИ СВОЙ TELEGRAM ID
+ADMIN_IDS = [123456789]  # ← СВОЙ TELEGRAM ID СЮДА
 
 client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-# Хранилище пользователей
 users_db = {}
 
 PLAN_LIMITS = {
@@ -36,18 +35,44 @@ PLAN_LIMITS = {
     "premium": 100
 }
 
+STYLES = {
+    "free": ["Графит", "Снег"],
+    "basic": ["Графит", "Снег", "Океан"],
+    "standard": ["Графит", "Снег", "Океан", "Ночь", "Мята", "Коралл", "Уголь"],
+    "premium": ["Графит", "Снег", "Океан", "Ночь", "Мята", "Коралл", "Уголь",
+                "Эспрессо", "Лаванда", "Неон", "Сканди", "Изумруд"]
+}
+
+STYLE_COLORS = {
+    "Графит": (40, 40, 40),
+    "Снег": (245, 245, 245),
+    "Океан": (20, 40, 80),
+    "Ночь": (15, 15, 15),
+    "Мята": (220, 240, 230),
+    "Коралл": (255, 230, 220),
+    "Уголь": (30, 30, 30),
+    "Эспрессо": (50, 30, 20),
+    "Лаванда": (230, 220, 240),
+    "Неон": (10, 10, 20),
+    "Сканди": (240, 235, 225),
+    "Изумруд": (20, 50, 40)
+}
+
 # ====================== СОСТОЯНИЯ ======================
 class Form(StatesGroup):
     waiting_category = State()
+    waiting_topic = State()
+    waiting_slides = State()
+    waiting_style = State()
     waiting_confirm = State()
 
-# ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======================
+# ====================== ФУНКЦИИ ======================
 async def ask_grok(prompt: str) -> str:
     try:
         response = await client.chat.completions.create(
             model="grok-3",
             messages=[
-                {"role": "system", "content": "Ты профессиональный помощник по созданию презентаций и документов на русском языке. Отвечай чётко и структурированно."},
+                {"role": "system", "content": "Ты профессиональный создатель презентаций и документов. Отвечай только на русском, чётко и структурированно."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
@@ -70,208 +95,184 @@ def get_user(user_id: int):
 
 def can_generate(user_id: int) -> bool:
     user = get_user(user_id)
-    limit = PLAN_LIMITS.get(user["plan"], 3)
-    return user["generations"] < limit
+    return user["generations"] < PLAN_LIMITS.get(user["plan"], 3)
 
 # ====================== КЛАВИАТУРЫ ======================
-def category_keyboard():
+def category_kb():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="👨‍🎓 Студент")],
             [KeyboardButton(text="💼 Предприниматель")],
-            [KeyboardButton(text="👤 Обычный человек")]
+            [KeyboardButton(text="🏠 Для себя")]
         ],
         resize_keyboard=True
     )
 
-def main_menu_keyboard():
+def main_kb():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📊 Сделать презентацию")],
             [KeyboardButton(text="📄 Сделать документ")],
             [KeyboardButton(text="📋 Готовые шаблоны")],
-            [KeyboardButton(text="📁 Моя история")],
-            [KeyboardButton(text="ℹ️ Мой тариф")]
+            [KeyboardButton(text="📁 Моя история"), KeyboardButton(text="ℹ️ Мой тариф")]
         ],
         resize_keyboard=True
     )
 
+def slides_kb():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="5 слайдов"), KeyboardButton(text="8 слайдов")],
+            [KeyboardButton(text="10 слайдов"), KeyboardButton(text="15 слайдов")]
+        ],
+        resize_keyboard=True
+    )
+
+def style_kb(plan: str):
+    styles = STYLES.get(plan, STYLES["free"])
+    buttons = [[KeyboardButton(text=style)] for style in styles]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
 # ====================== /START ======================
 @dp.message(Command("start"))
-async def start_command(message: Message, state: FSMContext):
-    user_id = message.from_user.id
-    user = get_user(user_id)
-    
+async def cmd_start(message: Message, state: FSMContext):
+    user = get_user(message.from_user.id)
     name = message.from_user.first_name or "друг"
     user["name"] = name
 
     await message.answer(
         f"Привет, {name}! 👋\n\n"
-        "Я бот, который помогает создавать презентации, документы и заполнять готовые шаблоны.\n\n"
-        "Чтобы я мог лучше подсказать, кем ты себя считаешь?",
-        reply_markup=category_keyboard()
+        "Я помогаю быстро создавать презентации, документы и готовые шаблоны.\n\n"
+        "Выбери, кто ты:",
+        reply_markup=category_kb()
     )
     await state.set_state(Form.waiting_category)
 
-# ====================== ВЫБОР КАТЕГОРИИ ======================
 @dp.message(Form.waiting_category)
 async def process_category(message: Message, state: FSMContext):
-    user_id = message.from_user.id
-    user = get_user(user_id)
+    user = get_user(message.from_user.id)
     text = message.text
 
     if "Студент" in text:
         user["category"] = "student"
-        desc = "Отлично! Я помогу с презентациями, рефератами и учебными документами."
+        reply = "Отлично! Помогу с презентациями, рефератами и учебными работами."
     elif "Предприниматель" in text:
         user["category"] = "business"
-        desc = "Отлично! Я помогу с презентациями, коммерческими предложениями, карточками компании и договорами."
-    elif "Обычный" in text:
-        user["category"] = "regular"
-        desc = "Отлично! Я помогу с презентациями, договорами и готовыми документами (европротокол, купля-продажа и т.д.)."
+        reply = "Отлично! Помогу с презентациями, коммерческими предложениями и договорами."
+    elif "Для себя" in text:
+        user["category"] = "personal"
+        reply = "Отлично! Помогу с презентациями, договорами и бытовыми документами."
     else:
-        await message.answer("Пожалуйста, выбери один из вариантов кнопками.")
+        await message.answer("Пожалуйста, выбери одну из кнопок.")
         return
 
-    await message.answer(f"{desc}\n\nЧто хочешь сделать?", reply_markup=main_menu_keyboard())
+    await message.answer(f"{reply}\n\nЧто будем делать?", reply_markup=main_kb())
     await state.clear()
 
-# ====================== ГЛАВНОЕ МЕНЮ ======================
+# ====================== МЕНЮ ======================
 @dp.message(F.text == "📊 Сделать презентацию")
-async def make_presentation(message: Message, state: FSMContext):
+async def start_presentation(message: Message, state: FSMContext):
     if not can_generate(message.from_user.id):
-        await message.answer("Лимит генераций на этом тарифе закончился.")
+        await message.answer("Лимит генераций на твоём тарифе закончился.")
         return
 
-    await message.answer(
-        "Напиши тему и детали презентации.\n\n"
-        "Пример:\n"
-        "«Сделай презентацию про хомяков на 10 слайдов в строгом тёмно-сером стиле»"
-    )
-    await state.set_state(Form.waiting_confirm)
-    await state.update_data(action="presentation")
+    await message.answer("Напиши тему презентации (можно коротко):")
+    await state.set_state(Form.waiting_topic)
 
-@dp.message(F.text == "📄 Сделать документ")
-async def make_document(message: Message, state: FSMContext):
-    if not can_generate(message.from_user.id):
-        await message.answer("Лимит генераций закончился.")
-        return
+@dp.message(Form.waiting_topic)
+async def process_topic(message: Message, state: FSMContext):
+    await state.update_data(topic=message.text)
+    await message.answer("Сколько слайдов нужно?", reply_markup=slides_kb())
+    await state.set_state(Form.waiting_slides)
 
-    await message.answer("Напиши, какой документ нужен.\nПример: «Сделай коммерческое предложение»")
-    await state.set_state(Form.waiting_confirm)
-    await state.update_data(action="document")
+@dp.message(Form.waiting_slides)
+async def process_slides(message: Message, state: FSMContext):
+    slides = 8
+    if "5" in message.text:
+        slides = 5
+    elif "10" in message.text:
+        slides = 10
+    elif "15" in message.text:
+        slides = 15
 
-@dp.message(F.text == "📋 Готовые шаблоны")
-async def templates_menu(message: Message):
-    await message.answer(
-        "Доступные шаблоны (тестовый режим):\n\n"
-        "1. Европротокол (ДТП)\n"
-        "2. Договор купли-продажи автомобиля\n"
-        "3. Карточка предприятия\n"
-        "4. Акт выполненных работ\n\n"
-        "Пока это демо."
-    )
-
-@dp.message(F.text == "📁 Моя история")
-async def show_history(message: Message):
+    await state.update_data(slides=slides)
     user = get_user(message.from_user.id)
-    if not user["history"]:
-        await message.answer("История пока пустая.")
-        return
-    text = "Твоя история:\n\n"
-    for i, item in enumerate(user["history"][-10:], 1):
-        text += f"{i}. {item}\n"
-    await message.answer(text)
+    await message.answer("Выбери стиль оформления:", reply_markup=style_kb(user["plan"]))
+    await state.set_state(Form.waiting_style)
 
-@dp.message(F.text == "ℹ️ Мой тариф")
-async def my_plan(message: Message):
-    user = get_user(message.from_user.id)
-    plan_names = {
-        "free": "Бесплатный",
-        "basic": "Базовый (199 ₽)",
-        "standard": "Стандарт (499 ₽)",
-        "premium": "Премиум (999 ₽)"
-    }
-    limit = PLAN_LIMITS.get(user["plan"], 3)
-    await message.answer(
-        f"Твой тариф: {plan_names.get(user['plan'])}\n"
-        f"Использовано генераций: {user['generations']} из {limit}"
-    )
-
-# ====================== ОБРАБОТКА ЗАПРОСА ======================
-@dp.message(Form.waiting_confirm)
-async def process_request(message: Message, state: FSMContext):
+@dp.message(Form.waiting_style)
+async def process_style(message: Message, state: FSMContext):
+    style = message.text
     data = await state.get_data()
-    action = data.get("action")
-    user_id = message.from_user.id
-    user = get_user(user_id)
+    await state.update_data(style=style)
 
-    await message.answer("Делаю образец... Подожди 10–20 секунд.")
-
-    if action == "presentation":
-        prompt = f"""
-        Пользователь попросил: {message.text}
-        
-        Сделай краткий образец структуры презентации:
-        - Название
-        - Список слайдов (номер + заголовок)
-        - Рекомендуемый стиль
-        
-        Ответ должен быть коротким и понятным.
-        """
-        sample = await ask_grok(prompt)
-        
-        await state.update_data(original_request=message.text, sample=sample)
-        await message.answer(
-            f"Вот образец:\n\n{sample}\n\n"
-            "Если подходит — напиши «делай»\n"
-            "Если нет — напиши новый запрос."
-        )
-    else:
-        user["generations"] += 1
-        await message.answer("Генерация документов будет в следующей версии.")
-        await state.clear()
-
-# ====================== ПОДТВЕРЖДЕНИЕ И ГЕНЕРАЦИЯ ======================
-@dp.message(F.text.lower().in_(["делай", "да", "подтверждаю", "ок", "хорошо"]))
-async def confirm_and_generate(message: Message, state: FSMContext):
-    data = await state.get_data()
-    if not data.get("original_request"):
-        await message.answer("Сначала напиши тему презентации.")
-        return
-
-    user_id = message.from_user.id
-    user = get_user(user_id)
-
-    if not can_generate(user_id):
-        await message.answer("Лимит генераций закончился.")
-        return
-
-    await message.answer("Делаю полную версию... Это займёт 20–40 секунд.")
+    await message.answer("Делаю пробный вариант... Подожди 15–25 секунд.")
 
     prompt = f"""
-    Создай полную структуру презентации по запросу:
-    {data['original_request']}
+Тема презентации: {data['topic']}
+Количество слайдов: {data['slides']}
+Стиль: {style}
 
-    Верни ответ строго в JSON формате:
-    {{
-        "title": "Название презентации",
-        "slides": [
-            {{"title": "Заголовок", "content": "Текст слайда"}}
-        ]
-    }}
-    """
+Сделай краткий образец структуры:
+- Название презентации
+- Список слайдов (номер + заголовок)
+
+Ответ должен быть коротким и понятным.
+"""
+    sample = await ask_grok(prompt)
+
+    await state.update_data(sample=sample)
+    await message.answer(
+        f"Пробный вариант:\n\n{sample}\n\n"
+        "Если подходит — напиши «делай»\n"
+        "Если нет — просто начни заново через меню."
+    )
+    await state.set_state(Form.waiting_confirm)
+
+# ====================== ПОДТВЕРЖДЕНИЕ И ГЕНЕРАЦИЯ ======================
+@dp.message(Form.waiting_confirm, F.text.lower().in_(["делай", "да", "ок", "хорошо", "подтверждаю"]))
+async def confirm_generate(message: Message, state: FSMContext):
+    data = await state.get_data()
+    user_id = message.from_user.id
+    user = get_user(user_id)
+
+    if not data.get("topic"):
+        await message.answer("Сначала выбери тему презентации.")
+        await state.clear()
+        return
+
+    await message.answer("Делаю финальную версию... Это займёт 20–40 секунд.")
+
+    prompt = f"""
+Создай полную структуру презентации.
+
+Тема: {data['topic']}
+Количество слайдов: {data['slides']}
+Стиль: {data['style']}
+
+Верни ответ строго в формате JSON:
+{{
+    "title": "Название презентации",
+    "slides": [
+        {{"title": "Заголовок слайда", "content": "Текст слайда"}}
+    ]
+}}
+"""
     raw = await ask_grok(prompt)
 
     try:
         start = raw.find("{")
         end = raw.rfind("}") + 1
         content = json.loads(raw[start:end])
-    except:
+    except Exception:
         await message.answer("Не удалось разобрать ответ. Попробуй ещё раз.")
+        await state.clear()
         return
 
-    # ===== СОЗДАНИЕ PPTX =====
+    bg_color = STYLE_COLORS.get(data.get("style"), (40, 40, 40))
+    text_color = (230, 230, 230) if sum(bg_color) < 300 else (30, 30, 30)
+
+    # ===== PPTX =====
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
@@ -280,29 +281,28 @@ async def confirm_and_generate(message: Message, state: FSMContext):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     shape = slide.shapes.add_shape(1, 0, 0, prs.slide_width, prs.slide_height)
     shape.fill.solid()
-    shape.fill.fore_color.rgb = RGBColor(40, 40, 40)
+    shape.fill.fore_color.rgb = RGBColor(*bg_color)
 
     title_box = slide.shapes.add_textbox(Inches(1), Inches(2.8), Inches(11.3), Inches(1.5))
     p = title_box.text_frame.paragraphs[0]
     p.text = content.get("title", "Презентация")
     p.font.size = Pt(36)
     p.font.bold = True
-    p.font.color.rgb = RGBColor(230, 230, 230)
+    p.font.color.rgb = RGBColor(*text_color)
     p.alignment = PP_ALIGN.CENTER
 
-    # Остальные слайды
     for s in content.get("slides", []):
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         bg = slide.shapes.add_shape(1, 0, 0, prs.slide_width, prs.slide_height)
         bg.fill.solid()
-        bg.fill.fore_color.rgb = RGBColor(45, 45, 45)
+        bg.fill.fore_color.rgb = RGBColor(*bg_color)
 
         title_box = slide.shapes.add_textbox(Inches(0.7), Inches(0.4), Inches(12), Inches(1))
         p = title_box.text_frame.paragraphs[0]
         p.text = s.get("title", "")
         p.font.size = Pt(26)
         p.font.bold = True
-        p.font.color.rgb = RGBColor(230, 230, 230)
+        p.font.color.rgb = RGBColor(*text_color)
 
         content_box = slide.shapes.add_textbox(Inches(0.7), Inches(1.5), Inches(12), Inches(5))
         tf = content_box.text_frame
@@ -310,12 +310,12 @@ async def confirm_and_generate(message: Message, state: FSMContext):
         p = tf.paragraphs[0]
         p.text = s.get("content", "")
         p.font.size = Pt(18)
-        p.font.color.rgb = RGBColor(200, 200, 200)
+        p.font.color.rgb = RGBColor(*text_color)
 
     pptx_path = f"pres_{user_id}.pptx"
     prs.save(pptx_path)
 
-    # ===== СОЗДАНИЕ PDF =====
+    # ===== PDF =====
     pdf_path = f"pres_{user_id}.pdf"
     c = canvas.Canvas(pdf_path, pagesize=A4)
     width, height = A4
@@ -329,27 +329,69 @@ async def confirm_and_generate(message: Message, state: FSMContext):
             y = height - 40
         c.setFont("Helvetica-Bold", 12)
         c.drawString(40, y, f"{i}. {s.get('title', '')[:80]}")
-        y -= 20
+        y -= 18
         c.setFont("Helvetica", 10)
-        text = s.get("content", "")[:250]
+        text = s.get("content", "")[:200]
         c.drawString(40, y, text[:95])
         y -= 15
         if len(text) > 95:
             c.drawString(40, y, text[95:190])
             y -= 15
-        y -= 15
+        y -= 12
 
     c.save()
 
-    # Отправка файлов
     await message.answer_document(FSInputFile(pptx_path), caption="Редактируемая версия (PPTX)")
-    await message.answer_document(FSInputFile(pdf_path), caption="Версия PDF")
+    await message.answer_document(FSInputFile(pdf_path), caption="PDF-версия")
 
     user["generations"] += 1
     user["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title', 'Презентация')}")
 
-    await message.answer("Готово!", reply_markup=main_menu_keyboard())
+    await message.answer("Готово!", reply_markup=main_kb())
     await state.clear()
+
+# ====================== ДОКУМЕНТЫ И ШАБЛОНЫ ======================
+@dp.message(F.text == "📄 Сделать документ")
+async def make_document(message: Message):
+    await message.answer(
+        "Пока генерация произвольных документов в разработке.\n"
+        "Скоро здесь можно будет создавать коммерческие предложения, отчёты и письма."
+    )
+
+@dp.message(F.text == "📋 Готовые шаблоны")
+async def templates_menu(message: Message):
+    await message.answer(
+        "Готовые шаблоны (в разработке):\n\n"
+        "• Европротокол (ДТП)\n"
+        "• Договор купли-продажи автомобиля\n"
+        "• Карточка предприятия\n"
+        "• Акт выполненных работ\n\n"
+        "Скоро можно будет просто заполнить данные и скачать готовый файл."
+    )
+
+@dp.message(F.text == "📁 Моя история")
+async def show_history(message: Message):
+    user = get_user(message.from_user.id)
+    if not user["history"]:
+        await message.answer("История пока пустая.")
+        return
+    text = "Твоя история:\n\n" + "\n".join(user["history"][-10:])
+    await message.answer(text)
+
+@dp.message(F.text == "ℹ️ Мой тариф")
+async def my_plan(message: Message):
+    user = get_user(message.from_user.id)
+    names = {
+        "free": "Бесплатный",
+        "basic": "Базовый (199 ₽)",
+        "standard": "Стандарт (499 ₽)",
+        "premium": "Премиум (999 ₽)"
+    }
+    limit = PLAN_LIMITS.get(user["plan"], 3)
+    await message.answer(
+        f"Твой тариф: {names.get(user['plan'])}\n"
+        f"Использовано генераций: {user['generations']} из {limit}"
+    )
 
 # ====================== АДМИНКА ======================
 @dp.message(Command("grant"))
@@ -358,32 +400,30 @@ async def admin_grant(message: Message):
         return
     try:
         parts = message.text.split()
-        target_id = int(parts[1])
+        uid = int(parts[1])
         plan = parts[2] if len(parts) > 2 else "premium"
-        user = get_user(target_id)
-        user["plan"] = plan
-        await message.answer(f"Пользователю {target_id} выдан тариф: {plan}")
+        get_user(uid)["plan"] = plan
+        await message.answer(f"Пользователю {uid} выдан тариф: {plan}")
     except:
-        await message.answer("Использование: /grant user_id [basic/standard/premium]")
+        await message.answer("Формат: /grant user_id [basic/standard/premium]")
 
 @dp.message(Command("revoke"))
 async def admin_revoke(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return
     try:
-        target_id = int(message.text.split()[1])
-        user = get_user(target_id)
-        user["plan"] = "free"
-        await message.answer(f"Доступ пользователя {target_id} сброшен на free")
+        uid = int(message.text.split()[1])
+        get_user(uid)["plan"] = "free"
+        await message.answer(f"Тариф пользователя {uid} сброшен на free")
     except:
-        await message.answer("Использование: /revoke user_id")
+        await message.answer("Формат: /revoke user_id")
 
 @dp.message(Command("users"))
 async def admin_users(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return
     text = "Пользователи:\n\n"
-    for uid, data in list(users_db.items())[:30]:
+    for uid, data in list(users_db.items())[:25]:
         text += f"{uid} | {data.get('name')} | {data.get('plan')} | gen: {data.get('generations')}\n"
     await message.answer(text or "Пока никого нет")
 
@@ -402,4 +442,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
