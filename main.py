@@ -21,7 +21,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 # ====================== НАСТРОЙКИ ======================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAI_API_KEY = os.getenv("XAI_API_KEY")
-ADMIN_IDS = [123456789]  # ← СВОЙ TELEGRAM ID
+ADMIN_IDS = [909828109]  # ← СВОЙ TELEGRAM ID
 
 client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
 bot = Bot(token=BOT_TOKEN)
