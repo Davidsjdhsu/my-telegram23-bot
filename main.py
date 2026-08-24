@@ -1,48 +1,45 @@
 import os
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from openai import AsyncOpenAI
 from pptx import Presentation
 from pptx.util import Inches, Pt
-from pptx.dml.color import RgbColor
+from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from reportlab.lib.units import mm
 
 # ====================== НАСТРОЙКИ ======================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAI_API_KEY = os.getenv("XAI_API_KEY")
-ADMIN_IDS = [909828109]  # ← СЮДА ВПИШИ СВОЙ TELEGRAM ID (узнать можно у @userinfobot)
+ADMIN_IDS = [909828109]  # ← СЮДА ВПИШИ СВОЙ TELEGRAM ID
 
 client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-# Хранилище пользователей (в тестовом режиме — в памяти)
-users_db = {}  # {user_id: {"name": "", "category": "", "plan": "free", "generations": 0, "history": []}}
+# Хранилище пользователей
+users_db = {}
 
-# Лимиты тарифов
 PLAN_LIMITS = {
     "free": 3,
-    "basic": 10,      # 199 ₽
-    "standard": 40,   # 499 ₽
-    "premium": 100    # 999 ₽
+    "basic": 10,
+    "standard": 40,
+    "premium": 100
 }
 
 # ====================== СОСТОЯНИЯ ======================
 class Form(StatesGroup):
     waiting_category = State()
     waiting_confirm = State()
-    waiting_document_data = State()
 
 # ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======================
 async def ask_grok(prompt: str) -> str:
@@ -87,15 +84,17 @@ def category_keyboard():
         resize_keyboard=True
     )
 
-def main_menu_keyboard(category: str):
-    buttons = [
-        [KeyboardButton(text="📊 Сделать презентацию")],
-        [KeyboardButton(text="📄 Сделать документ")],
-        [KeyboardButton(text="📋 Готовые шаблоны")],
-        [KeyboardButton(text="📁 Моя история")],
-        [KeyboardButton(text="ℹ️ Мой тариф")]
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+def main_menu_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📊 Сделать презентацию")],
+            [KeyboardButton(text="📄 Сделать документ")],
+            [KeyboardButton(text="📋 Готовые шаблоны")],
+            [KeyboardButton(text="📁 Моя история")],
+            [KeyboardButton(text="ℹ️ Мой тариф")]
+        ],
+        resize_keyboard=True
+    )
 
 # ====================== /START ======================
 @dp.message(Command("start"))
@@ -134,17 +133,14 @@ async def process_category(message: Message, state: FSMContext):
         await message.answer("Пожалуйста, выбери один из вариантов кнопками.")
         return
 
-    await message.answer(
-        f"{desc}\n\nЧто хочешь сделать?",
-        reply_markup=main_menu_keyboard(user["category"])
-    )
+    await message.answer(f"{desc}\n\nЧто хочешь сделать?", reply_markup=main_menu_keyboard())
     await state.clear()
 
 # ====================== ГЛАВНОЕ МЕНЮ ======================
 @dp.message(F.text == "📊 Сделать презентацию")
 async def make_presentation(message: Message, state: FSMContext):
     if not can_generate(message.from_user.id):
-        await message.answer("Лимит генераций на этом тарифе закончился. Напиши админу.")
+        await message.answer("Лимит генераций на этом тарифе закончился.")
         return
 
     await message.answer(
@@ -161,11 +157,7 @@ async def make_document(message: Message, state: FSMContext):
         await message.answer("Лимит генераций закончился.")
         return
 
-    await message.answer(
-        "Напиши, какой документ нужен.\n\n"
-        "Пример:\n"
-        "«Сделай коммерческое предложение для IT-компании»"
-    )
+    await message.answer("Напиши, какой документ нужен.\nПример: «Сделай коммерческое предложение»")
     await state.set_state(Form.waiting_confirm)
     await state.update_data(action="document")
 
@@ -177,7 +169,7 @@ async def templates_menu(message: Message):
         "2. Договор купли-продажи автомобиля\n"
         "3. Карточка предприятия\n"
         "4. Акт выполненных работ\n\n"
-        "Пока это демо. Напиши название шаблона, который хочешь заполнить."
+        "Пока это демо."
     )
 
 @dp.message(F.text == "📁 Моя история")
@@ -229,18 +221,15 @@ async def process_request(message: Message, state: FSMContext):
         """
         sample = await ask_grok(prompt)
         
-        await state.update_data(original_request=message.text, sample=sample, action="presentation")
+        await state.update_data(original_request=message.text, sample=sample)
         await message.answer(
             f"Вот образец:\n\n{sample}\n\n"
             "Если подходит — напиши «делай»\n"
             "Если нет — напиши новый запрос."
         )
     else:
-        # Для документов пока упрощённо
-        await message.answer("Генерирую документ...")
-        # Здесь можно добавить генерацию docx
         user["generations"] += 1
-        await message.answer("Документ будет готов в следующей версии. Пока используй презентации.")
+        await message.answer("Генерация документов будет в следующей версии.")
         await state.clear()
 
 # ====================== ПОДТВЕРЖДЕНИЕ И ГЕНЕРАЦИЯ ======================
@@ -260,7 +249,6 @@ async def confirm_and_generate(message: Message, state: FSMContext):
 
     await message.answer("Делаю полную версию... Это займёт 20–40 секунд.")
 
-    # Генерация полного контента
     prompt = f"""
     Создай полную структуру презентации по запросу:
     {data['original_request']}
@@ -283,23 +271,23 @@ async def confirm_and_generate(message: Message, state: FSMContext):
         await message.answer("Не удалось разобрать ответ. Попробуй ещё раз.")
         return
 
-    # Создаём PPTX
+    # ===== СОЗДАНИЕ PPTX =====
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
 
-    # Титульный
+    # Титульный слайд
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     shape = slide.shapes.add_shape(1, 0, 0, prs.slide_width, prs.slide_height)
     shape.fill.solid()
-    shape.fill.fore_color.rgb = RgbColor(40, 40, 40)
+    shape.fill.fore_color.rgb = RGBColor(40, 40, 40)
 
     title_box = slide.shapes.add_textbox(Inches(1), Inches(2.8), Inches(11.3), Inches(1.5))
     p = title_box.text_frame.paragraphs[0]
     p.text = content.get("title", "Презентация")
     p.font.size = Pt(36)
     p.font.bold = True
-    p.font.color.rgb = RgbColor(230, 230, 230)
+    p.font.color.rgb = RGBColor(230, 230, 230)
     p.alignment = PP_ALIGN.CENTER
 
     # Остальные слайды
@@ -307,14 +295,14 @@ async def confirm_and_generate(message: Message, state: FSMContext):
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         bg = slide.shapes.add_shape(1, 0, 0, prs.slide_width, prs.slide_height)
         bg.fill.solid()
-        bg.fill.fore_color.rgb = RgbColor(45, 45, 45)
+        bg.fill.fore_color.rgb = RGBColor(45, 45, 45)
 
         title_box = slide.shapes.add_textbox(Inches(0.7), Inches(0.4), Inches(12), Inches(1))
         p = title_box.text_frame.paragraphs[0]
         p.text = s.get("title", "")
         p.font.size = Pt(26)
         p.font.bold = True
-        p.font.color.rgb = RgbColor(230, 230, 230)
+        p.font.color.rgb = RGBColor(230, 230, 230)
 
         content_box = slide.shapes.add_textbox(Inches(0.7), Inches(1.5), Inches(12), Inches(5))
         tf = content_box.text_frame
@@ -322,12 +310,12 @@ async def confirm_and_generate(message: Message, state: FSMContext):
         p = tf.paragraphs[0]
         p.text = s.get("content", "")
         p.font.size = Pt(18)
-        p.font.color.rgb = RgbColor(200, 200, 200)
+        p.font.color.rgb = RGBColor(200, 200, 200)
 
     pptx_path = f"pres_{user_id}.pptx"
     prs.save(pptx_path)
 
-    # PDF
+    # ===== СОЗДАНИЕ PDF =====
     pdf_path = f"pres_{user_id}.pdf"
     c = canvas.Canvas(pdf_path, pagesize=A4)
     width, height = A4
@@ -353,14 +341,14 @@ async def confirm_and_generate(message: Message, state: FSMContext):
 
     c.save()
 
-    # Отправка
+    # Отправка файлов
     await message.answer_document(FSInputFile(pptx_path), caption="Редактируемая версия (PPTX)")
     await message.answer_document(FSInputFile(pdf_path), caption="Версия PDF")
 
     user["generations"] += 1
     user["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title', 'Презентация')}")
 
-    await message.answer("Готово!", reply_markup=main_menu_keyboard(user.get("category")))
+    await message.answer("Готово!", reply_markup=main_menu_keyboard())
     await state.clear()
 
 # ====================== АДМИНКА ======================
@@ -414,3 +402,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
