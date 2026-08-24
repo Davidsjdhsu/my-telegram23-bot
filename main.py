@@ -20,7 +20,7 @@ from reportlab.lib.units import mm
 # ====================== НАСТРОЙКИ ======================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAI_API_KEY = os.getenv("XAI_API_KEY")
-ADMIN_IDS = [123456789]  # ← СЮДА ВПИШИ СВОЙ TELEGRAM ID (узнать можно у @userinfobot)
+ADMIN_IDS = [909828109]  # ← СЮДА ВПИШИ СВОЙ TELEGRAM ID (узнать можно у @userinfobot)
 
 client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
 bot = Bot(token=BOT_TOKEN)
