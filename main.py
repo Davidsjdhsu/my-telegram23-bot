@@ -15,6 +15,8 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAI_API_KEY = os.getenv("XAI_API_KEY")
@@ -90,7 +92,7 @@ async def ask_grok(prompt: str) -> str:
         response = await client.chat.completions.create(
             model="grok-3",
             messages=[
-                {"role": "system", "content": "Ты профессиональный создатель презентаций. Отвечай только на русском. Всегда возвращай валидный JSON, когда тебя просят."},
+                {"role": "system", "content": "Ты профессиональный создатель презентаций. Отвечай только на русском."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
@@ -213,7 +215,26 @@ async def process_style(message: Message, state: FSMContext):
 
     await message.answer("Делаю пробный вариант...")
 
-    prompt = f"Тема: {data['topic']}\nСлайдов: {data['slides']}\nСтиль: {style}\n\nСделай короткий образец структуры презентации (название + список слайдов)."
+    # Красивый пробный вариант (не JSON)
+    prompt = f"""
+Тема презентации: {data['topic']}
+Количество слайдов: {data['slides']}
+Стиль: {style}
+
+Сделай короткий и красивый образец структуры презентации.
+Формат ответа:
+
+Название: ...
+
+Список слайдов:
+1. ...
+2. ...
+3. ...
+
+Стиль: {style}
+
+Не используй JSON. Пиши обычным текстом.
+"""
     sample = await ask_grok(prompt)
     await state.update_data(sample=sample)
 
@@ -249,6 +270,7 @@ async def confirm_generate(message: Message, state: FSMContext):
     bg_color = STYLE_COLORS.get(data.get("style"), (40, 40, 40))
     text_color = (230, 230, 230) if sum(bg_color) < 300 else (30, 30, 30)
 
+    # ===== PPTX =====
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
@@ -290,28 +312,47 @@ async def confirm_generate(message: Message, state: FSMContext):
     pptx_path = f"pres_{user_id}.pptx"
     prs.save(pptx_path)
 
+    # ===== PDF с кириллицей =====
     pdf_path = f"pres_{user_id}.pdf"
     c = canvas.Canvas(pdf_path, pagesize=A4)
     width, height = A4
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(40, height - 50, content.get("title", "Presentation")[:65])
+
+    try:
+        pdfmetrics.registerFont(TTFont('DejaVu', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
+        pdfmetrics.registerFont(TTFont('DejaVuBold', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'))
+        font_name = 'DejaVu'
+        font_bold = 'DejaVuBold'
+    except:
+        font_name = 'Helvetica'
+        font_bold = 'Helvetica-Bold'
+
+    c.setFont(font_bold, 16)
+    c.drawString(40, height - 50, content.get("title", "Презентация")[:70])
 
     y = height - 90
     for i, s in enumerate(content.get("slides", []), 1):
         if y < 80:
             c.showPage()
             y = height - 50
-        c.setFont("Helvetica-Bold", 12)
-        c.drawString(40, y, f"{i}. {s.get('title', '')[:70]}")
+            c.setFont(font_bold, 16)
+            c.drawString(40, height - 50, content.get("title", "Презентация")[:70])
+            y = height - 90
+
+        c.setFont(font_bold, 12)
+        c.drawString(40, y, f"{i}. {s.get('title', '')[:80]}")
         y -= 18
-        c.setFont("Helvetica", 10)
-        text = s.get("content", "")[:220]
-        c.drawString(40, y, text[:90])
-        y -= 14
-        if len(text) > 90:
-            c.drawString(40, y, text[90:180])
+
+        c.setFont(font_name, 10)
+        text = s.get("content", "")
+        while len(text) > 0:
+            line = text[:95]
+            c.drawString(40, y, line)
+            text = text[95:]
             y -= 14
-        y -= 16
+            if y < 60:
+                c.showPage()
+                y = height - 50
+        y -= 12
 
     c.save()
 
