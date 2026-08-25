@@ -16,10 +16,9 @@ from pptx.enum.text import PP_ALIGN
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
-# ====================== НАСТРОЙКИ ======================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAI_API_KEY = os.getenv("XAI_API_KEY")
-ADMIN_IDS = [909828109]  # ← СВОЙ TELEGRAM ID
+ADMIN_IDS = [909828109]
 
 client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
 bot = Bot(token=BOT_TOKEN)
@@ -58,7 +57,6 @@ STYLE_COLORS = {
     "Изумруд": (20, 50, 40)
 }
 
-# ====================== СОСТОЯНИЯ ======================
 class Form(StatesGroup):
     waiting_category = State()
     waiting_topic = State()
@@ -66,7 +64,6 @@ class Form(StatesGroup):
     waiting_style = State()
     waiting_confirm = State()
 
-# ====================== ФУНКЦИИ ======================
 def get_quality_prompt(plan: str, topic: str, slides: int, style: str) -> str:
     if plan == "premium":
         level = "Ты топовый презентационный дизайнер. Сделай презентацию профессионального уровня: сильные заголовки, ёмкий текст, чёткая логика."
@@ -118,7 +115,6 @@ def can_generate(user_id: int) -> bool:
     user = get_user(user_id)
     return user["generations"] < PLAN_LIMITS.get(user["plan"], 3)
 
-# ====================== КЛАВИАТУРЫ ======================
 def category_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="👨‍🎓 Студент")],
@@ -145,7 +141,6 @@ def style_kb(plan: str):
     buttons = [[KeyboardButton(text=s)] for s in styles]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
-# ====================== /START ======================
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     user = get_user(message.from_user.id)
@@ -181,7 +176,6 @@ async def process_category(message: Message, state: FSMContext):
     await message.answer(f"{reply}\n\nЧто будем делать?", reply_markup=main_kb())
     await state.clear()
 
-# ====================== ПРЕЗЕНТАЦИЯ ======================
 @dp.message(F.text == "📊 Сделать презентацию")
 async def start_presentation(message: Message, state: FSMContext):
     if not can_generate(message.from_user.id):
@@ -255,7 +249,6 @@ async def confirm_generate(message: Message, state: FSMContext):
     bg_color = STYLE_COLORS.get(data.get("style"), (40, 40, 40))
     text_color = (230, 230, 230) if sum(bg_color) < 300 else (30, 30, 30)
 
-    # PPTX
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
@@ -297,7 +290,6 @@ async def confirm_generate(message: Message, state: FSMContext):
     pptx_path = f"pres_{user_id}.pptx"
     prs.save(pptx_path)
 
-    # PDF
     pdf_path = f"pres_{user_id}.pdf"
     c = canvas.Canvas(pdf_path, pagesize=A4)
     width, height = A4
@@ -331,7 +323,6 @@ async def confirm_generate(message: Message, state: FSMContext):
     await message.answer("Готово!", reply_markup=main_kb())
     await state.clear()
 
-# ====================== ОСТАЛЬНОЕ ======================
 @dp.message(F.text == "📄 Сделать документ")
 async def make_doc(message: Message):
     await message.answer("Генерация документов скоро будет доступна.")
@@ -360,7 +351,6 @@ async def my_plan(message: Message):
     limit = PLAN_LIMITS.get(user["plan"], 3)
     await message.answer(f"Тариф: {names.get(user['plan'])}\nГенераций: {user['generations']} из {limit}")
 
-# ====================== АДМИНКА ======================
 @dp.message(Command("grant"))
 async def grant(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -394,7 +384,6 @@ async def users_list(message: Message):
         text += f"{uid} | {d.get('name')} | {d.get('plan')} | {d.get('generations')}\n"
     await message.answer(text or "Пусто")
 
-# ====================== ЗАПУСК ======================
 async def main():
     print("Бот запущен")
     await dp.start_polling(bot)
