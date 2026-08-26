@@ -35,6 +35,21 @@ PLAN_LIMITS = {
     "premium": 100
 }
 
+# Лимиты по символам и доп. информации
+TOPIC_LIMITS = {
+    "free": 100,
+    "basic": 150,
+    "standard": 300,
+    "premium": 600
+}
+
+EXTRA_LIMITS = {
+    "free": {"times": 0, "chars": 0},
+    "basic": {"times": 1, "chars": 300},
+    "standard": {"times": 2, "chars": 600},
+    "premium": {"times": 3, "chars": 1200}
+}
+
 STYLES = {
     "free": ["Графит", "Снег"],
     "basic": ["Графит", "Снег", "Океан"],
@@ -60,6 +75,7 @@ class Form(StatesGroup):
     waiting_slides = State()
     waiting_style = State()
     waiting_confirm = State()
+    waiting_extra = State()
 
 def get_user(uid):
     if uid not in users_db:
@@ -90,7 +106,7 @@ async def ask_grok(prompt: str) -> str:
     except Exception as e:
         return f"Ошибка: {e}"
 
-def get_prompt(plan: str, topic: str, slides: int, style: str) -> str:
+def get_prompt(plan: str, topic: str, slides: int, style: str, extra: str = "") -> str:
     if plan == "premium":
         level = (
             "Сделай максимально сильную и подробную презентацию. "
@@ -109,11 +125,13 @@ def get_prompt(plan: str, topic: str, slides: int, style: str) -> str:
             "На каждом слайде 2–3 предложения краткого полезного текста."
         )
 
+    extra_part = f"\nДополнительная информация от пользователя: {extra}" if extra else ""
+
     return f"""{level}
 
 Тема: {topic}
 Количество слайдов: {slides}
-Стиль: {style}
+Стиль: {style}{extra_part}
 
 Верни ТОЛЬКО валидный JSON:
 {{
@@ -167,12 +185,14 @@ def style_kb(plan):
         resize_keyboard=True
     )
 
-def confirm_kb():
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="✅ Делать полную версию")],
-        [KeyboardButton(text="✏️ Изменить тему")],
-        [KeyboardButton(text="🎨 Изменить стиль")]
-    ], resize_keyboard=True)
+def confirm_kb(plan: str, extra_used: int):
+    buttons = [[KeyboardButton(text="✅ Делать полную версию")]]
+    limits = EXTRA_LIMITS.get(plan, EXTRA_LIMITS["free"])
+    if extra_used < limits["times"]:
+        buttons.append([KeyboardButton(text="➕ Добавить информацию")])
+    buttons.append([KeyboardButton(text="✏️ Изменить тему")])
+    buttons.append([KeyboardButton(text="🎨 Изменить стиль")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 @dp.message(Command("start"))
 async def cmd_start(m: Message, state: FSMContext):
@@ -194,12 +214,20 @@ async def start_pres(m: Message, state: FSMContext):
     if not can_generate(m.from_user.id):
         await m.answer("Лимит генераций закончился.")
         return
-    await m.answer("Напиши тему презентации:")
+    u = get_user(m.from_user.id)
+    limit = TOPIC_LIMITS.get(u["plan"], 100)
+    await m.answer(f"Напиши тему презентации (до {limit} символов):")
     await state.set_state(Form.waiting_topic)
 
 @dp.message(Form.waiting_topic)
 async def process_topic(m: Message, state: FSMContext):
-    await state.update_data(topic=m.text)
+    u = get_user(m.from_user.id)
+    limit = TOPIC_LIMITS.get(u["plan"], 100)
+    text = m.text or ""
+    if len(text) > limit:
+        await m.answer(f"Слишком длинно. Максимум {limit} символов. Напиши короче:")
+        return
+    await state.update_data(topic=text, extra="", extra_used=0)
     await m.answer("Сколько слайдов?", reply_markup=slides_kb())
     await state.set_state(Form.waiting_slides)
 
@@ -224,9 +252,10 @@ async def process_style(m: Message, state: FSMContext):
     await state.update_data(style=m.text)
     await m.answer("Делаю пробный вариант...")
 
-    prompt = f"""Тема: {data['topic']}
-Слайдов: {data['slides']}
+    prompt = f"""Тема: {data.get('topic')}
+Слайдов: {data.get('slides')}
 Стиль: {m.text}
+Дополнительно: {data.get('extra', '')}
 
 Сделай короткий образец структуры презентации обычным текстом:
 Название: ...
@@ -236,15 +265,20 @@ async def process_style(m: Message, state: FSMContext):
 Не используй JSON."""
     sample = await ask_grok(prompt)
     await state.update_data(sample=sample)
+
+    u = get_user(m.from_user.id)
+    extra_used = data.get("extra_used", 0)
     await m.answer(
         f"Пробный вариант:\n\n{sample}\n\nВыбери действие:",
-        reply_markup=confirm_kb()
+        reply_markup=confirm_kb(u["plan"], extra_used)
     )
     await state.set_state(Form.waiting_confirm)
 
 @dp.message(Form.waiting_confirm, F.text == "✏️ Изменить тему")
 async def change_topic(m: Message, state: FSMContext):
-    await m.answer("Напиши новую тему презентации:")
+    u = get_user(m.from_user.id)
+    limit = TOPIC_LIMITS.get(u["plan"], 100)
+    await m.answer(f"Напиши новую тему (до {limit} символов):")
     await state.set_state(Form.waiting_topic)
 
 @dp.message(Form.waiting_confirm, F.text == "🎨 Изменить стиль")
@@ -253,6 +287,58 @@ async def change_style(m: Message, state: FSMContext):
     await m.answer("Выбери новый стиль:", reply_markup=style_kb(u["plan"]))
     await state.set_state(Form.waiting_style)
 
+@dp.message(Form.waiting_confirm, F.text == "➕ Добавить информацию")
+async def add_extra(m: Message, state: FSMContext):
+    data = await state.get_data()
+    u = get_user(m.from_user.id)
+    limits = EXTRA_LIMITS.get(u["plan"], EXTRA_LIMITS["free"])
+    extra_used = data.get("extra_used", 0)
+
+    if extra_used >= limits["times"]:
+        await m.answer("Лимит добавлений информации исчерпан.")
+        return
+
+    await m.answer(f"Напиши дополнительную информацию (до {limits['chars']} символов):")
+    await state.set_state(Form.waiting_extra)
+
+@dp.message(Form.waiting_extra)
+async def process_extra(m: Message, state: FSMContext):
+    data = await state.get_data()
+    u = get_user(m.from_user.id)
+    limits = EXTRA_LIMITS.get(u["plan"], EXTRA_LIMITS["free"])
+    text = m.text or ""
+
+    if len(text) > limits["chars"]:
+        await m.answer(f"Слишком длинно. Максимум {limits['chars']} символов. Напиши короче:")
+        return
+
+    old_extra = data.get("extra", "")
+    new_extra = (old_extra + "\n" + text).strip() if old_extra else text
+    extra_used = data.get("extra_used", 0) + 1
+
+    await state.update_data(extra=new_extra, extra_used=extra_used)
+    await m.answer("Обновляю пробный вариант...")
+
+    prompt = f"""Тема: {data.get('topic')}
+Слайдов: {data.get('slides')}
+Стиль: {data.get('style')}
+Дополнительно: {new_extra}
+
+Сделай короткий образец структуры презентации обычным текстом:
+Название: ...
+1. ...
+2. ...
+3. ...
+Не используй JSON."""
+    sample = await ask_grok(prompt)
+    await state.update_data(sample=sample)
+
+    await m.answer(
+        f"Обновлённый пробный вариант:\n\n{sample}\n\nВыбери действие:",
+        reply_markup=confirm_kb(u["plan"], extra_used)
+    )
+    await state.set_state(Form.waiting_confirm)
+
 @dp.message(Form.waiting_confirm, F.text.in_(["✅ Делать полную версию", "делай", "да", "ок", "хорошо", "подтверждаю"]))
 async def confirm_generate(m: Message, state: FSMContext):
     data = await state.get_data()
@@ -260,7 +346,13 @@ async def confirm_generate(m: Message, state: FSMContext):
     u = get_user(uid)
     await m.answer("Делаю финальную версию...")
 
-    prompt = get_prompt(u["plan"], data["topic"], data["slides"], data["style"])
+    prompt = get_prompt(
+        u["plan"],
+        data.get("topic", ""),
+        data.get("slides", 8),
+        data.get("style", "Графит"),
+        data.get("extra", "")
+    )
     raw = await ask_grok(prompt)
 
     try:
@@ -296,7 +388,6 @@ async def confirm_generate(m: Message, state: FSMContext):
         bg_shape.fill.solid()
         bg_shape.fill.fore_color.rgb = RGBColor(*bg)
 
-        # Заголовок
         tb = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12.3), Inches(0.8))
         p = tb.text_frame.paragraphs[0]
         p.text = s.get("title", "")
@@ -304,7 +395,6 @@ async def confirm_generate(m: Message, state: FSMContext):
         p.font.bold = True
         p.font.color.rgb = RGBColor(*tc)
 
-        # Текст слева
         cb = slide.shapes.add_textbox(Inches(0.5), Inches(1.3), Inches(6.5), Inches(5.5))
         tf = cb.text_frame
         tf.word_wrap = True
@@ -313,7 +403,6 @@ async def confirm_generate(m: Message, state: FSMContext):
         p.font.size = Pt(16)
         p.font.color.rgb = RGBColor(*tc)
 
-        # Рамки справа
         if idx % 2 == 0:
             add_placeholder(slide, 7.5, 1.5, 5.2, 2.5, "Вставь сюда фото", tc)
             add_placeholder(slide, 7.5, 4.3, 5.2, 2.3, "Вставь сюда график", tc)
