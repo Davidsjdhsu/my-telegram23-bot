@@ -13,8 +13,11 @@ from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
+from pptx.enum.shapes import MSO_SHAPE
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAI_API_KEY = os.getenv("XAI_API_KEY")
@@ -120,6 +123,24 @@ def get_prompt(plan: str, topic: str, slides: int, style: str) -> str:
   ]
 }}"""
 
+def add_placeholder(slide, left, top, width, height, text, tc):
+    shape = slide.shapes.add_shape(
+        MSO_SHAPE.ROUNDED_RECTANGLE,
+        Inches(left), Inches(top), Inches(width), Inches(height)
+    )
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = RGBColor(80, 80, 80)
+    shape.line.color.rgb = RGBColor(150, 150, 150)
+
+    tf = shape.text_frame
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.text = text
+    p.font.size = Pt(16)
+    p.font.bold = True
+    p.font.color.rgb = RGBColor(*tc)
+    p.alignment = PP_ALIGN.CENTER
+
 def category_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="👨‍🎓 Студент")],
@@ -145,6 +166,13 @@ def style_kb(plan):
         keyboard=[[KeyboardButton(text=s)] for s in styles],
         resize_keyboard=True
     )
+
+def confirm_kb():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="✅ Делать полную версию")],
+        [KeyboardButton(text="✏️ Изменить тему")],
+        [KeyboardButton(text="🎨 Изменить стиль")]
+    ], resize_keyboard=True)
 
 @dp.message(Command("start"))
 async def cmd_start(m: Message, state: FSMContext):
@@ -208,10 +236,24 @@ async def process_style(m: Message, state: FSMContext):
 Не используй JSON."""
     sample = await ask_grok(prompt)
     await state.update_data(sample=sample)
-    await m.answer(f"Пробный вариант:\n\n{sample}\n\nЕсли нравится — напиши «делай»")
+    await m.answer(
+        f"Пробный вариант:\n\n{sample}\n\nВыбери действие:",
+        reply_markup=confirm_kb()
+    )
     await state.set_state(Form.waiting_confirm)
 
-@dp.message(Form.waiting_confirm, F.text.lower().in_(["делай", "да", "ок", "хорошо", "подтверждаю"]))
+@dp.message(Form.waiting_confirm, F.text == "✏️ Изменить тему")
+async def change_topic(m: Message, state: FSMContext):
+    await m.answer("Напиши новую тему презентации:")
+    await state.set_state(Form.waiting_topic)
+
+@dp.message(Form.waiting_confirm, F.text == "🎨 Изменить стиль")
+async def change_style(m: Message, state: FSMContext):
+    u = get_user(m.from_user.id)
+    await m.answer("Выбери новый стиль:", reply_markup=style_kb(u["plan"]))
+    await state.set_state(Form.waiting_style)
+
+@dp.message(Form.waiting_confirm, F.text.in_(["✅ Делать полную версию", "делай", "да", "ок", "хорошо", "подтверждаю"]))
 async def confirm_generate(m: Message, state: FSMContext):
     data = await state.get_data()
     uid = m.from_user.id
@@ -248,47 +290,74 @@ async def confirm_generate(m: Message, state: FSMContext):
     p.font.color.rgb = RGBColor(*tc)
     p.alignment = PP_ALIGN.CENTER
 
-    for s in content.get("slides", []):
+    for idx, s in enumerate(content.get("slides", [])):
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         bg_shape = slide.shapes.add_shape(1, 0, 0, prs.slide_width, prs.slide_height)
         bg_shape.fill.solid()
         bg_shape.fill.fore_color.rgb = RGBColor(*bg)
 
-        tb = slide.shapes.add_textbox(Inches(0.7), Inches(0.4), Inches(12), Inches(1))
+        # Заголовок
+        tb = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12.3), Inches(0.8))
         p = tb.text_frame.paragraphs[0]
         p.text = s.get("title", "")
-        p.font.size = Pt(26)
+        p.font.size = Pt(24)
         p.font.bold = True
         p.font.color.rgb = RGBColor(*tc)
 
-        cb = slide.shapes.add_textbox(Inches(0.7), Inches(1.5), Inches(12), Inches(5.2))
+        # Текст слева
+        cb = slide.shapes.add_textbox(Inches(0.5), Inches(1.3), Inches(6.5), Inches(5.5))
         tf = cb.text_frame
         tf.word_wrap = True
         p = tf.paragraphs[0]
         p.text = s.get("content", "")
-        p.font.size = Pt(18)
+        p.font.size = Pt(16)
         p.font.color.rgb = RGBColor(*tc)
+
+        # Рамки справа
+        if idx % 2 == 0:
+            add_placeholder(slide, 7.5, 1.5, 5.2, 2.5, "Вставь сюда фото", tc)
+            add_placeholder(slide, 7.5, 4.3, 5.2, 2.3, "Вставь сюда график", tc)
+        else:
+            add_placeholder(slide, 7.5, 1.5, 5.2, 5.1, "Вставь сюда фото", tc)
 
     pptx_path = f"pres_{uid}.pptx"
     prs.save(pptx_path)
 
-    # PDF
+    # PDF с кириллицей
     pdf_path = f"pres_{uid}.pdf"
     c = canvas.Canvas(pdf_path, pagesize=A4)
     w, h = A4
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(40, h - 50, content.get("title", "")[:60])
+
+    font_name = "Helvetica"
+    font_bold = "Helvetica-Bold"
+    try:
+        pdfmetrics.registerFont(TTFont("DejaVu", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
+        pdfmetrics.registerFont(TTFont("DejaVuBold", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
+        font_name = "DejaVu"
+        font_bold = "DejaVuBold"
+    except:
+        pass
+
+    c.setFont(font_bold, 14)
+    c.drawString(40, h - 50, content.get("title", "")[:65])
     y = h - 90
     for i, s in enumerate(content.get("slides", []), 1):
         if y < 70:
             c.showPage()
             y = h - 50
-        c.setFont("Helvetica-Bold", 11)
+        c.setFont(font_bold, 11)
         c.drawString(40, y, f"{i}. {s.get('title', '')[:70]}")
         y -= 16
-        c.setFont("Helvetica", 9)
-        c.drawString(40, y, (s.get("content", "") or "")[:90])
-        y -= 20
+        c.setFont(font_name, 9)
+        text = (s.get("content", "") or "")[:200]
+        while text:
+            c.drawString(40, y, text[:90])
+            text = text[90:]
+            y -= 13
+            if y < 50:
+                c.showPage()
+                y = h - 50
+        y -= 10
     c.save()
 
     await m.answer_document(FSInputFile(pptx_path), caption="PPTX")
