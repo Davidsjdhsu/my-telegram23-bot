@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+import io
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -18,6 +19,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from PIL import Image
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAI_API_KEY = os.getenv("XAI_API_KEY")
@@ -28,49 +30,9 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 users_db = {}
 
-PLAN_LIMITS = {
-    "free": 3,
-    "basic": 10,
-    "standard": 40,
-    "premium": 100
-}
-
-# Лимиты по символам и доп. информации
-TOPIC_LIMITS = {
-    "free": 100,
-    "basic": 150,
-    "standard": 300,
-    "premium": 600
-}
-
-EXTRA_LIMITS = {
-    "free": {"times": 0, "chars": 0},
-    "basic": {"times": 1, "chars": 300},
-    "standard": {"times": 2, "chars": 600},
-    "premium": {"times": 3, "chars": 1200}
-}
-
-STYLES = {
-    "free": ["Графит", "Снег"],
-    "basic": ["Графит", "Снег", "Океан"],
-    "standard": ["Графит", "Снег", "Океан", "Ночь", "Мята", "Коралл"],
-    "premium": ["Графит", "Снег", "Океан", "Ночь", "Мята", "Коралл", "Уголь", "Лаванда", "Сканди"]
-}
-
-STYLE_COLORS = {
-    "Графит": (40, 40, 40),
-    "Снег": (245, 245, 245),
-    "Океан": (20, 40, 80),
-    "Ночь": (15, 15, 15),
-    "Мята": (220, 240, 230),
-    "Коралл": (255, 230, 220),
-    "Уголь": (30, 30, 30),
-    "Лаванда": (230, 220, 240),
-    "Сканди": (240, 235, 225)
-}
+PLAN_LIMITS = {"free": 5, "premium": 50}
 
 class Form(StatesGroup):
-    waiting_category = State()
     waiting_topic = State()
     waiting_slides = State()
     waiting_style = State()
@@ -79,17 +41,12 @@ class Form(StatesGroup):
 
 def get_user(uid):
     if uid not in users_db:
-        users_db[uid] = {
-            "name": "",
-            "plan": "free",
-            "generations": 0,
-            "history": []
-        }
+        users_db[uid] = {"name": "", "plan": "premium", "generations": 0, "history": []}
     return users_db[uid]
 
 def can_generate(uid):
     u = get_user(uid)
-    return u["generations"] < PLAN_LIMITS.get(u["plan"], 3)
+    return u["generations"] < PLAN_LIMITS.get(u["plan"], 5)
 
 async def ask_grok(prompt: str) -> str:
     try:
@@ -100,71 +57,51 @@ async def ask_grok(prompt: str) -> str:
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=3500
+            max_tokens=4000
         )
         return r.choices[0].message.content
     except Exception as e:
         return f"Ошибка: {e}"
 
-def get_prompt(plan: str, topic: str, slides: int, style: str, extra: str = "") -> str:
-    if plan == "premium":
-        level = (
-            "Сделай максимально сильную и подробную презентацию. "
-            "На каждом слайде 5–8 предложений насыщенного полезного текста. "
-            "Заголовки сильные, структура профессиональная."
+async def generate_image(prompt: str, path: str) -> bool:
+    """Пытаемся сгенерировать картинку. Если не получится — False"""
+    try:
+        # Попытка через images API (если доступно)
+        result = await client.images.generate(
+            model="grok-2-image",
+            prompt=prompt,
+            n=1,
+            size="1024x1024"
         )
-    elif plan == "standard":
-        level = (
-            "Сделай качественную полноценную презентацию. "
-            "На каждом слайде 3–5 предложений хорошего текста. "
-            "Заголовки понятные и сильные."
-        )
-    else:
-        level = (
-            "Сделай нормальную аккуратную презентацию. "
-            "На каждом слайде 2–3 предложения краткого полезного текста."
-        )
+        # Если API вернул url
+        if hasattr(result, "data") and result.data:
+            import httpx
+            url = result.data[0].url
+            async with httpx.AsyncClient() as http:
+                resp = await http.get(url)
+                with open(path, "wb") as f:
+                    f.write(resp.content)
+            return True
+    except Exception as e:
+        print("Image generation error:", e)
+    return False
 
-    extra_part = f"\nДополнительная информация от пользователя: {extra}" if extra else ""
-
-    return f"""{level}
-
-Тема: {topic}
-Количество слайдов: {slides}
-Стиль: {style}{extra_part}
-
-Верни ТОЛЬКО валидный JSON:
-{{
-  "title": "Название презентации",
-  "slides": [
-    {{"title": "Заголовок слайда", "content": "Текст слайда"}}
-  ]
-}}"""
-
-def add_placeholder(slide, left, top, width, height, text, tc):
+def add_placeholder(slide, left, top, width, height, text):
     shape = slide.shapes.add_shape(
         MSO_SHAPE.ROUNDED_RECTANGLE,
         Inches(left), Inches(top), Inches(width), Inches(height)
     )
     shape.fill.solid()
-    shape.fill.fore_color.rgb = RGBColor(80, 80, 80)
-    shape.line.color.rgb = RGBColor(150, 150, 150)
-
+    shape.fill.fore_color.rgb = RGBColor(60, 60, 70)
+    shape.line.color.rgb = RGBColor(120, 120, 130)
     tf = shape.text_frame
     tf.word_wrap = True
     p = tf.paragraphs[0]
     p.text = text
-    p.font.size = Pt(16)
+    p.font.size = Pt(14)
     p.font.bold = True
-    p.font.color.rgb = RGBColor(*tc)
+    p.font.color.rgb = RGBColor(200, 200, 210)
     p.alignment = PP_ALIGN.CENTER
-
-def category_kb():
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="👨‍🎓 Студент")],
-        [KeyboardButton(text="💼 Предприниматель")],
-        [KeyboardButton(text="🏠 Для себя")]
-    ], resize_keyboard=True)
 
 def main_kb():
     return ReplyKeyboardMarkup(keyboard=[
@@ -178,35 +115,28 @@ def slides_kb():
         [KeyboardButton(text="10 слайдов"), KeyboardButton(text="12 слайдов")]
     ], resize_keyboard=True)
 
-def style_kb(plan):
-    styles = STYLES.get(plan, STYLES["free"])
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=s)] for s in styles],
-        resize_keyboard=True
-    )
+def style_kb():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="Тёмный")],
+        [KeyboardButton(text="Светлый")],
+        [KeyboardButton(text="Синий")]
+    ], resize_keyboard=True)
 
-def confirm_kb(plan: str, extra_used: int):
-    buttons = [[KeyboardButton(text="✅ Делать полную версию")]]
-    limits = EXTRA_LIMITS.get(plan, EXTRA_LIMITS["free"])
-    if extra_used < limits["times"]:
-        buttons.append([KeyboardButton(text="➕ Добавить информацию")])
-    buttons.append([KeyboardButton(text="✏️ Изменить тему")])
-    buttons.append([KeyboardButton(text="🎨 Изменить стиль")])
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+def confirm_kb():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="✅ Делать полную версию")],
+        [KeyboardButton(text="➕ Добавить информацию")],
+        [KeyboardButton(text="✏️ Изменить тему")]
+    ], resize_keyboard=True)
 
 @dp.message(Command("start"))
 async def cmd_start(m: Message, state: FSMContext):
     u = get_user(m.from_user.id)
     u["name"] = m.from_user.first_name or "друг"
     await m.answer(
-        f"Привет, {u['name']}!\n\nЯ делаю презентации.\nВыбери категорию:",
-        reply_markup=category_kb()
+        f"Привет, {u['name']}!\n\nЯ делаю презентации с текстом и картинками.\nНажми кнопку ниже:",
+        reply_markup=main_kb()
     )
-    await state.set_state(Form.waiting_category)
-
-@dp.message(Form.waiting_category)
-async def process_category(m: Message, state: FSMContext):
-    await m.answer("Что будем делать?", reply_markup=main_kb())
     await state.clear()
 
 @dp.message(F.text == "📊 Сделать презентацию")
@@ -214,18 +144,14 @@ async def start_pres(m: Message, state: FSMContext):
     if not can_generate(m.from_user.id):
         await m.answer("Лимит генераций закончился.")
         return
-    u = get_user(m.from_user.id)
-    limit = TOPIC_LIMITS.get(u["plan"], 100)
-    await m.answer(f"Напиши тему презентации (до {limit} символов):")
+    await m.answer("Напиши тему презентации:")
     await state.set_state(Form.waiting_topic)
 
 @dp.message(Form.waiting_topic)
 async def process_topic(m: Message, state: FSMContext):
-    u = get_user(m.from_user.id)
-    limit = TOPIC_LIMITS.get(u["plan"], 100)
     text = m.text or ""
-    if len(text) > limit:
-        await m.answer(f"Слишком длинно. Максимум {limit} символов. Напиши короче:")
+    if len(text) > 500:
+        await m.answer("Слишком длинно. Максимум 500 символов.")
         return
     await state.update_data(topic=text, extra="", extra_used=0)
     await m.answer("Сколько слайдов?", reply_markup=slides_kb())
@@ -234,22 +160,18 @@ async def process_topic(m: Message, state: FSMContext):
 @dp.message(Form.waiting_slides)
 async def process_slides(m: Message, state: FSMContext):
     slides = 8
-    text = m.text or ""
-    if "5" in text:
-        slides = 5
-    elif "10" in text:
-        slides = 10
-    elif "12" in text:
-        slides = 12
+    t = m.text or ""
+    if "5" in t: slides = 5
+    elif "10" in t: slides = 10
+    elif "12" in t: slides = 12
     await state.update_data(slides=slides)
-    u = get_user(m.from_user.id)
-    await m.answer("Выбери стиль:", reply_markup=style_kb(u["plan"]))
+    await m.answer("Выбери стиль:", reply_markup=style_kb())
     await state.set_state(Form.waiting_style)
 
 @dp.message(Form.waiting_style)
 async def process_style(m: Message, state: FSMContext):
     data = await state.get_data()
-    await state.update_data(style=m.text)
+    await state.update_data(style=m.text or "Тёмный")
     await m.answer("Делаю пробный вариант...")
 
     prompt = f"""Тема: {data.get('topic')}
@@ -257,65 +179,41 @@ async def process_style(m: Message, state: FSMContext):
 Стиль: {m.text}
 Дополнительно: {data.get('extra', '')}
 
-Сделай короткий образец структуры презентации обычным текстом:
+Сделай короткий образец структуры обычным текстом:
 Название: ...
 1. ...
 2. ...
 3. ...
-Не используй JSON."""
+Без JSON."""
     sample = await ask_grok(prompt)
     await state.update_data(sample=sample)
-
-    u = get_user(m.from_user.id)
-    extra_used = data.get("extra_used", 0)
-    await m.answer(
-        f"Пробный вариант:\n\n{sample}\n\nВыбери действие:",
-        reply_markup=confirm_kb(u["plan"], extra_used)
-    )
+    await m.answer(f"Пробный вариант:\n\n{sample}\n\nВыбери действие:", reply_markup=confirm_kb())
     await state.set_state(Form.waiting_confirm)
 
 @dp.message(Form.waiting_confirm, F.text == "✏️ Изменить тему")
 async def change_topic(m: Message, state: FSMContext):
-    u = get_user(m.from_user.id)
-    limit = TOPIC_LIMITS.get(u["plan"], 100)
-    await m.answer(f"Напиши новую тему (до {limit} символов):")
+    await m.answer("Напиши новую тему:")
     await state.set_state(Form.waiting_topic)
-
-@dp.message(Form.waiting_confirm, F.text == "🎨 Изменить стиль")
-async def change_style(m: Message, state: FSMContext):
-    u = get_user(m.from_user.id)
-    await m.answer("Выбери новый стиль:", reply_markup=style_kb(u["plan"]))
-    await state.set_state(Form.waiting_style)
 
 @dp.message(Form.waiting_confirm, F.text == "➕ Добавить информацию")
 async def add_extra(m: Message, state: FSMContext):
     data = await state.get_data()
-    u = get_user(m.from_user.id)
-    limits = EXTRA_LIMITS.get(u["plan"], EXTRA_LIMITS["free"])
-    extra_used = data.get("extra_used", 0)
-
-    if extra_used >= limits["times"]:
-        await m.answer("Лимит добавлений информации исчерпан.")
+    if data.get("extra_used", 0) >= 3:
+        await m.answer("Лимит добавлений исчерпан.")
         return
-
-    await m.answer(f"Напиши дополнительную информацию (до {limits['chars']} символов):")
+    await m.answer("Напиши дополнительную информацию (до 800 символов):")
     await state.set_state(Form.waiting_extra)
 
 @dp.message(Form.waiting_extra)
 async def process_extra(m: Message, state: FSMContext):
     data = await state.get_data()
-    u = get_user(m.from_user.id)
-    limits = EXTRA_LIMITS.get(u["plan"], EXTRA_LIMITS["free"])
     text = m.text or ""
-
-    if len(text) > limits["chars"]:
-        await m.answer(f"Слишком длинно. Максимум {limits['chars']} символов. Напиши короче:")
+    if len(text) > 800:
+        await m.answer("Слишком длинно. Максимум 800 символов.")
         return
-
-    old_extra = data.get("extra", "")
-    new_extra = (old_extra + "\n" + text).strip() if old_extra else text
+    old = data.get("extra", "")
+    new_extra = (old + "\n" + text).strip() if old else text
     extra_used = data.get("extra_used", 0) + 1
-
     await state.update_data(extra=new_extra, extra_used=extra_used)
     await m.answer("Обновляю пробный вариант...")
 
@@ -324,46 +222,53 @@ async def process_extra(m: Message, state: FSMContext):
 Стиль: {data.get('style')}
 Дополнительно: {new_extra}
 
-Сделай короткий образец структуры презентации обычным текстом:
+Сделай короткий образец структуры обычным текстом:
 Название: ...
 1. ...
 2. ...
 3. ...
-Не используй JSON."""
+Без JSON."""
     sample = await ask_grok(prompt)
     await state.update_data(sample=sample)
-
-    await m.answer(
-        f"Обновлённый пробный вариант:\n\n{sample}\n\nВыбери действие:",
-        reply_markup=confirm_kb(u["plan"], extra_used)
-    )
+    await m.answer(f"Обновлённый пробный вариант:\n\n{sample}\n\nВыбери действие:", reply_markup=confirm_kb())
     await state.set_state(Form.waiting_confirm)
 
-@dp.message(Form.waiting_confirm, F.text.in_(["✅ Делать полную версию", "делай", "да", "ок", "хорошо", "подтверждаю"]))
+@dp.message(Form.waiting_confirm, F.text.in_(["✅ Делать полную версию", "делай", "да", "ок"]))
 async def confirm_generate(m: Message, state: FSMContext):
     data = await state.get_data()
     uid = m.from_user.id
     u = get_user(uid)
-    await m.answer("Делаю финальную версию...")
+    await m.answer("Делаю финальную версию с картинками... Это может занять 1–2 минуты.")
 
-    prompt = get_prompt(
-        u["plan"],
-        data.get("topic", ""),
-        data.get("slides", 8),
-        data.get("style", "Графит"),
-        data.get("extra", "")
-    )
+    prompt = f"""Сделай сильную подробную презентацию.
+Тема: {data.get('topic')}
+Слайдов: {data.get('slides')}
+Стиль: {data.get('style')}
+Дополнительно: {data.get('extra', '')}
+
+На каждом слайде 4–7 предложений полезного текста.
+Верни ТОЛЬКО JSON:
+{{
+  "title": "Название",
+  "slides": [
+    {{"title": "Заголовок", "content": "Текст", "image_prompt": "English prompt for image about this slide"}}
+  ]
+}}"""
     raw = await ask_grok(prompt)
-
     try:
-        content = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+        content = json.loads(raw[raw.find("{"):raw.rfind("}")+1])
     except:
-        await m.answer("Ошибка генерации. Попробуй ещё раз.")
+        await m.answer("Ошибка генерации текста. Попробуй ещё раз.")
         await state.clear()
         return
 
-    bg = STYLE_COLORS.get(data.get("style"), (40, 40, 40))
-    tc = (230, 230, 230) if sum(bg) < 300 else (30, 30, 30)
+    style = data.get("style", "Тёмный")
+    if style == "Светлый":
+        bg, tc = (245, 245, 245), (30, 30, 30)
+    elif style == "Синий":
+        bg, tc = (15, 30, 60), (230, 235, 245)
+    else:
+        bg, tc = (25, 25, 30), (230, 230, 235)
 
     prs = Presentation()
     prs.slide_width = Inches(13.333)
@@ -374,10 +279,10 @@ async def confirm_generate(m: Message, state: FSMContext):
     shape = slide.shapes.add_shape(1, 0, 0, prs.slide_width, prs.slide_height)
     shape.fill.solid()
     shape.fill.fore_color.rgb = RGBColor(*bg)
-    tb = slide.shapes.add_textbox(Inches(0.8), Inches(2.6), Inches(11.7), Inches(2))
+    tb = slide.shapes.add_textbox(Inches(0.8), Inches(2.8), Inches(11.7), Inches(2))
     p = tb.text_frame.paragraphs[0]
     p.text = content.get("title", "Презентация")
-    p.font.size = Pt(34)
+    p.font.size = Pt(36)
     p.font.bold = True
     p.font.color.rgb = RGBColor(*tc)
     p.alignment = PP_ALIGN.CENTER
@@ -388,6 +293,7 @@ async def confirm_generate(m: Message, state: FSMContext):
         bg_shape.fill.solid()
         bg_shape.fill.fore_color.rgb = RGBColor(*bg)
 
+        # Заголовок
         tb = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12.3), Inches(0.8))
         p = tb.text_frame.paragraphs[0]
         p.text = s.get("title", "")
@@ -395,7 +301,8 @@ async def confirm_generate(m: Message, state: FSMContext):
         p.font.bold = True
         p.font.color.rgb = RGBColor(*tc)
 
-        cb = slide.shapes.add_textbox(Inches(0.5), Inches(1.3), Inches(6.5), Inches(5.5))
+        # Текст
+        cb = slide.shapes.add_textbox(Inches(0.5), Inches(1.3), Inches(6.3), Inches(5.5))
         tf = cb.text_frame
         tf.word_wrap = True
         p = tf.paragraphs[0]
@@ -403,27 +310,32 @@ async def confirm_generate(m: Message, state: FSMContext):
         p.font.size = Pt(16)
         p.font.color.rgb = RGBColor(*tc)
 
-        if idx % 2 == 0:
-            add_placeholder(slide, 7.5, 1.5, 5.2, 2.5, "Вставь сюда фото", tc)
-            add_placeholder(slide, 7.5, 4.3, 5.2, 2.3, "Вставь сюда график", tc)
+        # Картинка
+        img_path = f"/tmp/img_{uid}_{idx}.png"
+        img_prompt = s.get("image_prompt") or f"High quality photo about: {s.get('title', data.get('topic'))}"
+        ok = await generate_image(img_prompt, img_path)
+
+        if ok and os.path.exists(img_path):
+            try:
+                slide.shapes.add_picture(img_path, Inches(7.2), Inches(1.4), width=Inches(5.5))
+            except Exception as e:
+                print("Insert image error:", e)
+                add_placeholder(slide, 7.2, 1.4, 5.5, 5.2, "Вставь сюда фото")
         else:
-            add_placeholder(slide, 7.5, 1.5, 5.2, 5.1, "Вставь сюда фото", tc)
+            add_placeholder(slide, 7.2, 1.4, 5.5, 5.2, "Вставь сюда фото")
 
     pptx_path = f"pres_{uid}.pptx"
     prs.save(pptx_path)
 
-    # PDF с кириллицей
+    # PDF
     pdf_path = f"pres_{uid}.pdf"
     c = canvas.Canvas(pdf_path, pagesize=A4)
     w, h = A4
-
-    font_name = "Helvetica"
-    font_bold = "Helvetica-Bold"
+    font_name, font_bold = "Helvetica", "Helvetica-Bold"
     try:
         pdfmetrics.registerFont(TTFont("DejaVu", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
         pdfmetrics.registerFont(TTFont("DejaVuBold", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
-        font_name = "DejaVu"
-        font_bold = "DejaVuBold"
+        font_name, font_bold = "DejaVu", "DejaVuBold"
     except:
         pass
 
@@ -451,7 +363,6 @@ async def confirm_generate(m: Message, state: FSMContext):
 
     await m.answer_document(FSInputFile(pptx_path), caption="PPTX")
     await m.answer_document(FSInputFile(pdf_path), caption="PDF")
-
     u["generations"] += 1
     u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
     await m.answer("Готово!", reply_markup=main_kb())
@@ -468,19 +379,9 @@ async def history(m: Message):
 @dp.message(F.text == "ℹ️ Мой тариф")
 async def my_plan(m: Message):
     u = get_user(m.from_user.id)
-    names = {
-        "free": "Бесплатный",
-        "basic": "Базовый (199 ₽)",
-        "standard": "Стандарт (499 ₽)",
-        "premium": "Премиум (999 ₽)"
-    }
-    limit = PLAN_LIMITS.get(u["plan"], 3)
+    limit = PLAN_LIMITS.get(u["plan"], 5)
     left = max(0, limit - u["generations"])
-    await m.answer(
-        f"Тариф: {names.get(u['plan'])}\n"
-        f"Использовано: {u['generations']} из {limit}\n"
-        f"Осталось: {left}"
-    )
+    await m.answer(f"Генераций: {u['generations']} из {limit}\nОсталось: {left}")
 
 @dp.message(Command("grant"))
 async def grant(m: Message):
@@ -489,31 +390,10 @@ async def grant(m: Message):
     try:
         parts = m.text.split()
         uid = int(parts[1])
-        plan = parts[2] if len(parts) > 2 else "premium"
-        get_user(uid)["plan"] = plan
-        await m.answer(f"Выдан тариф {plan} пользователю {uid}")
+        get_user(uid)["plan"] = "premium"
+        await m.answer(f"Доступ выдан пользователю {uid}")
     except:
-        await m.answer("Формат: /grant user_id [basic/standard/premium]")
-
-@dp.message(Command("revoke"))
-async def revoke(m: Message):
-    if m.from_user.id not in ADMIN_IDS:
-        return
-    try:
-        uid = int(m.text.split()[1])
-        get_user(uid)["plan"] = "free"
-        await m.answer(f"Сброшен тариф у {uid}")
-    except:
-        await m.answer("Формат: /revoke user_id")
-
-@dp.message(Command("users"))
-async def users_list(m: Message):
-    if m.from_user.id not in ADMIN_IDS:
-        return
-    text = "Пользователи:\n"
-    for uid, d in list(users_db.items())[:20]:
-        text += f"{uid} | {d.get('name')} | {d.get('plan')} | {d.get('generations')}\n"
-    await m.answer(text or "Пусто")
+        await m.answer("Формат: /grant user_id")
 
 async def main():
     print("Бот запущен")
