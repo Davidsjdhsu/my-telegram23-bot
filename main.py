@@ -19,10 +19,10 @@ from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 import httpx
-import replicate
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAI_API_KEY = os.getenv("XAI_API_KEY")
+REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 ADMIN_IDS = [909828109]
 
 client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
@@ -70,42 +70,40 @@ async def ask_grok(prompt: str) -> str:
 
 async def generate_image(prompt: str, path: str) -> bool:
     try:
-        def run_flux():
-            return replicate.run(
-                "black-forest-labs/flux-schnell",
-                input={
-                    "prompt": prompt,
-                    "num_outputs": 1,
-                    "aspect_ratio": "16:9",
-                    "output_format": "png"
-                }
+        headers = {
+            "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        async with httpx.AsyncClient(timeout=120) as http:
+            create = await http.post(
+                "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
+                headers=headers,
+                json={"input": {"prompt": prompt, "aspect_ratio": "16:9"}}
             )
+            print("Replicate create:", create.status_code)
+            create.raise_for_status()
+            get_url = create.json()["urls"]["get"]
 
-        output = await asyncio.to_thread(run_flux)
-        print("Replicate raw output:", output)
-
-        item = output[0] if isinstance(output, list) and output else output
-
-        data = None
-        if hasattr(item, "read"):
-            data = item.read()
-        elif isinstance(item, str) and item.startswith("http"):
-            with httpx.Client(timeout=60) as http:
-                data = http.get(item).content
-        else:
-            url = getattr(item, "url", None)
-            if url:
-                with httpx.Client(timeout=60) as http:
-                    data = http.get(str(url)).content
-
-        if not data:
-            print("No image data")
-            return False
-
-        with open(path, "wb") as f:
-            f.write(data)
-        print("Image saved:", path)
-        return True
+            for _ in range(30):
+                await asyncio.sleep(2)
+                check = await http.get(get_url, headers=headers)
+                info = check.json()
+                status = info.get("status")
+                print("Replicate status:", status)
+                if status == "succeeded":
+                    out = info.get("output")
+                    img_url = out[0] if isinstance(out, list) else out
+                    img = await http.get(str(img_url))
+                    img.raise_for_status()
+                    with open(path, "wb") as f:
+                        f.write(img.content)
+                    print("Image saved:", path)
+                    return True
+                if status in ("failed", "canceled"):
+                    print("Replicate failed:", info)
+                    return False
+        print("Image generation timeout")
+        return False
     except Exception as e:
         print("Image generation error:", e)
         return False
@@ -198,7 +196,6 @@ async def process_style(m: Message, state: FSMContext):
     data = await state.get_data()
     await state.update_data(style=m.text or "Тёмный")
     await m.answer("Делаю пробный вариант...")
-
     prompt = f"""Тема: {data.get('topic')}
 Слайдов: {data.get('slides')}
 Стиль: {m.text}
@@ -244,7 +241,6 @@ async def process_extra(m: Message, state: FSMContext):
     extra_used = data.get("extra_used", 0) + 1
     await state.update_data(extra=new_extra, extra_used=extra_used)
     await m.answer("Обновляю пробный вариант...")
-
     prompt = f"""Тема: {data.get('topic')}
 Слайдов: {data.get('slides')}
 Стиль: {data.get('style')}
@@ -427,7 +423,7 @@ async def grant(m: Message):
 
 async def main():
     print("Бот запущен")
-    print("REPLICATE TOKEN:" , "YES" if os.getenv("REPLICATE_API_TOKEN") else "NO")
+    print("REPLICATE TOKEN:", "YES" if REPLICATE_API_TOKEN else "NO")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
