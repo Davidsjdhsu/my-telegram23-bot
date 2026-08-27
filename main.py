@@ -74,32 +74,16 @@ THEMES = {
 }
 
 THEME_LABELS = {
-    "nature": "Природа",
-    "business": "Бизнес",
-    "tech": "Технологии",
-    "school": "Учёба",
-    "fashion": "Мода",
-    "history": "История",
-    "science": "Наука",
-    "sport": "Спорт",
-    "travel": "Путешествия",
-    "food": "Еда",
-    "art": "Искусство",
-    "eco": "Экология",
-    "minimal": "Минимализм",
-    "default": "Универсальный"
+    "nature": "Природа", "business": "Бизнес", "tech": "Технологии", "school": "Учёба",
+    "fashion": "Мода", "history": "История", "science": "Наука", "sport": "Спорт",
+    "travel": "Путешествия", "food": "Еда", "art": "Искусство", "eco": "Экология",
+    "minimal": "Минимализм", "default": "Универсальный"
 }
 
 ANGLES = [
-    "через неожиданный факт",
-    "через историю одного примера",
-    "через контраст до и после",
-    "через вопрос к зрителю",
-    "через три сильных тезиса",
-    "в стиле National Geographic",
-    "в стиле Apple keynote",
-    "в стиле модного журнала",
-    "как лекция сильного преподавателя",
+    "через неожиданный факт", "через историю одного примера", "через контраст до и после",
+    "через вопрос к зрителю", "через три сильных тезиса", "в стиле National Geographic",
+    "в стиле Apple keynote", "в стиле модного журнала", "как лекция сильного преподавателя",
     "как премиальный pitch deck"
 ]
 
@@ -143,7 +127,7 @@ async def ask_grok(prompt: str) -> str:
         r = await client.chat.completions.create(
             model="grok-3",
             messages=[
-                {"role": "system", "content": "Ты арт-директор презентаций. Каждый ответ уникален. Исправляй ошибки. Пиши по-русски, коротко и сильно."},
+                {"role": "system", "content": "Ты арт-директор презентаций. Пиши как живой сильный автор, не как нейросеть. Без канцелярита и шаблонных фраз: «в современном мире», «является», «следует отметить», «данный», «невозможно переоценить». Чередуй короткие и длинные предложения. Заголовки живые. Каждый ответ уникален. Исправляй ошибки. Только русский."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.95,
@@ -227,38 +211,38 @@ def txt(slide, l, t, w, h, text, size, color, bold=False):
 
 def main_kb():
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="Сделать презентацию")],
-        [KeyboardButton(text="Моя история"), KeyboardButton(text="Мой тариф")]
+        [KeyboardButton(text="📊 Сделать презентацию")],
+        [KeyboardButton(text="📁 Моя история"), KeyboardButton(text="ℹ️ Мой тариф")]
     ], resize_keyboard=True)
 
 
 def mode_kb():
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="Сгенерировать с ИИ")],
-        [KeyboardButton(text="Вставить свой текст")]
+        [KeyboardButton(text="✨ Сгенерировать с ИИ")],
+        [KeyboardButton(text="📝 Вставить свой текст")]
     ], resize_keyboard=True)
 
 
 def slides_kb():
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="5 слайдов"), KeyboardButton(text="8 слайдов")],
-        [KeyboardButton(text="10 слайдов")]
+        [KeyboardButton(text="5️⃣ 5 слайдов"), KeyboardButton(text="8️⃣ 8 слайдов")],
+        [KeyboardButton(text="🔟 10 слайдов")]
     ], resize_keyboard=True)
 
 
 def confirm_kb():
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="Делать полную версию")],
-        [KeyboardButton(text="Добавить информацию")],
-        [KeyboardButton(text="Изменить стиль")],
-        [KeyboardButton(text="Изменить тему")]
+        [KeyboardButton(text="✅ Делать полную версию")],
+        [KeyboardButton(text="➕ Добавить информацию")],
+        [KeyboardButton(text="🎨 Изменить стиль")],
+        [KeyboardButton(text="✏️ Изменить тему")]
     ], resize_keyboard=True)
 
 
 def style_kb(include_keep=False):
     rows = []
     if include_keep:
-        rows.append([KeyboardButton(text="Оставить этот стиль")])
+        rows.append([KeyboardButton(text="👍 Оставить этот стиль")])
     rows.extend([
         [KeyboardButton(text="Природа"), KeyboardButton(text="Бизнес")],
         [KeyboardButton(text="Технологии"), KeyboardButton(text="Учёба")],
@@ -279,7 +263,10 @@ async def cmd_start(m: Message, state: FSMContext):
     u = get_user(m.from_user.id)
     u["name"] = m.from_user.first_name or "друг"
     await m.answer(
-        f"Привет, {u['name']}!\n\nЯ делаю презентации с текстом и картинками.",
+        f"Привет, {u['name']} 👋\n\n"
+        "Я собираю красивые презентации: текст, стиль и живые фото.\n"
+        "Можно набросать тему — или прислать свой текст, я его поправлю.\n\n"
+        "Нажми кнопку ниже и начнём.",
         reply_markup=main_kb()
     )
     await state.clear()
@@ -292,24 +279,24 @@ async def start_pres(m: Message, state: FSMContext):
         return
     await m.answer(
         "Как делаем презентацию?\n\n"
-        "Сгенерировать с ИИ — я сам придумаю текст, стиль и фото.\n"
-        "Вставить свой текст — ты присылаешь материал, я исправлю ошибки и соберу слайды.",
+        "✨ Сгенерировать с ИИ — я сам придумаю текст, стиль и фото.\n"
+        "📝 Вставить свой текст — пришли материал, я поправлю ошибки и соберу слайды.",
         reply_markup=mode_kb()
     )
     await state.set_state(Form.waiting_mode)
 
 
-@dp.message(Form.waiting_mode, F.text == "Сгенерировать с ИИ")
+@dp.message(Form.waiting_mode, F.text.in_(["Сгенерировать с ИИ", "✨ Сгенерировать с ИИ"]))
 async def mode_ai(m: Message, state: FSMContext):
     await state.update_data(mode="ai", user_text="")
-    await m.answer("Напиши тему презентации:")
+    await m.answer("Напиши тему. Можно коротко, например: киты, крипта, школа.")
     await state.set_state(Form.waiting_topic)
 
 
-@dp.message(Form.waiting_mode, F.text == "Вставить свой текст")
+@dp.message(Form.waiting_mode, F.text.in_(["Вставить свой текст", "📝 Вставить свой текст"]))
 async def mode_user(m: Message, state: FSMContext):
     await state.update_data(mode="user")
-    await m.answer("Пришли свой текст. Можно черновик — я исправлю ошибки и соберу структуру.")
+    await m.answer("Пришли свой текст 📝\nМожно черновик — я поправлю ошибки и соберу структуру.")
     await state.set_state(Form.waiting_user_text)
 
 
@@ -322,7 +309,7 @@ async def process_topic(m: Message, state: FSMContext):
     name, _ = pick_theme(text)
     await state.update_data(topic=text, extra="", extra_used=0, theme_name=name)
     await m.answer(
-        f"По теме выбран стиль: {THEME_LABELS.get(name, name)}.\nОставить или выбрать другой?",
+        f"🎨 По теме подходит стиль: {THEME_LABELS.get(name, name)}.\nОставить его или выбрать другой?",
         reply_markup=style_kb(include_keep=True)
     )
     await state.set_state(Form.waiting_theme)
@@ -341,7 +328,7 @@ async def process_user_text(m: Message, state: FSMContext):
     topic = text[:80].replace("\n", " ")
     await state.update_data(user_text=text, topic=topic, extra="", extra_used=0, theme_name=name)
     await m.answer(
-        f"По тексту выбран стиль: {THEME_LABELS.get(name, name)}.\nОставить или выбрать другой?",
+        f"🎨 По тексту подходит стиль: {THEME_LABELS.get(name, name)}.\nОставить его или выбрать другой?",
         reply_markup=style_kb(include_keep=True)
     )
     await state.set_state(Form.waiting_theme)
@@ -350,14 +337,13 @@ async def process_user_text(m: Message, state: FSMContext):
 @dp.message(Form.waiting_theme)
 async def process_theme(m: Message, state: FSMContext):
     label = m.text or ""
-    data = await state.get_data()
-    if label != "Оставить этот стиль":
+    if label not in ("Оставить этот стиль", "👍 Оставить этот стиль"):
         name = STYLE_BY_LABEL.get(label)
         if not name:
             await m.answer("Выбери стиль кнопкой ниже.", reply_markup=style_kb(include_keep=True))
             return
         await state.update_data(theme_name=name)
-    await m.answer("Сколько слайдов?", reply_markup=slides_kb())
+    await m.answer("Сколько слайдов сделать?", reply_markup=slides_kb())
     await state.set_state(Form.waiting_slides)
 
 
@@ -370,24 +356,17 @@ async def process_slides(m: Message, state: FSMContext):
     elif "10" in t:
         slides = 10
     data = await state.get_data()
-    await state.update_data(slides=slides)
     angle = random.choice(ANGLES)
-    await state.update_data(angle=angle)
-    await m.answer("Готовлю пробный вариант...", reply_markup=ReplyKeyboardRemove())
+    await state.update_data(slides=slides, angle=angle)
+    await m.answer("Секунду, собираю пробный вариант…", reply_markup=ReplyKeyboardRemove())
 
     if data.get("mode") == "user":
-        prompt = f"""Пользователь прислал свой текст. Исправь ошибки, сделай грамотно и собери структуру презентации.
-Текст пользователя:
+        prompt = f"""Пользователь прислал свой текст. Исправь ошибки и собери структуру презентации.
+Текст:
 {data.get('user_text')}
-
 Слайдов: {slides}
 Угол подачи: {angle}
-Сделай короткий пробный план обычным текстом:
-Название:
-1.
-2.
-3.
-Без JSON."""
+Короткий план текстом: Название + 3 пункта. Без JSON."""
     else:
         prompt = f"""Тема: {data.get('topic')}
 Слайдов: {slides}
@@ -399,9 +378,9 @@ async def process_slides(m: Message, state: FSMContext):
     theme_name = data.get("theme_name", "default")
     await state.update_data(sample=sample)
     await m.answer(
-        f"Пробный вариант:\n\n{sample}\n\n"
+        f"Черновик готов ✅\n\n{sample}\n\n"
         f"Стиль: {THEME_LABELS.get(theme_name, theme_name)}\n\n"
-        "Выбери действие:",
+        "Если всё ок — собираем полную версию.",
         reply_markup=confirm_kb()
     )
     await state.set_state(Form.waiting_confirm)
@@ -418,7 +397,7 @@ async def change_topic(m: Message, state: FSMContext):
         await state.set_state(Form.waiting_topic)
 
 
-@dp.message(Form.waiting_confirm, F.text.in_(["Изменить стиль"]))
+@dp.message(Form.waiting_confirm, F.text.in_(["Изменить стиль", "🎨 Изменить стиль"]))
 async def change_style(m: Message, state: FSMContext):
     await m.answer("Выбери стиль оформления:", reply_markup=style_kb())
     await state.set_state(Form.waiting_style)
@@ -434,7 +413,7 @@ async def process_style(m: Message, state: FSMContext):
     data = await state.get_data()
     await state.update_data(theme_name=name)
     await m.answer(
-        f"Стиль изменён: {label}\n\nПробный вариант:\n\n{data.get('sample')}\n\nВыбери действие:",
+        f"Стиль изменён: {label}\n\nЧерновик:\n\n{data.get('sample')}\n\nВыбери действие:",
         reply_markup=confirm_kb()
     )
     await state.set_state(Form.waiting_confirm)
@@ -445,7 +424,7 @@ async def add_extra(m: Message, state: FSMContext):
     if (await state.get_data()).get("extra_used", 0) >= 3:
         await m.answer("Лимит добавлений исчерпан.", reply_markup=confirm_kb())
         return
-    await m.answer("Напиши дополнительную информацию. Максимум 800 символов.")
+    await m.answer("Напиши, что добавить. Максимум 800 символов.")
     await state.set_state(Form.waiting_extra)
 
 
@@ -459,10 +438,9 @@ async def process_extra(m: Message, state: FSMContext):
     extra = ((data.get("extra") or "") + "\n" + text).strip()
     angle = random.choice(ANGLES)
     await state.update_data(extra=extra, extra_used=data.get("extra_used", 0) + 1, angle=angle)
-    await m.answer("Обновляю пробный вариант...")
-
+    await m.answer("Обновляю черновик…")
     if data.get("mode") == "user":
-        prompt = f"""Исправь и обнови структуру презентации.
+        prompt = f"""Исправь и обнови структуру.
 Исходный текст:
 {data.get('user_text')}
 Дополнительно:
@@ -475,10 +453,9 @@ async def process_extra(m: Message, state: FSMContext):
 Доп: {extra}
 Угол: {angle}
 Новый короткий план, 3 пункта. Без JSON."""
-
     sample = await ask_grok(prompt)
     await state.update_data(sample=sample)
-    await m.answer(f"Обновлённый пробный вариант:\n\n{sample}\n\nВыбери действие:", reply_markup=confirm_kb())
+    await m.answer(f"Обновлённый черновик ✅\n\n{sample}\n\nВыбери действие:", reply_markup=confirm_kb())
     await state.set_state(Form.waiting_confirm)
 
 
@@ -497,7 +474,7 @@ async def confirm_generate(m: Message, state: FSMContext):
 
     if data.get("mode") == "user":
         raw = await ask_grok(f"""Собери уникальную презентацию из текста пользователя.
-Исправь ошибки, сделай грамотно, сохрани смысл.
+Исправь ошибки, сохрани смысл.
 Текст:
 {data.get('user_text')}
 Доп:
@@ -505,7 +482,9 @@ async def confirm_generate(m: Message, state: FSMContext):
 Слайдов: {data.get('slides')}
 Угол: {angle}
 Стиль: {theme_name}
-Заголовок слайда 3–6 слов. Текст: 2 коротких абзаца.
+Заголовок слайда 3–6 слов, как у человека, не как у ИИ.
+Текст: 2 живых абзаца, без канцелярита.
+Фото: живой кадр, не стоковый ИИ-шаблон.
 Только JSON:
 {{"title":"...","slides":[{{"title":"...","content":"абзац1\\n\\nабзац2","image_prompt":"unique cinematic scene"}}]}}""")
     else:
@@ -515,14 +494,16 @@ async def confirm_generate(m: Message, state: FSMContext):
 Доп: {data.get('extra')}
 Угол: {angle}
 Стиль: {theme_name}
-Заголовок 3–6 слов. Текст: 2 коротких абзаца.
+Заголовок 3–6 слов, живой, не шаблонный.
+Текст: 2 живых абзаца, без канцелярита и следов ИИ.
+Фото: живой кадр, не стоковый ИИ-шаблон.
 Только JSON:
 {{"title":"...","slides":[{{"title":"...","content":"абзац1\\n\\nабзац2","image_prompt":"unique cinematic scene"}}]}}""")
 
     try:
         content = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
     except Exception:
-        await m.answer("Ошибка генерации текста. Попробуй ещё раз.", reply_markup=main_kb())
+        await m.answer("Не собрал текст. Нажми ещё раз «Сделать презентацию».", reply_markup=main_kb())
         await state.clear()
         return
 
@@ -534,11 +515,7 @@ async def confirm_generate(m: Message, state: FSMContext):
 
     cover_img = None
     cover_src = f"/tmp/{uid}_cover.png"
-    cover_ok = await generate_image(
-        f"{content.get('title')}, wide cinematic opening shot, {colors['photo']}",
-        cover_src
-    )
-    if cover_ok:
+    if await generate_image(f"{content.get('title')}, wide cinematic opening shot, {colors['photo']}", cover_src):
         cover_wide = f"/tmp/{uid}_cover_w.png"
         cover(cover_src, cover_wide, 1920, 1080)
         cover_img = cover_wide
@@ -569,7 +546,6 @@ async def confirm_generate(m: Message, state: FSMContext):
         rect(slide, 0, 0, 13.333, 7.5, colors["bg"])
         layout = layouts[idx % 3]
         img = images[idx] if idx < len(images) else None
-
         if layout == 0:
             if img:
                 slide.shapes.add_picture(img[1], Inches(0), Inches(0), width=Inches(6.4), height=Inches(7.5))
@@ -616,7 +592,6 @@ async def confirm_generate(m: Message, state: FSMContext):
 
     pptx_path = f"pres_{uid}.pptx"
     prs.save(pptx_path)
-
     pdf_path = f"pres_{uid}.pdf"
     pdf = canvas.Canvas(pdf_path, pagesize=A4)
     w, h = A4
@@ -639,25 +614,32 @@ async def confirm_generate(m: Message, state: FSMContext):
         y -= 20
     pdf.save()
 
-    await m.answer_document(FSInputFile(pptx_path), caption="PPTX")
-    await m.answer_document(FSInputFile(pdf_path), caption="PDF")
+    await m.answer_document(FSInputFile(pptx_path), caption="📊 PPTX — открывай этот файл")
+    await m.answer_document(FSInputFile(pdf_path), caption="📄 PDF — текстовая копия без фото")
     u["generations"] += 1
     u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
-    await m.answer("Готово!", reply_markup=main_kb())
+    await m.answer(
+        "Готово ✅\n\n"
+        "Открывай именно PPTX в PowerPoint, Keynote или Google Презентациях.\n\n"
+        "Если на телефоне все фото одинаковые, это не ошибка файла. "
+        "Так бывает в предпросмотре Telegram, WPS и встроенных «Документах». "
+        "Открой тот же файл на другом устройстве или в нормальном редакторе презентаций.",
+        reply_markup=main_kb()
+    )
     await state.clear()
 
 
 @dp.message(F.text.in_(["Моя история", "📁 Моя история"]))
 async def history(m: Message):
     u = get_user(m.from_user.id)
-    await m.answer("История пустая." if not u["history"] else "История:\n\n" + "\n".join(u["history"][-10:]))
+    await m.answer("История пустая." if not u["history"] else "📁 История:\n\n" + "\n".join(u["history"][-10:]))
 
 
 @dp.message(F.text.in_(["Мой тариф", "ℹ️ Мой тариф"]))
 async def my_plan(m: Message):
     u = get_user(m.from_user.id)
     limit = PLAN_LIMITS.get(u["plan"], 15)
-    await m.answer(f"Генераций: {u['generations']} из {limit}\nОсталось: {max(0, limit - u['generations'])}")
+    await m.answer(f"ℹ️ Генераций: {u['generations']} из {limit}\nОсталось: {max(0, limit - u['generations'])}")
 
 
 @dp.message(Command("grant"))
