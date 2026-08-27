@@ -30,24 +30,58 @@ client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 users_db = {}
-
 PLAN_LIMITS = {"premium": 15}
 
 class Form(StatesGroup):
     waiting_topic = State()
     waiting_slides = State()
-    waiting_style = State()
     waiting_confirm = State()
     waiting_extra = State()
 
+THEMES = {
+    "nature": {
+        "bg": (248, 246, 241), "ink": (22, 22, 24), "mid": (70, 70, 74), "mute": (130, 128, 124), "line": (22, 22, 24),
+        "photo": "photorealistic nature photography, cinematic sunlight, no text, no watermark"
+    },
+    "business": {
+        "bg": (16, 16, 18), "ink": (245, 245, 247), "mid": (196, 196, 200), "mute": (120, 120, 126), "line": (212, 175, 90),
+        "photo": "premium business photography, architecture, office, cinematic, no text, no watermark"
+    },
+    "tech": {
+        "bg": (8, 16, 28), "ink": (240, 246, 255), "mid": (176, 196, 220), "mute": (110, 130, 155), "line": (90, 170, 230),
+        "photo": "futuristic technology photography, neon ambient light, cinematic, no text, no watermark"
+    },
+    "school": {
+        "bg": (250, 249, 246), "ink": (28, 32, 40), "mid": (60, 64, 72), "mute": (120, 124, 132), "line": (40, 90, 180),
+        "photo": "clear educational photo, bright, simple subject, no text, no watermark"
+    },
+    "fashion": {
+        "bg": (252, 250, 247), "ink": (18, 18, 18), "mid": (70, 66, 62), "mute": (140, 134, 128), "line": (18, 18, 18),
+        "photo": "editorial fashion photography, magazine look, cinematic, no text, no watermark"
+    },
+    "default": {
+        "bg": (248, 246, 241), "ink": (22, 22, 24), "mid": (70, 70, 74), "mute": (130, 128, 124), "line": (22, 22, 24),
+        "photo": "cinematic photorealistic photo, no text, no watermark"
+    }
+}
+
+def pick_theme(topic: str):
+    t = (topic or "").lower()
+    if any(x in t for x in ["животн", "природ", "океан", "кит", "лес", "эколог", "моря", "цвет"]):
+        return "nature", THEMES["nature"]
+    if any(x in t for x in ["бизнес", "компани", "продаж", "финанс", "инвест", "стартап", "рынок"]):
+        return "business", THEMES["business"]
+    if any(x in t for x in ["крипт", "блокчейн", "нейро", "техно", "ai", "ии", "код", "робот", "софт"]):
+        return "tech", THEMES["tech"]
+    if any(x in t for x in ["школ", "универ", "урок", "студент", "доклад", "история", "биолог"]):
+        return "school", THEMES["school"]
+    if any(x in t for x in ["мод", "стиль", "бренд", "дизайн", "искусств", "фото"]):
+        return "fashion", THEMES["fashion"]
+    return "default", THEMES["default"]
+
 def get_user(uid):
     if uid not in users_db:
-        users_db[uid] = {
-            "name": "",
-            "plan": "premium",
-            "generations": 0,
-            "history": []
-        }
+        users_db[uid] = {"name": "", "plan": "premium", "generations": 0, "history": []}
     return users_db[uid]
 
 def can_generate(uid):
@@ -59,7 +93,7 @@ async def ask_grok(prompt: str) -> str:
         r = await client.chat.completions.create(
             model="grok-3",
             messages=[
-                {"role": "system", "content": "Ты профессиональный создатель презентаций. Отвечай только на русском."},
+                {"role": "system", "content": "Ты арт-директор презентаций. Пиши коротко, сильно, по-русски."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
@@ -71,69 +105,65 @@ async def ask_grok(prompt: str) -> str:
 
 async def generate_image(prompt: str, path: str) -> bool:
     try:
-        headers = {
-            "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
-            "Content-Type": "application/json"
-        }
+        headers = {"Authorization": f"Bearer {REPLICATE_API_TOKEN}", "Content-Type": "application/json"}
         async with httpx.AsyncClient(timeout=120) as http:
             create = await http.post(
                 "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
                 headers=headers,
-                json={
-                    "input": {
-                        "prompt": prompt,
-                        "aspect_ratio": "16:9",
-                        "output_format": "png"
-                    }
-                }
+                json={"input": {"prompt": prompt, "aspect_ratio": "16:9", "output_format": "png"}}
             )
             print("Replicate create:", create.status_code)
             create.raise_for_status()
             get_url = create.json()["urls"]["get"]
-
             for _ in range(30):
                 await asyncio.sleep(2)
-                check = await http.get(get_url, headers=headers)
-                info = check.json()
-                status = info.get("status")
-                print("Replicate status:", status)
-                if status == "succeeded":
+                info = (await http.get(get_url, headers=headers)).json()
+                if info.get("status") == "succeeded":
                     out = info.get("output")
-                    img_url = out[0] if isinstance(out, list) else out
-                    img = await http.get(str(img_url))
-                    img.raise_for_status()
+                    url = out[0] if isinstance(out, list) else out
+                    raw = await http.get(str(url))
                     with open(path, "wb") as f:
-                        f.write(img.content)
-
-                    converted = Image.open(path).convert("RGB")
-                    converted.save(path, "PNG")
-                    print("Image saved:", path)
+                        f.write(raw.content)
+                    Image.open(path).convert("RGB").save(path, "PNG")
                     return True
-                if status in ("failed", "canceled"):
-                    print("Replicate failed:", info)
+                if info.get("status") in ("failed", "canceled"):
                     return False
-        print("Image generation timeout")
         return False
     except Exception as e:
         print("Image generation error:", e)
         return False
 
-def add_placeholder(slide, left, top, width, height, text):
-    shape = slide.shapes.add_shape(
-        MSO_SHAPE.ROUNDED_RECTANGLE,
-        Inches(left), Inches(top), Inches(width), Inches(height)
-    )
-    shape.fill.solid()
-    shape.fill.fore_color.rgb = RGBColor(60, 60, 70)
-    shape.line.color.rgb = RGBColor(120, 120, 130)
-    tf = shape.text_frame
+def cover(src, dest, w, h):
+    im = Image.open(src).convert("RGB")
+    t = w / h
+    iw, ih = im.size
+    if iw / ih > t:
+        nw = int(ih * t)
+        x = (iw - nw) // 2
+        im = im.crop((x, 0, x + nw, ih))
+    else:
+        nh = int(iw / t)
+        y = (ih - nh) // 2
+        im = im.crop((0, y, iw, y + nh))
+    im.resize((w, h), Image.LANCZOS).save(dest, "PNG")
+
+def rect(slide, l, t, w, h, color):
+    s = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(l), Inches(t), Inches(w), Inches(h))
+    s.fill.solid()
+    s.fill.fore_color.rgb = RGBColor(*color)
+    s.line.fill.background()
+
+def txt(slide, l, t, w, h, text, size, color, bold=False):
+    box = slide.shapes.add_textbox(Inches(l), Inches(t), Inches(w), Inches(h))
+    tf = box.text_frame
     tf.word_wrap = True
     p = tf.paragraphs[0]
-    p.text = text
-    p.font.size = Pt(14)
-    p.font.bold = True
-    p.font.color.rgb = RGBColor(200, 200, 210)
-    p.alignment = PP_ALIGN.CENTER
+    p.text = text or ""
+    p.font.size = Pt(size)
+    p.font.bold = bold
+    p.font.color.rgb = RGBColor(*color)
+    p.font.name = "Calibri"
+    return box
 
 def main_kb():
     return ReplyKeyboardMarkup(keyboard=[
@@ -147,13 +177,6 @@ def slides_kb():
         [KeyboardButton(text="10 слайдов")]
     ], resize_keyboard=True)
 
-def style_kb():
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="Тёмный")],
-        [KeyboardButton(text="Светлый")],
-        [KeyboardButton(text="Синий")]
-    ], resize_keyboard=True)
-
 def confirm_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="✅ Делать полную версию")],
@@ -165,10 +188,7 @@ def confirm_kb():
 async def cmd_start(m: Message, state: FSMContext):
     u = get_user(m.from_user.id)
     u["name"] = m.from_user.first_name or "друг"
-    await m.answer(
-        f"Привет, {u['name']}!\n\nЯ делаю презентации с текстом и картинками.",
-        reply_markup=main_kb()
-    )
+    await m.answer(f"Привет, {u['name']}!\n\nЯ делаю презентации под твою тему.", reply_markup=main_kb())
     await state.clear()
 
 @dp.message(F.text == "📊 Сделать презентацию")
@@ -185,7 +205,8 @@ async def process_topic(m: Message, state: FSMContext):
     if len(text) > 500:
         await m.answer("Слишком длинно. Максимум 500 символов.")
         return
-    await state.update_data(topic=text, extra="", extra_used=0)
+    name, _ = pick_theme(text)
+    await state.update_data(topic=text, extra="", extra_used=0, theme_name=name)
     await m.answer("Сколько слайдов?", reply_markup=slides_kb())
     await state.set_state(Form.waiting_slides)
 
@@ -193,36 +214,14 @@ async def process_topic(m: Message, state: FSMContext):
 async def process_slides(m: Message, state: FSMContext):
     slides = 8
     t = m.text or ""
-    if "5" in t:
-        slides = 5
-    elif "10" in t:
-        slides = 10
+    if "5" in t: slides = 5
+    elif "10" in t: slides = 10
     await state.update_data(slides=slides)
-    await m.answer("Выбери стиль:", reply_markup=style_kb())
-    await state.set_state(Form.waiting_style)
-
-@dp.message(Form.waiting_style)
-async def process_style(m: Message, state: FSMContext):
     data = await state.get_data()
-    await state.update_data(style=m.text or "Тёмный")
     await m.answer("Делаю пробный вариант...")
-    prompt = f"""Тема: {data.get('topic')}
-Слайдов: {data.get('slides')}
-Стиль: {m.text}
-Дополнительно: {data.get('extra', '')}
-
-Сделай короткий образец структуры обычным текстом:
-Название: ...
-1. ...
-2. ...
-3. ...
-Без JSON."""
-    sample = await ask_grok(prompt)
+    sample = await ask_grok(f"Тема: {data.get('topic')}\nСлайдов: {slides}\nДоп: {data.get('extra')}\nКороткий план: название и 3 пункта. Без JSON.")
     await state.update_data(sample=sample)
-    await m.answer(
-        f"Пробный вариант:\n\n{sample}\n\nВыбери действие:",
-        reply_markup=confirm_kb()
-    )
+    await m.answer(f"Пробный вариант:\n\n{sample}\n\nВыбери действие:", reply_markup=confirm_kb())
     await state.set_state(Form.waiting_confirm)
 
 @dp.message(Form.waiting_confirm, F.text == "✏️ Изменить тему")
@@ -232,8 +231,7 @@ async def change_topic(m: Message, state: FSMContext):
 
 @dp.message(Form.waiting_confirm, F.text == "➕ Добавить информацию")
 async def add_extra(m: Message, state: FSMContext):
-    data = await state.get_data()
-    if data.get("extra_used", 0) >= 3:
+    if (await state.get_data()).get("extra_used", 0) >= 3:
         await m.answer("Лимит добавлений исчерпан.")
         return
     await m.answer("Напиши дополнительную информацию (до 800 символов):")
@@ -246,28 +244,12 @@ async def process_extra(m: Message, state: FSMContext):
     if len(text) > 800:
         await m.answer("Слишком длинно. Максимум 800 символов.")
         return
-    old = data.get("extra", "")
-    new_extra = (old + "\n" + text).strip() if old else text
-    extra_used = data.get("extra_used", 0) + 1
-    await state.update_data(extra=new_extra, extra_used=extra_used)
+    extra = ((data.get("extra") or "") + "\n" + text).strip()
+    await state.update_data(extra=extra, extra_used=data.get("extra_used", 0) + 1)
     await m.answer("Обновляю пробный вариант...")
-    prompt = f"""Тема: {data.get('topic')}
-Слайдов: {data.get('slides')}
-Стиль: {data.get('style')}
-Дополнительно: {new_extra}
-
-Сделай короткий образец структуры обычным текстом:
-Название: ...
-1. ...
-2. ...
-3. ...
-Без JSON."""
-    sample = await ask_grok(prompt)
+    sample = await ask_grok(f"Тема: {data.get('topic')}\nДоп: {extra}\nКороткий план, 3 пункта.")
     await state.update_data(sample=sample)
-    await m.answer(
-        f"Обновлённый пробный вариант:\n\n{sample}\n\nВыбери действие:",
-        reply_markup=confirm_kb()
-    )
+    await m.answer(f"Обновлённый пробный вариант:\n\n{sample}\n\nВыбери действие:", reply_markup=confirm_kb())
     await state.set_state(Form.waiting_confirm)
 
 @dp.message(Form.waiting_confirm, F.text.in_(["✅ Делать полную версию", "делай", "да", "ок"]))
@@ -275,23 +257,18 @@ async def confirm_generate(m: Message, state: FSMContext):
     data = await state.get_data()
     uid = m.from_user.id
     u = get_user(uid)
-    await m.answer("Делаю финальную версию с картинками. Это может занять 1–2 минуты.")
+    await m.answer("Собираю презентацию. Это займёт 1–2 минуты.")
 
-    prompt = f"""Сделай сильную подробную презентацию.
+    theme_name, colors = pick_theme(data.get("topic", ""))
+    raw = await ask_grok(f"""Собери презентацию как дорогой журнал.
 Тема: {data.get('topic')}
 Слайдов: {data.get('slides')}
-Стиль: {data.get('style')}
-Дополнительно: {data.get('extra', '')}
-
-На каждом слайде 4–7 предложений полезного текста.
-Верни ТОЛЬКО JSON:
-{{
-  "title": "Название",
-  "slides": [
-    {{"title": "Заголовок", "content": "Текст", "image_prompt": "English prompt for a realistic photo about this slide"}}
-  ]
-}}"""
-    raw = await ask_grok(prompt)
+Доп: {data.get('extra')}
+Стиль оформления: {theme_name}
+Заголовок слайда 3–6 слов.
+Текст: 2 коротких абзаца.
+Только JSON:
+{{"title":"...","slides":[{{"title":"...","content":"абзац1\\n\\nабзац2","image_prompt":"..."}}]}}""")
     try:
         content = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
     except:
@@ -299,104 +276,110 @@ async def confirm_generate(m: Message, state: FSMContext):
         await state.clear()
         return
 
-    style = data.get("style", "Тёмный")
-    if style == "Светлый":
-        bg, tc = (245, 245, 245), (30, 30, 30)
-    elif style == "Синий":
-        bg, tc = (15, 30, 60), (230, 235, 245)
-    else:
-        bg, tc = (25, 25, 30), (230, 230, 235)
-
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
+    slides_data = content.get("slides", [])
+    n = len(slides_data)
+    images = []
+    for i, s in enumerate(slides_data):
+        if i >= 5:
+            images.append(None)
+            continue
+        src = f"/tmp/{uid}_{i}.png"
+        prompt = f"{s.get('image_prompt') or s.get('title')}, {colors['photo']}"
+        ok = await generate_image(prompt, src)
+        if ok:
+            wide = f"/tmp/{uid}_{i}_w.png"
+            tall = f"/tmp/{uid}_{i}_t.png"
+            cover(src, wide, 1920, 1080)
+            cover(src, tall, 1260, 1500)
+            images.append((wide, tall))
+        else:
+            images.append(None)
 
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    shape = slide.shapes.add_shape(1, 0, 0, prs.slide_width, prs.slide_height)
-    shape.fill.solid()
-    shape.fill.fore_color.rgb = RGBColor(*bg)
-    tb = slide.shapes.add_textbox(Inches(0.8), Inches(2.8), Inches(11.7), Inches(2))
-    p = tb.text_frame.paragraphs[0]
-    p.text = content.get("title", "Презентация")
-    p.font.size = Pt(36)
-    p.font.bold = True
-    p.font.color.rgb = RGBColor(*tc)
-    p.alignment = PP_ALIGN.CENTER
-
-    slides_data = content.get("slides", [])
-    max_images = min(5, len(slides_data))
+    rect(slide, 0, 0, 13.333, 7.5, colors["bg"])
+    if images and images[0]:
+        slide.shapes.add_picture(images[0][0], Inches(0), Inches(0), width=Inches(13.333), height=Inches(7.5))
+        rect(slide, 0, 4.7, 13.333, 2.8, colors["bg"])
+    txt(slide, 0.7, 5.0, 12, 1.5, content.get("title", "Презентация"), 40, colors["ink"], True)
+    txt(slide, 0.7, 6.6, 12, 0.4, "01  /  введение", 13, colors["mute"])
 
     for idx, s in enumerate(slides_data):
         slide = prs.slides.add_slide(prs.slide_layouts[6])
-        bg_shape = slide.shapes.add_shape(1, 0, 0, prs.slide_width, prs.slide_height)
-        bg_shape.fill.solid()
-        bg_shape.fill.fore_color.rgb = RGBColor(*bg)
+        rect(slide, 0, 0, 13.333, 7.5, colors["bg"])
+        layout = idx % 3
+        img = images[idx] if idx < len(images) else None
 
-        tb = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12.3), Inches(0.8))
-        p = tb.text_frame.paragraphs[0]
-        p.text = s.get("title", "")
-        p.font.size = Pt(24)
-        p.font.bold = True
-        p.font.color.rgb = RGBColor(*tc)
-
-        cb = slide.shapes.add_textbox(Inches(0.5), Inches(1.3), Inches(6.3), Inches(5.5))
-        tf = cb.text_frame
-        tf.word_wrap = True
-        p = tf.paragraphs[0]
-        p.text = s.get("content", "")
-        p.font.size = Pt(16)
-        p.font.color.rgb = RGBColor(*tc)
-
-        img_path = f"/tmp/img_{uid}_{idx}.png"
-        img_ok = False
-        if idx < max_images:
-            img_prompt = s.get("image_prompt") or f"High quality photo about: {s.get('title', data.get('topic'))}"
-            img_ok = await generate_image(img_prompt, img_path)
-
-        if img_ok:
-            try:
-                slide.shapes.add_picture(img_path, Inches(7.2), Inches(1.4), width=Inches(5.5))
-            except Exception as e:
-                print("Insert image error:", e)
-                add_placeholder(slide, 7.2, 1.4, 5.5, 5.2, "Вставь сюда фото")
+        if layout == 0:
+            if img:
+                slide.shapes.add_picture(img[1], Inches(0), Inches(0), width=Inches(6.4), height=Inches(7.5))
+            txt(slide, 7.05, 1.5, 5.5, 1.6, s.get("title", ""), 30, colors["ink"], True)
+            rect(slide, 7.05, 3.25, 0.85, 0.05, colors["line"])
+            box = slide.shapes.add_textbox(Inches(7.05), Inches(3.5), Inches(5.5), Inches(3.2))
+            tf = box.text_frame
+            tf.word_wrap = True
+            blocks = [x.strip() for x in (s.get("content") or "").split("\n") if x.strip()][:2]
+            for i, b in enumerate(blocks or [""]):
+                p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+                p.text = b
+                p.font.size = Pt(16)
+                p.font.color.rgb = RGBColor(*colors["mid"])
+                p.font.name = "Calibri"
+                p.space_after = Pt(16)
+            txt(slide, 7.05, 6.95, 5.5, 0.3, f"{idx+2:02}  /  {n+1:02}", 12, colors["mute"])
+        elif layout == 1:
+            if img:
+                slide.shapes.add_picture(img[0], Inches(0), Inches(0), width=Inches(13.333), height=Inches(4.55))
+            txt(slide, 0.7, 4.85, 12, 1.0, s.get("title", ""), 28, colors["ink"], True)
+            box = slide.shapes.add_textbox(Inches(0.7), Inches(5.85), Inches(12), Inches(1.2))
+            tf = box.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            p.text = " ".join((s.get("content") or "").split())
+            p.font.size = Pt(15)
+            p.font.color.rgb = RGBColor(*colors["mid"])
+            p.font.name = "Calibri"
         else:
-            add_placeholder(slide, 7.2, 1.4, 5.5, 5.2, "Вставь сюда фото")
+            txt(slide, 0.7, 1.3, 8.2, 2.2, s.get("title", ""), 36, colors["ink"], True)
+            rect(slide, 0.7, 3.6, 1.1, 0.06, colors["line"])
+            box = slide.shapes.add_textbox(Inches(0.7), Inches(3.9), Inches(7.4), Inches(2.6))
+            tf = box.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            p.text = " ".join((s.get("content") or "").split())
+            p.font.size = Pt(16)
+            p.font.color.rgb = RGBColor(*colors["mid"])
+            p.font.name = "Calibri"
+            if img:
+                slide.shapes.add_picture(img[1], Inches(8.7), Inches(1.3), width=Inches(3.9), height=Inches(4.7))
+            txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx+2:02}  /  {n+1:02}", 12, colors["mute"])
 
     pptx_path = f"pres_{uid}.pptx"
     prs.save(pptx_path)
 
     pdf_path = f"pres_{uid}.pdf"
-    c = canvas.Canvas(pdf_path, pagesize=A4)
+    pdf = canvas.Canvas(pdf_path, pagesize=A4)
     w, h = A4
-    font_name, font_bold = "Helvetica", "Helvetica-Bold"
+    fn, fb = "Helvetica", "Helvetica-Bold"
     try:
         pdfmetrics.registerFont(TTFont("DejaVu", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
         pdfmetrics.registerFont(TTFont("DejaVuBold", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
-        font_name, font_bold = "DejaVu", "DejaVuBold"
+        fn, fb = "DejaVu", "DejaVuBold"
     except:
         pass
-
-    c.setFont(font_bold, 14)
-    c.drawString(40, h - 50, content.get("title", "")[:65])
+    pdf.setFont(fb, 14)
+    pdf.drawString(40, h - 50, content.get("title", "")[:65])
     y = h - 90
     for i, s in enumerate(slides_data, 1):
         if y < 70:
-            c.showPage()
+            pdf.showPage()
             y = h - 50
-        c.setFont(font_bold, 11)
-        c.drawString(40, y, f"{i}. {s.get('title', '')[:70]}")
-        y -= 16
-        c.setFont(font_name, 9)
-        text = (s.get("content", "") or "")[:200]
-        while text:
-            c.drawString(40, y, text[:90])
-            text = text[90:]
-            y -= 13
-            if y < 50:
-                c.showPage()
-                y = h - 50
-        y -= 10
-    c.save()
+        pdf.setFont(fb, 11)
+        pdf.drawString(40, y, f"{i}. {s.get('title', '')[:70]}")
+        y -= 20
+    pdf.save()
 
     await m.answer_document(FSInputFile(pptx_path), caption="PPTX")
     await m.answer_document(FSInputFile(pdf_path), caption="PDF")
@@ -408,17 +391,13 @@ async def confirm_generate(m: Message, state: FSMContext):
 @dp.message(F.text == "📁 Моя история")
 async def history(m: Message):
     u = get_user(m.from_user.id)
-    if not u["history"]:
-        await m.answer("История пустая.")
-        return
-    await m.answer("История:\n\n" + "\n".join(u["history"][-10:]))
+    await m.answer("История пустая." if not u["history"] else "История:\n\n" + "\n".join(u["history"][-10:]))
 
 @dp.message(F.text == "ℹ️ Мой тариф")
 async def my_plan(m: Message):
     u = get_user(m.from_user.id)
     limit = PLAN_LIMITS.get(u["plan"], 15)
-    left = max(0, limit - u["generations"])
-    await m.answer(f"Генераций: {u['generations']} из {limit}\nОсталось: {left}")
+    await m.answer(f"Генераций: {u['generations']} из {limit}\nОсталось: {max(0, limit - u['generations'])}")
 
 @dp.message(Command("grant"))
 async def grant(m: Message):
