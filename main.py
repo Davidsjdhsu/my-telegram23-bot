@@ -1,7 +1,6 @@
 import os
 import asyncio
 import json
-import io
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -19,7 +18,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from PIL import Image
+import httpx
+import replicate
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAI_API_KEY = os.getenv("XAI_API_KEY")
@@ -30,7 +30,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 users_db = {}
 
-PLAN_LIMITS = {"free": 5, "premium": 50}
+PLAN_LIMITS = {"premium": 15}
 
 class Form(StatesGroup):
     waiting_topic = State()
@@ -41,12 +41,17 @@ class Form(StatesGroup):
 
 def get_user(uid):
     if uid not in users_db:
-        users_db[uid] = {"name": "", "plan": "premium", "generations": 0, "history": []}
+        users_db[uid] = {
+            "name": "",
+            "plan": "premium",
+            "generations": 0,
+            "history": []
+        }
     return users_db[uid]
 
 def can_generate(uid):
     u = get_user(uid)
-    return u["generations"] < PLAN_LIMITS.get(u["plan"], 5)
+    return u["generations"] < PLAN_LIMITS.get(u["plan"], 15)
 
 async def ask_grok(prompt: str) -> str:
     try:
@@ -64,27 +69,39 @@ async def ask_grok(prompt: str) -> str:
         return f"Ошибка: {e}"
 
 async def generate_image(prompt: str, path: str) -> bool:
-    """Пытаемся сгенерировать картинку. Если не получится — False"""
     try:
-        # Попытка через images API (если доступно)
-        result = await client.images.generate(
-            model="grok-2-image",
-            prompt=prompt,
-            n=1,
-            size="1024x1024"
-        )
-        # Если API вернул url
-        if hasattr(result, "data") and result.data:
-            import httpx
-            url = result.data[0].url
-            async with httpx.AsyncClient() as http:
-                resp = await http.get(url)
-                with open(path, "wb") as f:
-                    f.write(resp.content)
-            return True
+        def run_flux():
+            return replicate.run(
+                "black-forest-labs/flux-schnell",
+                input={
+                    "prompt": prompt,
+                    "num_outputs": 1,
+                    "aspect_ratio": "16:9",
+                    "output_format": "png"
+                }
+            )
+
+        output = await asyncio.to_thread(run_flux)
+        url = None
+        if isinstance(output, list) and output:
+            item = output[0]
+            url = item if isinstance(item, str) else str(item)
+        elif isinstance(output, str):
+            url = output
+
+        if not url:
+            print("No image url from Replicate:", output)
+            return False
+
+        async with httpx.AsyncClient(timeout=60) as http:
+            resp = await http.get(url)
+            resp.raise_for_status()
+            with open(path, "wb") as f:
+                f.write(resp.content)
+        return os.path.exists(path)
     except Exception as e:
         print("Image generation error:", e)
-    return False
+        return False
 
 def add_placeholder(slide, left, top, width, height, text):
     shape = slide.shapes.add_shape(
@@ -112,7 +129,7 @@ def main_kb():
 def slides_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="5 слайдов"), KeyboardButton(text="8 слайдов")],
-        [KeyboardButton(text="10 слайдов"), KeyboardButton(text="12 слайдов")]
+        [KeyboardButton(text="10 слайдов")]
     ], resize_keyboard=True)
 
 def style_kb():
@@ -134,7 +151,7 @@ async def cmd_start(m: Message, state: FSMContext):
     u = get_user(m.from_user.id)
     u["name"] = m.from_user.first_name or "друг"
     await m.answer(
-        f"Привет, {u['name']}!\n\nЯ делаю презентации с текстом и картинками.\nНажми кнопку ниже:",
+        f"Привет, {u['name']}!\n\nЯ делаю презентации с текстом и картинками.",
         reply_markup=main_kb()
     )
     await state.clear()
@@ -161,9 +178,10 @@ async def process_topic(m: Message, state: FSMContext):
 async def process_slides(m: Message, state: FSMContext):
     slides = 8
     t = m.text or ""
-    if "5" in t: slides = 5
-    elif "10" in t: slides = 10
-    elif "12" in t: slides = 12
+    if "5" in t:
+        slides = 5
+    elif "10" in t:
+        slides = 10
     await state.update_data(slides=slides)
     await m.answer("Выбери стиль:", reply_markup=style_kb())
     await state.set_state(Form.waiting_style)
@@ -187,7 +205,10 @@ async def process_style(m: Message, state: FSMContext):
 Без JSON."""
     sample = await ask_grok(prompt)
     await state.update_data(sample=sample)
-    await m.answer(f"Пробный вариант:\n\n{sample}\n\nВыбери действие:", reply_markup=confirm_kb())
+    await m.answer(
+        f"Пробный вариант:\n\n{sample}\n\nВыбери действие:",
+        reply_markup=confirm_kb()
+    )
     await state.set_state(Form.waiting_confirm)
 
 @dp.message(Form.waiting_confirm, F.text == "✏️ Изменить тему")
@@ -230,7 +251,10 @@ async def process_extra(m: Message, state: FSMContext):
 Без JSON."""
     sample = await ask_grok(prompt)
     await state.update_data(sample=sample)
-    await m.answer(f"Обновлённый пробный вариант:\n\n{sample}\n\nВыбери действие:", reply_markup=confirm_kb())
+    await m.answer(
+        f"Обновлённый пробный вариант:\n\n{sample}\n\nВыбери действие:",
+        reply_markup=confirm_kb()
+    )
     await state.set_state(Form.waiting_confirm)
 
 @dp.message(Form.waiting_confirm, F.text.in_(["✅ Делать полную версию", "делай", "да", "ок"]))
@@ -238,7 +262,7 @@ async def confirm_generate(m: Message, state: FSMContext):
     data = await state.get_data()
     uid = m.from_user.id
     u = get_user(uid)
-    await m.answer("Делаю финальную версию с картинками... Это может занять 1–2 минуты.")
+    await m.answer("Делаю финальную версию с картинками. Это может занять 1–2 минуты.")
 
     prompt = f"""Сделай сильную подробную презентацию.
 Тема: {data.get('topic')}
@@ -251,12 +275,12 @@ async def confirm_generate(m: Message, state: FSMContext):
 {{
   "title": "Название",
   "slides": [
-    {{"title": "Заголовок", "content": "Текст", "image_prompt": "English prompt for image about this slide"}}
+    {{"title": "Заголовок", "content": "Текст", "image_prompt": "English prompt for a realistic photo about this slide"}}
   ]
 }}"""
     raw = await ask_grok(prompt)
     try:
-        content = json.loads(raw[raw.find("{"):raw.rfind("}")+1])
+        content = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
     except:
         await m.answer("Ошибка генерации текста. Попробуй ещё раз.")
         await state.clear()
@@ -274,7 +298,6 @@ async def confirm_generate(m: Message, state: FSMContext):
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
 
-    # Титульный
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     shape = slide.shapes.add_shape(1, 0, 0, prs.slide_width, prs.slide_height)
     shape.fill.solid()
@@ -287,13 +310,15 @@ async def confirm_generate(m: Message, state: FSMContext):
     p.font.color.rgb = RGBColor(*tc)
     p.alignment = PP_ALIGN.CENTER
 
-    for idx, s in enumerate(content.get("slides", [])):
+    slides_data = content.get("slides", [])
+    max_images = min(5, len(slides_data))
+
+    for idx, s in enumerate(slides_data):
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         bg_shape = slide.shapes.add_shape(1, 0, 0, prs.slide_width, prs.slide_height)
         bg_shape.fill.solid()
         bg_shape.fill.fore_color.rgb = RGBColor(*bg)
 
-        # Заголовок
         tb = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12.3), Inches(0.8))
         p = tb.text_frame.paragraphs[0]
         p.text = s.get("title", "")
@@ -301,7 +326,6 @@ async def confirm_generate(m: Message, state: FSMContext):
         p.font.bold = True
         p.font.color.rgb = RGBColor(*tc)
 
-        # Текст
         cb = slide.shapes.add_textbox(Inches(0.5), Inches(1.3), Inches(6.3), Inches(5.5))
         tf = cb.text_frame
         tf.word_wrap = True
@@ -310,12 +334,13 @@ async def confirm_generate(m: Message, state: FSMContext):
         p.font.size = Pt(16)
         p.font.color.rgb = RGBColor(*tc)
 
-        # Картинка
         img_path = f"/tmp/img_{uid}_{idx}.png"
-        img_prompt = s.get("image_prompt") or f"High quality photo about: {s.get('title', data.get('topic'))}"
-        ok = await generate_image(img_prompt, img_path)
+        img_ok = False
+        if idx < max_images:
+            img_prompt = s.get("image_prompt") or f"High quality photo about: {s.get('title', data.get('topic'))}"
+            img_ok = await generate_image(img_prompt, img_path)
 
-        if ok and os.path.exists(img_path):
+        if img_ok:
             try:
                 slide.shapes.add_picture(img_path, Inches(7.2), Inches(1.4), width=Inches(5.5))
             except Exception as e:
@@ -327,7 +352,6 @@ async def confirm_generate(m: Message, state: FSMContext):
     pptx_path = f"pres_{uid}.pptx"
     prs.save(pptx_path)
 
-    # PDF
     pdf_path = f"pres_{uid}.pdf"
     c = canvas.Canvas(pdf_path, pagesize=A4)
     w, h = A4
@@ -342,7 +366,7 @@ async def confirm_generate(m: Message, state: FSMContext):
     c.setFont(font_bold, 14)
     c.drawString(40, h - 50, content.get("title", "")[:65])
     y = h - 90
-    for i, s in enumerate(content.get("slides", []), 1):
+    for i, s in enumerate(slides_data, 1):
         if y < 70:
             c.showPage()
             y = h - 50
@@ -379,7 +403,7 @@ async def history(m: Message):
 @dp.message(F.text == "ℹ️ Мой тариф")
 async def my_plan(m: Message):
     u = get_user(m.from_user.id)
-    limit = PLAN_LIMITS.get(u["plan"], 5)
+    limit = PLAN_LIMITS.get(u["plan"], 15)
     left = max(0, limit - u["generations"])
     await m.answer(f"Генераций: {u['generations']} из {limit}\nОсталось: {left}")
 
@@ -388,8 +412,7 @@ async def grant(m: Message):
     if m.from_user.id not in ADMIN_IDS:
         return
     try:
-        parts = m.text.split()
-        uid = int(parts[1])
+        uid = int(m.text.split()[1])
         get_user(uid)["plan"] = "premium"
         await m.answer(f"Доступ выдан пользователю {uid}")
     except:
