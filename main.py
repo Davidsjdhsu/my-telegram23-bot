@@ -82,23 +82,30 @@ async def generate_image(prompt: str, path: str) -> bool:
             )
 
         output = await asyncio.to_thread(run_flux)
-        url = None
-        if isinstance(output, list) and output:
-            item = output[0]
-            url = item if isinstance(item, str) else str(item)
-        elif isinstance(output, str):
-            url = output
+        print("Replicate raw output:", output)
 
-        if not url:
-            print("No image url from Replicate:", output)
+        item = output[0] if isinstance(output, list) and output else output
+
+        data = None
+        if hasattr(item, "read"):
+            data = item.read()
+        elif isinstance(item, str) and item.startswith("http"):
+            with httpx.Client(timeout=60) as http:
+                data = http.get(item).content
+        else:
+            url = getattr(item, "url", None)
+            if url:
+                with httpx.Client(timeout=60) as http:
+                    data = http.get(str(url)).content
+
+        if not data:
+            print("No image data")
             return False
 
-        async with httpx.AsyncClient(timeout=60) as http:
-            resp = await http.get(url)
-            resp.raise_for_status()
-            with open(path, "wb") as f:
-                f.write(resp.content)
-        return os.path.exists(path)
+        with open(path, "wb") as f:
+            f.write(data)
+        print("Image saved:", path)
+        return True
     except Exception as e:
         print("Image generation error:", e)
         return False
@@ -420,6 +427,7 @@ async def grant(m: Message):
 
 async def main():
     print("Бот запущен")
+    print("REPLICATE TOKEN:" , "YES" if os.getenv("REPLICATE_API_TOKEN") else "NO")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
