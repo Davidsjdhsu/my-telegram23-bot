@@ -18,6 +18,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from PIL import Image
 import httpx
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -78,7 +79,13 @@ async def generate_image(prompt: str, path: str) -> bool:
             create = await http.post(
                 "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
                 headers=headers,
-                json={"input": {"prompt": prompt, "aspect_ratio": "16:9"}}
+                json={
+                    "input": {
+                        "prompt": prompt,
+                        "aspect_ratio": "16:9",
+                        "output_format": "png"
+                    }
+                }
             )
             print("Replicate create:", create.status_code)
             create.raise_for_status()
@@ -97,6 +104,9 @@ async def generate_image(prompt: str, path: str) -> bool:
                     img.raise_for_status()
                     with open(path, "wb") as f:
                         f.write(img.content)
+
+                    converted = Image.open(path).convert("RGB")
+                    converted.save(path, "PNG")
                     print("Image saved:", path)
                     return True
                 if status in ("failed", "canceled"):
