@@ -10,6 +10,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from openai import AsyncOpenAI
+from docx import Document
+from docx.shared import Pt as DocxPt, Cm, RGBColor as DocxRGB
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
@@ -41,6 +44,13 @@ class Form(StatesGroup):
     waiting_confirm = State()
     waiting_extra = State()
     waiting_style = State()
+    waiting_word_mode = State()
+    waiting_word_kind = State()
+    waiting_word_topic = State()
+    waiting_word_text = State()
+    waiting_word_size = State()
+    waiting_word_confirm = State()
+    waiting_word_extra = State()
 
 THEMES = {
     "nature": {"bg": (248, 246, 241), "ink": (22, 22, 24), "mid": (70, 70, 74), "mute": (130, 128, 124), "line": (22, 22, 24),
@@ -212,6 +222,7 @@ def txt(slide, l, t, w, h, text, size, color, bold=False):
 def main_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="📊 Сделать презентацию")],
+        [KeyboardButton(text="📄 Сделать документ Word")],
         [KeyboardButton(text="📁 Моя история"), KeyboardButton(text="ℹ️ Мой тариф")]
     ], resize_keyboard=True)
 
@@ -233,9 +244,37 @@ def slides_kb():
 def confirm_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="✅ Делать полную версию")],
-        [KeyboardButton(text="➕ Добавить информацию")],
+        [KeyboardButton(text="➕ Добавить или изменить информацию")],
         [KeyboardButton(text="🎨 Изменить стиль")],
         [KeyboardButton(text="✏️ Изменить тему")]
+    ], resize_keyboard=True)
+
+
+def word_kind_kb():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="📄 Обычный документ")],
+        [KeyboardButton(text="🎓 Реферат")],
+        [KeyboardButton(text="📝 Договор купли-продажи")],
+        [KeyboardButton(text="🏠 Договор аренды")],
+        [KeyboardButton(text="💼 Коммерческое предложение")],
+        [KeyboardButton(text="📋 Заявление")],
+        [KeyboardButton(text="🧾 Доверенность")]
+    ], resize_keyboard=True)
+
+
+def word_size_kb():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="Короткий")],
+        [KeyboardButton(text="Средний")],
+        [KeyboardButton(text="Подробный")]
+    ], resize_keyboard=True)
+
+
+def word_confirm_kb():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="✅ Собрать документ")],
+        [KeyboardButton(text="➕ Добавить или изменить информацию")],
+        [KeyboardButton(text="✏️ Изменить запрос")]
     ], resize_keyboard=True)
 
 
@@ -419,12 +458,12 @@ async def process_style(m: Message, state: FSMContext):
     await state.set_state(Form.waiting_confirm)
 
 
-@dp.message(Form.waiting_confirm, F.text.in_(["Добавить информацию", "➕ Добавить информацию"]))
+@dp.message(Form.waiting_confirm, F.text.in_(["Добавить информацию", "➕ Добавить информацию", "➕ Добавить или изменить информацию"]))
 async def add_extra(m: Message, state: FSMContext):
     if (await state.get_data()).get("extra_used", 0) >= 3:
         await m.answer("Лимит добавлений исчерпан.", reply_markup=confirm_kb())
         return
-    await m.answer("Напиши, что добавить. Максимум 800 символов.")
+    await m.answer("Напиши, что добавить или изменить. Максимум 800 символов.")
     await state.set_state(Form.waiting_extra)
 
 
@@ -626,6 +665,347 @@ async def confirm_generate(m: Message, state: FSMContext):
         "Открой тот же файл на другом устройстве или в нормальном редакторе презентаций.",
         reply_markup=main_kb()
     )
+    await state.clear()
+
+
+def _run(p, text, size=12, bold=False, name="Times New Roman", align=None):
+    if align is not None:
+        p.alignment = align
+    r = p.add_run(text or "")
+    r.bold = bold
+    r.font.size = DocxPt(size)
+    r.font.name = name
+    r.font.color.rgb = DocxRGB(0, 0, 0)
+    return r
+
+
+def _p(doc, text, size=12, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT, before=0, after=6, first=None, line=1.15):
+    p = doc.add_paragraph()
+    p.alignment = align
+    p.paragraph_format.space_before = DocxPt(before)
+    p.paragraph_format.space_after = DocxPt(after)
+    p.paragraph_format.line_spacing = line
+    if first is not None:
+        p.paragraph_format.first_line_indent = Cm(first)
+    _run(p, text, size, bold)
+    return p
+
+
+def _body(doc, sections, indent=True, head_center=False):
+    for block in sections or []:
+        head = (block.get("title") or "").strip()
+        body = block.get("content") or ""
+        if head:
+            _p(
+                doc, head, 13, True,
+                align=WD_ALIGN_PARAGRAPH.CENTER if head_center else WD_ALIGN_PARAGRAPH.LEFT,
+                before=10, after=6
+            )
+        for para in [x.strip() for x in body.split("\n") if x.strip()]:
+            _p(doc, para, 12, first=1.25 if indent else None, after=6, line=1.15)
+
+
+def build_word(path, title, sections, kind="doc", meta=None):
+    meta = meta or {}
+    doc = Document()
+    sec = doc.sections[0]
+    sec.top_margin = Cm(2)
+    sec.bottom_margin = Cm(2)
+    sec.left_margin = Cm(2.5)
+    sec.right_margin = Cm(2)
+    title = title or "Документ"
+
+    if kind == "referat":
+        sec.left_margin = Cm(3)
+        sec.right_margin = Cm(1.5)
+        _p(doc, meta.get("org") or "Министерство образования", 14, align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
+        _p(doc, meta.get("school") or "[Название учебного заведения]", 14, align=WD_ALIGN_PARAGRAPH.CENTER)
+        for _ in range(4):
+            doc.add_paragraph()
+        _p(doc, "РЕФЕРАТ", 20, True, WD_ALIGN_PARAGRAPH.CENTER, after=8)
+        _p(doc, title, 16, True, WD_ALIGN_PARAGRAPH.CENTER)
+        for _ in range(6):
+            doc.add_paragraph()
+        _p(doc, f"Выполнил: {meta.get('author') or '[ФИО студента]'}", 14, align=WD_ALIGN_PARAGRAPH.RIGHT, after=0)
+        _p(doc, f"Проверил: {meta.get('teacher') or '[ФИО преподавателя]'}", 14, align=WD_ALIGN_PARAGRAPH.RIGHT)
+        for _ in range(6):
+            doc.add_paragraph()
+        _p(doc, f"{meta.get('city') or '[Город]'} {meta.get('year') or '2026'}", 14, align=WD_ALIGN_PARAGRAPH.CENTER)
+        doc.add_page_break()
+        _body(doc, sections, indent=True, head_center=True)
+
+    elif kind in ("dkp", "rent"):
+        cap = "ДОГОВОР КУПЛИ-ПРОДАЖИ" if kind == "dkp" else "ДОГОВОР АРЕНДЫ"
+        _p(doc, cap, 16, True, WD_ALIGN_PARAGRAPH.CENTER, after=2)
+        _p(doc, title if title not in (cap, "Документ") else "№ ______", 12, align=WD_ALIGN_PARAGRAPH.CENTER, after=10)
+        p = doc.add_paragraph()
+        p.paragraph_format.tab_stops.add_tab_stop(Cm(16), WD_TAB_ALIGNMENT.RIGHT)
+        _run(p, f"{meta.get('city') or 'г. _______________'}\t{meta.get('date') or '«___» __________ 20___ г.'}", 12)
+        _body(doc, sections, indent=True, head_center=False)
+        left = "ПРОДАВЕЦ" if kind == "dkp" else "АРЕНДОДАТЕЛЬ"
+        right = "ПОКУПАТЕЛЬ" if kind == "dkp" else "АРЕНДАТОР"
+        _p(doc, f"{left}                    {right}", 12, True, before=18)
+        _p(doc, "__________ / [ФИО] /          __________ / [ФИО] /", 12)
+
+    elif kind == "offer":
+        _p(doc, "КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ", 11, True, after=0)
+        _p(doc, meta.get("number") or "", 10, after=12)
+        _p(doc, title, 20, True, after=4)
+        _body(doc, sections, indent=False, head_center=False)
+
+    elif kind == "statement":
+        _p(doc, meta.get("to") or "Директору [организация]", 12, align=WD_ALIGN_PARAGRAPH.RIGHT, after=0)
+        _p(doc, meta.get("to_name") or "[ФИО руководителя]", 12, align=WD_ALIGN_PARAGRAPH.RIGHT, after=0)
+        _p(doc, f"от {meta.get('from') or '[должность, ФИО]'}", 12, align=WD_ALIGN_PARAGRAPH.RIGHT, after=18)
+        _p(doc, "ЗАЯВЛЕНИЕ", 16, True, WD_ALIGN_PARAGRAPH.CENTER, after=14)
+        _body(doc, sections, indent=True, head_center=False)
+        _p(doc, f"{meta.get('date') or '[дата]'}                    __________ / {meta.get('author') or '[ФИО]'} /", 12, before=24)
+
+    elif kind == "proxy":
+        _p(doc, "ДОВЕРЕННОСТЬ", 16, True, WD_ALIGN_PARAGRAPH.CENTER, after=10)
+        p = doc.add_paragraph()
+        p.paragraph_format.tab_stops.add_tab_stop(Cm(16), WD_TAB_ALIGNMENT.RIGHT)
+        _run(p, f"{meta.get('city') or 'г. _______________'}\t{meta.get('date') or '«___» __________ 20___ г.'}", 12)
+        _body(doc, sections, indent=True, head_center=False)
+        _p(doc, f"Подпись доверителя: __________ / {meta.get('author') or '[ФИО]'} /", 12, before=20)
+
+    else:
+        _p(doc, meta.get("org") or "", 11, True, after=0)
+        _p(doc, title, 16, True, WD_ALIGN_PARAGRAPH.CENTER, before=8, after=12)
+        _body(doc, sections, indent=True, head_center=False)
+        if meta.get("sign"):
+            _p(doc, "С уважением,", 12, before=16, after=0)
+            _p(doc, meta.get("sign"), 12)
+
+    doc.save(path)
+
+
+@dp.message(F.text.in_(["Сделать документ Word", "📄 Сделать документ Word"]))
+async def start_word(m: Message, state: FSMContext):
+    if not can_generate(m.from_user.id):
+        await m.answer("Лимит генераций закончился.")
+        return
+    await m.answer("Какой документ нужен?", reply_markup=word_kind_kb())
+    await state.set_state(Form.waiting_word_kind)
+
+
+@dp.message(Form.waiting_word_kind)
+async def word_kind(m: Message, state: FSMContext):
+    t = (m.text or "").lower()
+    kind = "doc"
+    if "реферат" in t:
+        kind = "referat"
+    elif "купл" in t:
+        kind = "dkp"
+    elif "аренд" in t:
+        kind = "rent"
+    elif "коммерч" in t or "предлож" in t:
+        kind = "offer"
+    elif "заявлен" in t:
+        kind = "statement"
+    elif "доверен" in t:
+        kind = "proxy"
+    await state.update_data(word_kind=kind, extra="", extra_used=0)
+    await m.answer(
+        "Как собираем документ?\n\n"
+        "✨ Сгенерировать с ИИ — я сам напишу текст.\n"
+        "📝 Вставить свой текст — пришли материал, я поправлю и оформлю.",
+        reply_markup=mode_kb()
+    )
+    await state.set_state(Form.waiting_word_mode)
+
+
+@dp.message(Form.waiting_word_mode, F.text.in_(["Сгенерировать с ИИ", "✨ Сгенерировать с ИИ"]))
+async def word_mode_ai(m: Message, state: FSMContext):
+    await state.update_data(mode="ai", user_text="")
+    await m.answer("Напиши тему документа. Например: доклад про китов или договор на машину.")
+    await state.set_state(Form.waiting_word_topic)
+
+
+@dp.message(Form.waiting_word_mode, F.text.in_(["Вставить свой текст", "📝 Вставить свой текст"]))
+async def word_mode_user(m: Message, state: FSMContext):
+    await state.update_data(mode="user")
+    await m.answer("Пришли текст. Для договора укажи стороны, предмет, цену и дату, если они уже есть.")
+    await state.set_state(Form.waiting_word_text)
+
+
+@dp.message(Form.waiting_word_topic)
+async def word_topic(m: Message, state: FSMContext):
+    text = m.text or ""
+    if len(text) > 500:
+        await m.answer("Слишком длинно. Максимум 500 символов.")
+        return
+    await state.update_data(topic=text)
+    await m.answer("Какой объём?", reply_markup=word_size_kb())
+    await state.set_state(Form.waiting_word_size)
+
+
+@dp.message(Form.waiting_word_text)
+async def word_user_text(m: Message, state: FSMContext):
+    text = m.text or ""
+    if len(text) < 30:
+        await m.answer("Текста мало. Пришли чуть больше деталей.")
+        return
+    if len(text) > 4000:
+        await m.answer("Слишком длинно. Сократи до 4000 символов.")
+        return
+    await state.update_data(user_text=text, topic=text[:80].replace("\n", " "))
+    await m.answer("Какой объём?", reply_markup=word_size_kb())
+    await state.set_state(Form.waiting_word_size)
+
+
+@dp.message(Form.waiting_word_size)
+async def word_size(m: Message, state: FSMContext):
+    t = (m.text or "").lower()
+    size = "short"
+    if "подр" in t:
+        size = "long"
+    elif "сред" in t:
+        size = "medium"
+    data = await state.get_data()
+    await state.update_data(word_size=size)
+    await m.answer("Собираю черновик…", reply_markup=ReplyKeyboardRemove())
+    size_map = {"short": "1–2 страницы, коротко", "medium": "2–4 страницы, нормально", "long": "4–6 страниц, подробно"}
+    kind = data.get("word_kind", "doc")
+    kind_name = {
+        "doc": "обычный документ",
+        "referat": "реферат для университета",
+        "dkp": "договор купли-продажи",
+        "rent": "договор аренды",
+        "offer": "коммерческое предложение: о компании, задача клиента, решение и услуги, этапы, сроки, бюджет, контакты"
+        "statement": "заявление",
+        "proxy": "доверенность",
+    }.get(kind, "документ")
+    prompt = f"""Собери черновик: {kind_name}.
+Тема/данные: {data.get('topic')}
+Текст пользователя: {data.get('user_text')}
+Доп: {data.get('extra')}
+Объём: {size_map[size]}
+Исправь ошибки. Если данных не хватает, поставь пропуски [указать ...].
+Обычным текстом: название и 4 пункта структуры. Без JSON."""
+    sample = await ask_grok(prompt)
+    await state.update_data(sample=sample)
+    await m.answer(f"Черновик готов ✅\n\n{sample}\n\nЕсли всё ок — собираем файл.", reply_markup=word_confirm_kb())
+    await state.set_state(Form.waiting_word_confirm)
+
+
+@dp.message(Form.waiting_word_confirm, F.text.in_(["Изменить запрос", "✏️ Изменить запрос"]))
+async def word_change(m: Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("mode") == "user":
+        await m.answer("Пришли новый текст:")
+        await state.set_state(Form.waiting_word_text)
+    else:
+        await m.answer("Напиши новую тему:")
+        await state.set_state(Form.waiting_word_topic)
+
+
+@dp.message(Form.waiting_word_confirm, F.text.in_(["Добавить информацию", "➕ Добавить информацию", "➕ Добавить или изменить информацию"]))
+async def word_add(m: Message, state: FSMContext):
+    if (await state.get_data()).get("extra_used", 0) >= 3:
+        await m.answer("Лимит добавлений исчерпан.", reply_markup=word_confirm_kb())
+        return
+    await m.answer("Напиши, что добавить или изменить. Максимум 800 символов.")
+    await state.set_state(Form.waiting_word_extra)
+
+
+@dp.message(Form.waiting_word_extra)
+async def word_extra(m: Message, state: FSMContext):
+    data = await state.get_data()
+    text = m.text or ""
+    if len(text) > 800:
+        await m.answer("Слишком длинно. Максимум 800 символов.")
+        return
+    extra = ((data.get("extra") or "") + "\n" + text).strip()
+    await state.update_data(extra=extra, extra_used=data.get("extra_used", 0) + 1)
+    await m.answer("Обновляю черновик…")
+    sample = await ask_grok(
+        f"Обнови черновик документа.\nТема: {data.get('topic')}\nТекст: {data.get('user_text')}\nДоп: {extra}\nКороткий план. Без JSON."
+    )
+    await state.update_data(sample=sample)
+    await m.answer(f"Обновлённый черновик ✅\n\n{sample}\n\nВыбери действие:", reply_markup=word_confirm_kb())
+    await state.set_state(Form.waiting_word_confirm)
+
+
+@dp.message(Form.waiting_word_confirm, F.text.in_(["Собрать документ", "✅ Собрать документ", "делай", "да", "ок"]))
+async def word_build(m: Message, state: FSMContext):
+    data = await state.get_data()
+    uid = m.from_user.id
+    u = get_user(uid)
+    await m.answer("Собираю Word. Обычно это быстрее презентации.")
+    kind = data.get("word_kind", "doc")
+    size = data.get("word_size", "medium")
+    size_map = {"short": "короткий", "medium": "средний", "long": "подробный"}
+    kind_name = {
+        "doc": "обычный документ",
+        "referat": "реферат для университета. Титульный лист, содержание, введение, 2–3 главы, заключение, список литературы. Текст живой, связный, как для сдачи преподавателю, не набор абзацев.",
+        "dkp": "договор купли-продажи",
+        "rent": "договор аренды",
+        "offer": "коммерческое предложение: о компании, задача клиента, решение и услуги, этапы, сроки, бюджет, контакты"
+        "statement": "заявление",
+        "proxy": "доверенность",
+    }.get(kind, "документ")
+    raw = await ask_grok(f"""Собери Word: {kind_name}.
+Данные: {data.get('topic')}
+Текст пользователя: {data.get('user_text')}
+Доп: {data.get('extra')}
+Объём: {size_map[size]}
+Пиши как живой человек. Недостающие данные: [указать ...].
+Только JSON:
+{{"title":"...","meta":{{"org":"Министерство образования","school":"[учебное заведение]","author":"[ФИО]","teacher":"[преподаватель]","city":"[город]","year":"2026"}},"sections":[{{"title":"Введение","content":"абзац1\\n\\nабзац2"}}]}}""")
+    try:
+        content = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+    except Exception:
+        await m.answer("Не собрал текст. Попробуй ещё раз.", reply_markup=main_kb())
+        await state.clear()
+        return
+
+    docx_path = f"doc_{uid}.docx"
+    build_word(
+        docx_path,
+        content.get("title", "Документ"),
+        content.get("sections", []),
+        kind,
+        content.get("meta") or {}
+    )
+
+    pdf_path = f"doc_{uid}.pdf"
+    pdf = canvas.Canvas(pdf_path, pagesize=A4)
+    w, h = A4
+    fn, fb = "Helvetica", "Helvetica-Bold"
+    try:
+        pdfmetrics.registerFont(TTFont("DejaVu", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
+        pdfmetrics.registerFont(TTFont("DejaVuBold", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
+        fn, fb = "DejaVu", "DejaVuBold"
+    except Exception:
+        pass
+    pdf.setFont(fb, 14)
+    pdf.drawString(40, h - 50, content.get("title", "")[:65])
+    y = h - 80
+    for s in content.get("sections", []):
+        if y < 70:
+            pdf.showPage()
+            y = h - 50
+        pdf.setFont(fb, 11)
+        pdf.drawString(40, y, (s.get("title") or "")[:70])
+        y -= 16
+        pdf.setFont(fn, 9)
+        text = (s.get("content") or "")[:400]
+        while text:
+            if y < 50:
+                pdf.showPage()
+                y = h - 50
+            pdf.drawString(40, y, text[:90])
+            text = text[90:]
+            y -= 12
+        y -= 10
+    pdf.save()
+
+    await m.answer_document(FSInputFile(docx_path), caption="📄 Word — этот файл можно править")
+    await m.answer_document(FSInputFile(pdf_path), caption="📄 PDF-копия")
+    u["generations"] += 1
+    u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
+    await m.answer("Документ готов ✅", reply_markup=main_kb())
     await state.clear()
 
 
