@@ -256,7 +256,7 @@ def extract_json(raw: str):
 GROK_ERROR_PREFIX = "__GROK_ERROR__"
 
 
-async def ask_grok(prompt: str) -> str:
+async def ask_grok(prompt: str, max_tokens: int = 4000) -> str:
     try:
         r = await client.chat.completions.create(
             model="grok-3",
@@ -265,7 +265,7 @@ async def ask_grok(prompt: str) -> str:
                 {"role": "user", "content": prompt}
             ],
             temperature=0.95,
-            max_tokens=4000
+            max_tokens=max_tokens
         )
         return r.choices[0].message.content
     except Exception as e:
@@ -1780,11 +1780,28 @@ async def word_build(m: Message, state: FSMContext):
     style_rule = ANTI_AI_DETECTOR_STYLE if kind in STUDY_KINDS else (
         "Пиши формальным юридическим/деловым языком, грамотно и точно по формулировкам ГК РФ, где применимо."
     )
+    # Финальная сборка — это не короткий черновик-план, а весь текст документа целиком,
+    # поэтому фиксированного лимита в 4000 токенов не хватало на курсовую/реферат с
+    # "полным раскрытием темы" (там нужно 6000-10000+ слов), и модель тихо обрезала
+    # содержание. Лимит теперь подбирается по типу документа и выбранной глубине.
+    if kind == "coursework":
+        gen_max_tokens = 16000 if size == "long" else 8000
+    elif kind == "referat":
+        gen_max_tokens = 10000 if size == "long" else 6000
+    elif kind in WORD_SIZE_KINDS:  # report, essay
+        gen_max_tokens = 6000 if size == "long" else 4000
+    else:
+        gen_max_tokens = 6000
+    length_hint = ""
+    if size == "long" and kind == "coursework":
+        length_hint = "\nЭто полноценная курсовая работа для сдачи — каждая глава должна быть развёрнутой (несколько содержательных абзацев с примерами, анализом, а не 2-3 предложения на главу), суммарный объём — уровня настоящей курсовой (не короткий конспект)."
+    elif size == "long" and kind == "referat":
+        length_hint = "\nЭто полноценный реферат для сдачи — каждый раздел должен быть развёрнутым (несколько содержательных абзацев), а не сжатым пересказом в 2-3 предложения."
     raw = await ask_grok(f"""Собери Word: {kind_name}.
 Данные: {data.get('topic')}
 Текст пользователя: {data.get('user_text')}
 Доп: {data.get('extra')}
-Объём: {size_map[size]}
+Объём: {size_map[size]}{length_hint}
 {style_rule}
 Если в данных пользователя есть даты, ФИО, паспортные данные, суммы, названия сторон - подставь их в meta и в текст
 точно как есть, ничего не меняя и не придумывая.
@@ -1793,7 +1810,7 @@ async def word_build(m: Message, state: FSMContext):
 Для содержательных документов (реферат, коммерческое предложение, заявление) разделы должны раскрывать
 тему конкретно и по существу, без воды и общих фраз.
 Только JSON:
-{{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\n\nабзац2"}}]}}""")
+{{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\n\nабзац2"}}]}}""", max_tokens=gen_max_tokens)
     try:
         content = extract_json(raw)
         if not isinstance(content.get("sections"), list) or not content["sections"]:
@@ -1831,7 +1848,7 @@ async def word_build(m: Message, state: FSMContext):
             pdf.drawString(40, y, (s.get("title") or "")[:70])
             y -= 16
             pdf.setFont(fn, 9)
-            for line in wrap_lines((s.get("content") or "")[:2000], fn, 9, w - 80):
+            for line in wrap_lines((s.get("content") or ""), fn, 9, w - 80):
                 if y < 50:
                     pdf.showPage()
                     y = h - 50
