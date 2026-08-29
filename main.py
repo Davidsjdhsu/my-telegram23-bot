@@ -32,6 +32,19 @@ FONT_CANDIDATES = [
 ]
 
 
+def safe_filename(title: str, fallback: str = "Документ") -> str:
+    """Делает из темы/заголовка документа безопасное имя файла:
+    убирает символы, которые нельзя использовать в имени файла (Windows/Telegram),
+    обрезает длину, чтобы не упереться в лимиты, и подставляет fallback, если
+    заголовок пустой."""
+    import re as _re
+    text = (title or "").strip() or fallback
+    text = _re.sub(r'[\\/:*?"<>|\n\r\t]', " ", text)
+    text = _re.sub(r"\s+", " ", text).strip()
+    text = text[:80].strip() or fallback
+    return text
+
+
 def wrap_lines(text, font, size, max_width):
     """Переносит текст по словам, а не по количеству символов,
     чтобы слова не рвались посередине."""
@@ -197,6 +210,53 @@ def start_job(uid):
 
 def finish_job(uid):
     get_user(uid)["busy"] = False
+
+
+# Telegram режет любое сообщение длиннее 4096 символов и просто не отправляет его
+# (ошибка на стороне API), а не обрезает — из-за этого черновик документа при
+# "полном раскрытии темы" (когда нейросеть пишет заметно больше, чем короткий план)
+# иногда падал в общий обработчик ошибок с "Что-то пошло не так. Попробуй ещё раз".
+# send_draft() при коротком черновике отправляет его текстом как раньше, а при
+# длинном — красивым PDF-файлом с именем по теме, а не рвёт на несколько сообщений.
+TELEGRAM_MAX_LEN = 4000  # с запасом от лимита в 4096
+
+
+async def send_draft(m: Message, text: str, title: str = "Черновик", reply_markup=None, note: str = ""):
+    """Отправляет черновик пользователю: если он укладывается в лимит Telegram —
+    обычным сообщением, а если длиннее (типично для "полного раскрытия темы") —
+    красивым PDF-файлом с именем по теме документа, чтобы не дробить текст на
+    несколько сообщений и не терять читаемость."""
+    if len(text) <= TELEGRAM_MAX_LEN:
+        await m.answer(text, reply_markup=reply_markup)
+        return
+    uid = m.from_user.id
+    pdf_path = f"/tmp/draft_{uid}.pdf"
+    pdf = canvas.Canvas(pdf_path, pagesize=A4)
+    w, h = A4
+    fn, fb = register_pdf_fonts()
+    pdf.setFont(fb, 14)
+    pdf.drawString(40, h - 50, safe_filename(title)[:65])
+    y = h - 80
+    pdf.setFont(fn, 10)
+    for para in text.split("\n"):
+        if not para.strip():
+            y -= 10
+            continue
+        for line in wrap_lines(para, fn, 10, w - 80):
+            if y < 50:
+                pdf.showPage()
+                y = h - 50
+                pdf.setFont(fn, 10)
+            pdf.drawString(40, y, line)
+            y -= 14
+    pdf.save()
+    fname = safe_filename(title, fallback="Черновик")
+    caption = f"📄 Черновик получился объёмным, поэтому вот файлом{(' — ' + note) if note else ''}"
+    await m.answer_document(FSInputFile(pdf_path, filename=f"{fname} - черновик.pdf"), caption=caption, reply_markup=reply_markup)
+    try:
+        os.remove(pdf_path)
+    except OSError:
+        pass
 
 
 def _balanced_json_spans(text: str):
@@ -652,10 +712,12 @@ async def process_slides(m: Message, state: FSMContext):
         return
     theme_name = data.get("theme_name", "default")
     await state.update_data(sample=sample)
-    await m.answer(
+    await send_draft(
+        m,
         f"Черновик готов ✅\n\n{sample}\n\n"
         f"Стиль: {THEME_LABELS.get(theme_name, theme_name)}\n\n"
         "Если всё ок — собираем полную версию.",
+        title=data.get("topic", "Презентация"),
         reply_markup=confirm_kb()
     )
     await state.set_state(Form.waiting_confirm)
@@ -737,7 +799,7 @@ async def process_extra(m: Message, state: FSMContext):
         await state.set_state(Form.waiting_confirm)
         return
     await state.update_data(sample=sample)
-    await m.answer(f"Обновлённый черновик ✅\n\n{sample}\n\nВыбери действие:", reply_markup=confirm_kb())
+    await send_draft(m, f"Обновлённый черновик ✅\n\n{sample}\n\nВыбери действие:", title=data.get("topic", "Презентация"), reply_markup=confirm_kb())
     await state.set_state(Form.waiting_confirm)
 
 
@@ -942,8 +1004,9 @@ async def confirm_generate(m: Message, state: FSMContext):
             y -= 14
         pdf.save()
 
-        await m.answer_document(FSInputFile(pptx_path), caption="📊 PPTX — открывай этот файл")
-        await m.answer_document(FSInputFile(pdf_path), caption="📄 PDF — полная текстовая копия (без фото)")
+        pres_fname = safe_filename(content.get("title"), fallback="Презентация")
+        await m.answer_document(FSInputFile(pptx_path, filename=f"{pres_fname}.pptx"), caption="📊 PPTX — открывай этот файл")
+        await m.answer_document(FSInputFile(pdf_path, filename=f"{pres_fname}.pdf"), caption="📄 PDF — полная текстовая копия (без фото)")
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
         for p in (cover_src, cover_img, pptx_path, pdf_path, *raw_sources, *[f for pair in images if pair for f in pair]):
@@ -1683,16 +1746,18 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
     size_map = {"short": "поверхностное раскрытие темы — только суть и ключевые моменты, без глубокого разбора деталей и подпунктов, но по-настоящему содержательно, объём определяй по теме, не режь искусственно", "long": "полное раскрытие темы — подробно, с деталями, подпунктами и глубоким разбором, объём определяй по теме"}
     kind = data.get("word_kind", "doc")
     kind_name = WORD_KIND_DESC.get(kind, "документ")
-    prompt = f"""Собери черновик: {kind_name}.
+    prompt = f"""Собери черновик-план (не полный текст): {kind_name}.
 Тема/данные: {data.get('topic')}
 Текст пользователя: {data.get('user_text')}
 Доп: {data.get('extra')}
-Объём: {size_map[size]}
+Итоговый документ будет иметь такой объём: {size_map[size]}. Но сейчас нужен не сам документ,
+а короткий план для согласования с пользователем.
 Исправь ошибки. {"Пиши формальным юридическим/деловым языком, без канцелярита-воды." if kind not in STUDY_KINDS else ANTI_AI_DETECTOR_STYLE}
 Важно: никогда не придумывай паспортные данные, суммы, даты или ФИО, которых нет в данных пользователя -
 для них ставь пропуски [указать ...]. Если документ содержательный (реферат, коммерческое предложение) -
-структура должна раскрывать суть темы конкретно, а не общими фразами.
-Обычным текстом: название и 4 пункта структуры. Без JSON."""
+план должен отражать суть темы конкретно, а не общими фразами.
+Обычным текстом, коротко: название и 4 пункта структуры (каждый пункт — одна строка, без раскрытия
+содержания). Без JSON."""
     sample = await ask_grok(prompt)
     if grok_failed(sample):
         await m.answer(
@@ -1701,7 +1766,7 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
         )
         return
     await state.update_data(sample=sample)
-    await m.answer(f"Черновик готов ✅\n\n{sample}\n\nЕсли всё ок — собираем файл.", reply_markup=word_confirm_kb())
+    await send_draft(m, f"Черновик готов ✅\n\n{sample}\n\nЕсли всё ок — собираем файл.", title=data.get("topic") or kind_name, reply_markup=word_confirm_kb())
     await state.set_state(Form.waiting_word_confirm)
 
 
@@ -1754,7 +1819,7 @@ async def word_extra(m: Message, state: FSMContext):
         await state.set_state(Form.waiting_word_confirm)
         return
     await state.update_data(sample=sample)
-    await m.answer(f"Обновлённый черновик ✅\n\n{sample}\n\nВыбери действие:", reply_markup=word_confirm_kb())
+    await send_draft(m, f"Обновлённый черновик ✅\n\n{sample}\n\nВыбери действие:", title=data.get("topic") or WORD_KIND_DESC.get(data.get("word_kind", "doc"), "документ"), reply_markup=word_confirm_kb())
     await state.set_state(Form.waiting_word_confirm)
 
 
@@ -1858,8 +1923,9 @@ async def word_build(m: Message, state: FSMContext):
             y -= 10
         pdf.save()
 
-        await m.answer_document(FSInputFile(docx_path), caption="📄 Word — этот файл можно править")
-        await m.answer_document(FSInputFile(pdf_path), caption="📄 PDF-копия")
+        fname = safe_filename(content.get("title"), fallback=WORD_KIND_DESC.get(kind, "Документ"))
+        await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption="📄 Word — этот файл можно править")
+        await m.answer_document(FSInputFile(pdf_path, filename=f"{fname}.pdf"), caption="📄 PDF-копия")
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
         for p in (docx_path, pdf_path):
