@@ -477,6 +477,22 @@ WORD_MIN_TOTAL_WORDS = {
     ("essay", "short"): 600,
 }
 
+# Минимум слов на один содержательный раздел - используется в довыворота-промпте,
+# чтобы указывать модели точную недостачу по каждому разделу, а не только по сумме.
+WORD_SECTION_MIN_WORDS = {
+    ("coursework", "long"): 600,
+    ("coursework", "short"): 200,
+    ("referat", "long"): 400,
+    ("referat", "short"): 150,
+    ("report", "long"): 250,
+    ("report", "short"): 100,
+    ("essay", "long"): 250,
+    ("essay", "short"): 100,
+}
+# Заголовки, которые не нужно искусственно раздувать при довыворота (оглавление,
+# список источников - у них естественно фиксированный, а не текстовый объём).
+_WORD_SECTION_SKIP_EXPAND = ("содержание", "список литератур", "список источник")
+
 WORD_CATEGORIES = {
     "physical": {
         "title": "👤 Для физлиц",
@@ -1937,18 +1953,31 @@ async def word_build(m: Message, state: FSMContext):
     # может уложиться в цель по одному разделу и заметно недобрать по другим,
     # так что итоговый документ всё равно выходит в разы короче нужного. Вместо
     # того чтобы полагаться на то, что промпт сработает с первого раза, меряем
-    # фактический объём и, если он далеко от цели, просим модель один раз
-    # дописать черновик подробнее - раздел за разделом, отталкиваясь от уже
-    # готового текста (модели обычно проще "дописать", чем "написать длинно с нуля").
+    # фактический объём и, если он далеко от цели, просим модель дописать черновик
+    # подробнее - раздел за разделом, с явной цифрой по каждому разделу отдельно
+    # (общая просьба "дописать подробнее" на практике не даёт нужного прироста).
     min_total = WORD_MIN_TOTAL_WORDS.get((kind, size))
+    section_min = WORD_SECTION_MIN_WORDS.get((kind, size))
     if min_total:
         actual_words = sum(len((b.get("content") or "").split()) for b in content.get("sections", []))
-        if actual_words < min_total * 0.7:
+        attempts = 0
+        while actual_words < min_total * 0.7 and attempts < 2:
+            attempts += 1
             await m.answer("Черновик получился короче, чем нужно — дописываю подробнее…")
+            orig_sections = content.get("sections", [])
+            targets_text = "\n".join(
+                f"{i}. «{(b.get('title') or '').strip()}» — сейчас {len((b.get('content') or '').split())} слов, "
+                + ("оставь как есть." if any(k in (b.get('title') or '').lower() for k in _WORD_SECTION_SKIP_EXPAND)
+                   else f"нужно не менее {section_min} слов.")
+                for i, b in enumerate(orig_sections, 1)
+            )
             expand_raw = await ask_grok(f"""Вот черновик документа в JSON, он слишком короткий: сейчас примерно {actual_words} слов, а нужно суммарно не менее {min_total}.
-Перепиши каждый раздел из sections (title оставь как есть), сделай текст каждого раздела заметно подробнее:
-добавь конкретные факты, примеры, аргументы, анализ, детали по теме - без воды и без повторов одной мысли разными словами.
-Разделы "Содержание" и "Список литературы"/"Список источников" не удлиняй искусственно, если они уже полные.
+Раздел за разделом, вот что нужно дописать:
+{targets_text}
+В документе должно остаться РОВНО {len(orig_sections)} разделов, с теми же заголовками, в том же порядке -
+не удаляй, не объединяй, не переименовывай и не убирай ни один раздел (включая "Содержание" и заголовки глав
+вроде "Глава 1"), только доработай содержимое (content) там, где указана недостача.
+Добавляй конкретные факты, примеры, аргументы, анализ, детали по теме - без воды и без повторов одной мысли разными словами.
 {style_rule}
 Верни ТОЛЬКО JSON той же структуры, без пояснений:
 {{"title":"...","meta":{meta_schema},"sections":[{{"title":"...","content":"..."}}]}}
@@ -1956,12 +1985,21 @@ async def word_build(m: Message, state: FSMContext):
 {json.dumps(content, ensure_ascii=False)}""", max_tokens=gen_max_tokens)
             try:
                 expanded = extract_json(expand_raw)
-                expanded_words = sum(len((b.get("content") or "").split()) for b in expanded.get("sections", []))
-                if isinstance(expanded.get("sections"), list) and expanded["sections"] and expanded_words > actual_words:
+                expanded_sections = expanded.get("sections")
+                expanded_words = sum(len((b.get("content") or "").split()) for b in expanded_sections or [])
+                # Принимаем результат только если он не только длиннее, но и не потерял
+                # разделы (модель иногда "экономит" объём, просто слив несколько
+                # разделов в один или выкинув служебные заголовки при переписывании).
+                if (isinstance(expanded_sections, list) and expanded_sections
+                        and len(expanded_sections) >= len(orig_sections)
+                        and expanded_words > actual_words):
                     content = expanded
+                    actual_words = expanded_words
+                else:
+                    break  # результат хуже или структурно испорчен - не продолжаем попытки
             except Exception as e:
                 print("Word expand parse error:", e)
-                # оставляем исходный (короткий) черновик - лучше отдать что есть, чем ничего
+                break
 
     try:
         docx_path = f"/tmp/doc_{uid}.docx"
