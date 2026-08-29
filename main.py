@@ -24,10 +24,44 @@ from reportlab.pdfbase.ttfonts import TTFont
 from PIL import Image
 import httpx
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FONT_CANDIDATES = [
+    (os.path.join(BASE_DIR, "fonts", "DejaVuSans.ttf"), os.path.join(BASE_DIR, "fonts", "DejaVuSans-Bold.ttf")),
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"),
+]
+
+
+def register_pdf_fonts():
+    """Регистрирует шрифт с поддержкой кириллицы для reportlab.
+    Сначала пробует шрифт, который лежит рядом со скриптом (папка fonts/),
+    затем — типичные системные пути. Если ничего не нашлось, возвращает
+    базовые Helvetica-шрифты и печатает предупреждение, чтобы не было
+    тихой поломки кириллицы в PDF."""
+    for regular, bold in FONT_CANDIDATES:
+        if os.path.exists(regular) and os.path.exists(bold):
+            try:
+                pdfmetrics.registerFont(TTFont("CyrRegular", regular))
+                pdfmetrics.registerFont(TTFont("CyrBold", bold))
+                return "CyrRegular", "CyrBold"
+            except Exception as e:
+                print("Не удалось зарегистрировать шрифт", regular, ":", e)
+    print("ВНИМАНИЕ: шрифт с кириллицей не найден — русский текст в PDF будет нечитаемым. "
+          "Положи DejaVuSans.ttf и DejaVuSans-Bold.ttf в папку fonts/ рядом со скриптом.")
+    return "Helvetica", "Helvetica-Bold"
+
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 ADMIN_IDS = [909828109]
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN не задан в переменных окружения")
+if not XAI_API_KEY:
+    raise RuntimeError("XAI_API_KEY не задан в переменных окружения")
+if not REPLICATE_API_TOKEN:
+    print("ВНИМАНИЕ: REPLICATE_API_TOKEN не задан — генерация изображений будет недоступна")
 
 client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
 bot = Bot(token=BOT_TOKEN)
@@ -123,13 +157,84 @@ def pick_theme(topic: str):
 
 def get_user(uid):
     if uid not in users_db:
-        users_db[uid] = {"name": "", "plan": "premium", "generations": 0, "history": []}
+        users_db[uid] = {"name": "", "plan": "premium", "generations": 0, "history": [], "busy": False}
     return users_db[uid]
 
 
 def can_generate(uid):
     u = get_user(uid)
     return u["generations"] < PLAN_LIMITS.get(u["plan"], 15)
+
+
+def start_job(uid):
+    """Помечает пользователя как занятого дорогой генерацией.
+    Возвращает False, если задача уже выполняется (защита от двойного нажатия)."""
+    u = get_user(uid)
+    if u.get("busy"):
+        return False
+    u["busy"] = True
+    return True
+
+
+def finish_job(uid):
+    get_user(uid)["busy"] = False
+
+
+def _balanced_json_spans(text: str):
+    """Находит все сбалансированные по фигурным скобкам блоки {...} в тексте,
+    корректно игнорируя скобки внутри строк."""
+    spans = []
+    depth = 0
+    in_string = False
+    escape = False
+    start = None
+    for i, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    spans.append((start, i + 1))
+    return spans
+
+
+def extract_json(raw: str):
+    """Надёжно достаёт JSON-объект из ответа модели: убирает markdown-обёртку
+    ```json ... ``` и перебирает все сбалансированные по скобкам блоки
+    (от самого большого к самому маленькому), а не просто первую/последнюю
+    скобку в тексте — так лишний текст модели вокруг JSON не ломает разбор."""
+    if not raw:
+        raise ValueError("Пустой ответ модели")
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+    spans = _balanced_json_spans(text)
+    if not spans:
+        raise ValueError("В ответе нет JSON-объекта")
+    for start, end in sorted(spans, key=lambda s: s[1] - s[0], reverse=True):
+        try:
+            return json.loads(text[start:end])
+        except json.JSONDecodeError:
+            continue
+    raise ValueError("Не найден валидный JSON-блок")
+
+
+GROK_ERROR_PREFIX = "__GROK_ERROR__"
 
 
 async def ask_grok(prompt: str) -> str:
@@ -145,7 +250,12 @@ async def ask_grok(prompt: str) -> str:
         )
         return r.choices[0].message.content
     except Exception as e:
-        return f"Ошибка: {e}"
+        print("Grok API error:", e)
+        return f"{GROK_ERROR_PREFIX}{e}"
+
+
+def grok_failed(text: str) -> bool:
+    return (text or "").startswith(GROK_ERROR_PREFIX)
 
 
 async def generate_image(prompt: str, path: str) -> bool:
@@ -257,8 +367,12 @@ def word_kind_kb():
         [KeyboardButton(text="📝 Договор купли-продажи")],
         [KeyboardButton(text="🏠 Договор аренды")],
         [KeyboardButton(text="💼 Коммерческое предложение")],
+        [KeyboardButton(text="📦 Акт приёма-передачи")],
         [KeyboardButton(text="📋 Заявление")],
-        [KeyboardButton(text="🧾 Доверенность")]
+        [KeyboardButton(text="🧾 Доверенность")],
+        [KeyboardButton(text="💰 Расписка / договор займа")],
+        [KeyboardButton(text="⚠️ Претензия")],
+        [KeyboardButton(text="✈️ Согласие на выезд ребёнка")]
     ], resize_keyboard=True)
 
 
@@ -309,6 +423,13 @@ async def cmd_start(m: Message, state: FSMContext):
         reply_markup=main_kb()
     )
     await state.clear()
+
+
+@dp.message(Command("cancel"))
+async def cmd_cancel(m: Message, state: FSMContext):
+    await state.clear()
+    finish_job(m.from_user.id)
+    await m.answer("Отменил текущее действие. Начнём заново 👇", reply_markup=main_kb())
 
 
 @dp.message(F.text.in_(["Сделать презентацию", "📊 Сделать презентацию"]))
@@ -414,6 +535,12 @@ async def process_slides(m: Message, state: FSMContext):
 Короткий уникальный план: название и 3 пункта. Без JSON."""
 
     sample = await ask_grok(prompt)
+    if grok_failed(sample):
+        await m.answer(
+            "Не получилось получить ответ от нейросети. Попробуй ещё раз через минуту.",
+            reply_markup=slides_kb()
+        )
+        return
     theme_name = data.get("theme_name", "default")
     await state.update_data(sample=sample)
     await m.answer(
@@ -493,6 +620,13 @@ async def process_extra(m: Message, state: FSMContext):
 Угол: {angle}
 Новый короткий план, 3 пункта. Без JSON."""
     sample = await ask_grok(prompt)
+    if grok_failed(sample):
+        await m.answer(
+            "Не получилось обновить черновик — нейросеть не ответила. Прошлый черновик остался как был.",
+            reply_markup=confirm_kb()
+        )
+        await state.set_state(Form.waiting_confirm)
+        return
     await state.update_data(sample=sample)
     await m.answer(f"Обновлённый черновик ✅\n\n{sample}\n\nВыбери действие:", reply_markup=confirm_kb())
     await state.set_state(Form.waiting_confirm)
@@ -503,169 +637,190 @@ async def confirm_generate(m: Message, state: FSMContext):
     data = await state.get_data()
     uid = m.from_user.id
     u = get_user(uid)
-    await m.answer("Собираю презентацию с картинками. Это займёт 1–2 минуты.")
-
-    theme_name = data.get("theme_name") or pick_theme(data.get("topic", ""))[0]
-    colors = THEMES.get(theme_name, THEMES["default"])
-    angle = data.get("angle") or random.choice(ANGLES)
-    layouts = [0, 1, 2]
-    random.shuffle(layouts)
-
-    if data.get("mode") == "user":
-        raw = await ask_grok(f"""Собери уникальную презентацию из текста пользователя.
-Исправь ошибки, сохрани смысл.
-Текст:
-{data.get('user_text')}
-Доп:
-{data.get('extra')}
-Слайдов: {data.get('slides')}
-Угол: {angle}
-Стиль: {theme_name}
-Заголовок слайда 3–6 слов, как у человека, не как у ИИ.
-Текст: 2 живых абзаца, без канцелярита.
-Фото: живой кадр, не стоковый ИИ-шаблон.
-Только JSON:
-{{"title":"...","slides":[{{"title":"...","content":"абзац1\\n\\nабзац2","image_prompt":"unique cinematic scene"}}]}}""")
-    else:
-        raw = await ask_grok(f"""Собери уникальную презентацию уровня лучшего журнала.
-Тема: {data.get('topic')}
-Слайдов: {data.get('slides')}
-Доп: {data.get('extra')}
-Угол: {angle}
-Стиль: {theme_name}
-Заголовок 3–6 слов, живой, не шаблонный.
-Текст: 2 живых абзаца, без канцелярита и следов ИИ.
-Фото: живой кадр, не стоковый ИИ-шаблон.
-Только JSON:
-{{"title":"...","slides":[{{"title":"...","content":"абзац1\\n\\nабзац2","image_prompt":"unique cinematic scene"}}]}}""")
-
-    try:
-        content = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
-    except Exception:
-        await m.answer("Не собрал текст. Нажми ещё раз «Сделать презентацию».", reply_markup=main_kb())
-        await state.clear()
+    if not start_job(uid):
+        await m.answer("Уже собираю предыдущую версию, подожди немного 🙂")
         return
+    await m.answer("Собираю презентацию с картинками. Это займёт 1–2 минуты.")
+    try:
 
-    prs = Presentation()
-    prs.slide_width = Inches(13.333)
-    prs.slide_height = Inches(7.5)
-    slides_data = content.get("slides", [])
-    n = len(slides_data)
+        theme_name = data.get("theme_name") or pick_theme(data.get("topic", ""))[0]
+        colors = THEMES.get(theme_name, THEMES["default"])
+        angle = data.get("angle") or random.choice(ANGLES)
+        layouts = [0, 1, 2]
+        random.shuffle(layouts)
 
-    cover_img = None
-    cover_src = f"/tmp/{uid}_cover.png"
-    if await generate_image(f"{content.get('title')}, wide cinematic opening shot, {colors['photo']}", cover_src):
-        cover_wide = f"/tmp/{uid}_cover_w.png"
-        cover(cover_src, cover_wide, 1920, 1080)
-        cover_img = cover_wide
-
-    images = []
-    for i, s in enumerate(slides_data):
-        src = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}.png"
-        prompt = f"{s.get('image_prompt') or s.get('title')}, {colors['photo']}, unique composition"
-        ok = await generate_image(prompt, src)
-        if ok:
-            wide, tall = f"{src}_w.png", f"{src}_t.png"
-            cover(src, wide, 1920, 1080)
-            cover(src, tall, 1260, 1500)
-            images.append((wide, tall))
+        if data.get("mode") == "user":
+            raw = await ask_grok(f"""Собери уникальную презентацию из текста пользователя.
+    Исправь ошибки, сохрани смысл.
+    Текст:
+    {data.get('user_text')}
+    Доп:
+    {data.get('extra')}
+    Слайдов: {data.get('slides')}
+    Угол: {angle}
+    Стиль: {theme_name}
+    Заголовок слайда 3–6 слов, как у человека, не как у ИИ.
+    Текст: 2 живых абзаца, без канцелярита.
+    Фото: живой кадр, не стоковый ИИ-шаблон.
+    Только JSON:
+    {{"title":"...","slides":[{{"title":"...","content":"абзац1\\n\\nабзац2","image_prompt":"unique cinematic scene"}}]}}""")
         else:
-            images.append(None)
+            raw = await ask_grok(f"""Собери уникальную презентацию уровня лучшего журнала.
+    Тема: {data.get('topic')}
+    Слайдов: {data.get('slides')}
+    Доп: {data.get('extra')}
+    Угол: {angle}
+    Стиль: {theme_name}
+    Заголовок 3–6 слов, живой, не шаблонный.
+    Текст: 2 живых абзаца, без канцелярита и следов ИИ.
+    Фото: живой кадр, не стоковый ИИ-шаблон.
+    Только JSON:
+    {{"title":"...","slides":[{{"title":"...","content":"абзац1\\n\\nабзац2","image_prompt":"unique cinematic scene"}}]}}""")
 
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    rect(slide, 0, 0, 13.333, 7.5, colors["bg"])
-    if cover_img:
-        slide.shapes.add_picture(cover_img, Inches(0), Inches(0), width=Inches(13.333), height=Inches(7.5))
-        rect(slide, 0, 4.7, 13.333, 2.8, colors["bg"])
-    txt(slide, 0.7, 5.0, 12, 1.5, content.get("title", "Презентация"), 40, colors["ink"], True)
-    txt(slide, 0.7, 6.6, 12, 0.4, "01  /  введение", 13, colors["mute"])
+        try:
+            content = extract_json(raw)
+            if not isinstance(content.get("slides"), list) or not content["slides"]:
+                raise ValueError("В ответе модели нет слайдов")
+        except Exception as e:
+            print("Presentation JSON parse error:", e)
+            await m.answer("Не собрал текст. Нажми ещё раз «Сделать презентацию».", reply_markup=main_kb())
+            await state.clear()
+            return
 
-    for idx, s in enumerate(slides_data):
+        prs = Presentation()
+        prs.slide_width = Inches(13.333)
+        prs.slide_height = Inches(7.5)
+        slides_data = content.get("slides", [])
+        n = len(slides_data)
+
+        cover_img = None
+        cover_src = f"/tmp/{uid}_cover.png"
+        if await generate_image(f"{content.get('title')}, wide cinematic opening shot, {colors['photo']}", cover_src):
+            cover_wide = f"/tmp/{uid}_cover_w.png"
+            cover(cover_src, cover_wide, 1920, 1080)
+            cover_img = cover_wide
+
+        images = []
+        raw_sources = []
+        for i, s in enumerate(slides_data):
+            src = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}.png"
+            prompt = f"{s.get('image_prompt') or s.get('title')}, {colors['photo']}, unique composition"
+            ok = await generate_image(prompt, src)
+            if ok:
+                raw_sources.append(src)
+                wide, tall = f"{src}_w.png", f"{src}_t.png"
+                cover(src, wide, 1920, 1080)
+                cover(src, tall, 1260, 1500)
+                images.append((wide, tall))
+            else:
+                images.append(None)
+
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         rect(slide, 0, 0, 13.333, 7.5, colors["bg"])
-        layout = layouts[idx % 3]
-        img = images[idx] if idx < len(images) else None
-        if layout == 0:
-            if img:
-                slide.shapes.add_picture(img[1], Inches(0), Inches(0), width=Inches(6.4), height=Inches(7.5))
-            txt(slide, 7.05, 1.5, 5.5, 1.6, s.get("title", ""), 30, colors["ink"], True)
-            rect(slide, 7.05, 3.25, 0.85, 0.05, colors["line"])
-            box = slide.shapes.add_textbox(Inches(7.05), Inches(3.5), Inches(5.5), Inches(3.2))
-            tf = box.text_frame
-            tf.word_wrap = True
-            blocks = [x.strip() for x in (s.get("content") or "").split("\n") if x.strip()][:2]
-            for i, b in enumerate(blocks or [""]):
-                p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-                p.text = b
+        if cover_img:
+            slide.shapes.add_picture(cover_img, Inches(0), Inches(0), width=Inches(13.333), height=Inches(7.5))
+            rect(slide, 0, 4.7, 13.333, 2.8, colors["bg"])
+        txt(slide, 0.7, 5.0, 12, 1.5, content.get("title", "Презентация"), 40, colors["ink"], True)
+        txt(slide, 0.7, 6.6, 12, 0.4, "01  /  введение", 13, colors["mute"])
+
+        for idx, s in enumerate(slides_data):
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            rect(slide, 0, 0, 13.333, 7.5, colors["bg"])
+            layout = layouts[idx % 3]
+            img = images[idx] if idx < len(images) else None
+            if layout == 0:
+                if img:
+                    slide.shapes.add_picture(img[1], Inches(0), Inches(0), width=Inches(6.4), height=Inches(7.5))
+                txt(slide, 7.05, 1.5, 5.5, 1.6, s.get("title", ""), 30, colors["ink"], True)
+                rect(slide, 7.05, 3.25, 0.85, 0.05, colors["line"])
+                box = slide.shapes.add_textbox(Inches(7.05), Inches(3.5), Inches(5.5), Inches(3.2))
+                tf = box.text_frame
+                tf.word_wrap = True
+                blocks = [x.strip() for x in (s.get("content") or "").split("\n") if x.strip()][:2]
+                for i, b in enumerate(blocks or [""]):
+                    p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+                    p.text = b
+                    p.font.size = Pt(16)
+                    p.font.color.rgb = RGBColor(*colors["mid"])
+                    p.font.name = "Calibri"
+                    p.space_after = Pt(16)
+                txt(slide, 7.05, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
+            elif layout == 1:
+                if img:
+                    slide.shapes.add_picture(img[0], Inches(0), Inches(0), width=Inches(13.333), height=Inches(4.55))
+                txt(slide, 0.7, 4.85, 12, 1.0, s.get("title", ""), 28, colors["ink"], True)
+                box = slide.shapes.add_textbox(Inches(0.7), Inches(5.85), Inches(12), Inches(1.2))
+                tf = box.text_frame
+                tf.word_wrap = True
+                p = tf.paragraphs[0]
+                p.text = " ".join((s.get("content") or "").split())
+                p.font.size = Pt(15)
+                p.font.color.rgb = RGBColor(*colors["mid"])
+                p.font.name = "Calibri"
+            else:
+                txt(slide, 0.7, 1.3, 8.2, 2.2, s.get("title", ""), 36, colors["ink"], True)
+                rect(slide, 0.7, 3.6, 1.1, 0.06, colors["line"])
+                box = slide.shapes.add_textbox(Inches(0.7), Inches(3.9), Inches(7.4), Inches(2.6))
+                tf = box.text_frame
+                tf.word_wrap = True
+                p = tf.paragraphs[0]
+                p.text = " ".join((s.get("content") or "").split())
                 p.font.size = Pt(16)
                 p.font.color.rgb = RGBColor(*colors["mid"])
                 p.font.name = "Calibri"
-                p.space_after = Pt(16)
-            txt(slide, 7.05, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
-        elif layout == 1:
-            if img:
-                slide.shapes.add_picture(img[0], Inches(0), Inches(0), width=Inches(13.333), height=Inches(4.55))
-            txt(slide, 0.7, 4.85, 12, 1.0, s.get("title", ""), 28, colors["ink"], True)
-            box = slide.shapes.add_textbox(Inches(0.7), Inches(5.85), Inches(12), Inches(1.2))
-            tf = box.text_frame
-            tf.word_wrap = True
-            p = tf.paragraphs[0]
-            p.text = " ".join((s.get("content") or "").split())
-            p.font.size = Pt(15)
-            p.font.color.rgb = RGBColor(*colors["mid"])
-            p.font.name = "Calibri"
-        else:
-            txt(slide, 0.7, 1.3, 8.2, 2.2, s.get("title", ""), 36, colors["ink"], True)
-            rect(slide, 0.7, 3.6, 1.1, 0.06, colors["line"])
-            box = slide.shapes.add_textbox(Inches(0.7), Inches(3.9), Inches(7.4), Inches(2.6))
-            tf = box.text_frame
-            tf.word_wrap = True
-            p = tf.paragraphs[0]
-            p.text = " ".join((s.get("content") or "").split())
-            p.font.size = Pt(16)
-            p.font.color.rgb = RGBColor(*colors["mid"])
-            p.font.name = "Calibri"
-            if img:
-                slide.shapes.add_picture(img[1], Inches(8.7), Inches(1.3), width=Inches(3.9), height=Inches(4.7))
-            txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
+                if img:
+                    slide.shapes.add_picture(img[1], Inches(8.7), Inches(1.3), width=Inches(3.9), height=Inches(4.7))
+                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
 
-    pptx_path = f"pres_{uid}.pptx"
-    prs.save(pptx_path)
-    pdf_path = f"pres_{uid}.pdf"
-    pdf = canvas.Canvas(pdf_path, pagesize=A4)
-    w, h = A4
-    fb = "Helvetica-Bold"
-    try:
-        pdfmetrics.registerFont(TTFont("DejaVu", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
-        pdfmetrics.registerFont(TTFont("DejaVuBold", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
-        fb = "DejaVuBold"
-    except Exception:
-        pass
-    pdf.setFont(fb, 14)
-    pdf.drawString(40, h - 50, content.get("title", "")[:65])
-    y = h - 90
-    for i, s in enumerate(slides_data, 1):
-        if y < 70:
-            pdf.showPage()
-            y = h - 50
-        pdf.setFont(fb, 11)
-        pdf.drawString(40, y, f"{i}. {s.get('title', '')[:70]}")
-        y -= 20
-    pdf.save()
+        pptx_path = f"pres_{uid}.pptx"
+        prs.save(pptx_path)
+        pdf_path = f"pres_{uid}.pdf"
+        pdf = canvas.Canvas(pdf_path, pagesize=A4)
+        w, h = A4
+        fn, fb = register_pdf_fonts()
+        pdf.setFont(fb, 14)
+        pdf.drawString(40, h - 50, content.get("title", "")[:65])
+        y = h - 90
+        for i, s in enumerate(slides_data, 1):
+            if y < 70:
+                pdf.showPage()
+                y = h - 50
+            pdf.setFont(fb, 11)
+            pdf.drawString(40, y, f"{i}. {s.get('title', '')[:70]}")
+            y -= 20
+        pdf.save()
 
-    await m.answer_document(FSInputFile(pptx_path), caption="📊 PPTX — открывай этот файл")
-    await m.answer_document(FSInputFile(pdf_path), caption="📄 PDF — текстовая копия без фото")
-    u["generations"] += 1
-    u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
+        await m.answer_document(FSInputFile(pptx_path), caption="📊 PPTX — открывай этот файл")
+        await m.answer_document(FSInputFile(pdf_path), caption="📄 PDF — текстовая копия без фото")
+        u["generations"] += 1
+        u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
+        for p in (cover_src, cover_img, pptx_path, pdf_path, *raw_sources, *[f for pair in images if pair for f in pair]):
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+        await m.answer(
+            "Готово ✅\n\n"
+            "Открывай именно PPTX в PowerPoint, Keynote или Google Презентациях.\n\n"
+            "Если на телефоне все фото одинаковые, это не ошибка файла. "
+            "Так бывает в предпросмотре Telegram, WPS и встроенных «Документах». "
+            "Открой тот же файл на другом устройстве или в нормальном редакторе презентаций.",
+            reply_markup=main_kb()
+        )
+        await state.clear()
+    finally:
+        finish_job(uid)
+
+
+@dp.message(Form.waiting_confirm)
+async def waiting_confirm_fallback(m: Message, state: FSMContext):
+    """Ловит любой текст, не совпавший с кнопками выше, чтобы диалог никогда
+    не зависал без ответа."""
     await m.answer(
-        "Готово ✅\n\n"
-        "Открывай именно PPTX в PowerPoint, Keynote или Google Презентациях.\n\n"
-        "Если на телефоне все фото одинаковые, это не ошибка файла. "
-        "Так бывает в предпросмотре Telegram, WPS и встроенных «Документах». "
-        "Открой тот же файл на другом устройстве или в нормальном редакторе презентаций.",
-        reply_markup=main_kb()
+        "Не понял. Выбери действие кнопкой ниже, или напиши /cancel, чтобы начать заново.",
+        reply_markup=confirm_kb()
     )
-    await state.clear()
 
 
 def _run(p, text, size=12, bold=False, name="Times New Roman", align=None):
@@ -750,8 +905,36 @@ def build_word(path, title, sections, kind="doc", meta=None):
     elif kind == "offer":
         _p(doc, "КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ", 11, True, after=0)
         _p(doc, meta.get("number") or "", 10, after=12)
-        _p(doc, title, 20, True, after=4)
-        _body(doc, sections, indent=False, head_center=False)
+        _p(doc, title, 20, True, after=14)
+        for i, block in enumerate(sections or [], 1):
+            head = (block.get("title") or "").strip()
+            body = block.get("content") or ""
+            if head:
+                _p(doc, f"{i}. {head}", 14, True, before=12, after=6)
+            for para in [x.strip() for x in body.split("\n") if x.strip()]:
+                _p(doc, para, 12, after=6, line=1.2)
+
+    elif kind == "act":
+        _p(doc, "АКТ ПРИЁМА-ПЕРЕДАЧИ", 16, True, WD_ALIGN_PARAGRAPH.CENTER, after=2)
+        _p(doc, title if title not in ("АКТ ПРИЁМА-ПЕРЕДАЧИ", "Документ") else "№ ______", 12,
+           align=WD_ALIGN_PARAGRAPH.CENTER, after=10)
+        p = doc.add_paragraph()
+        p.paragraph_format.tab_stops.add_tab_stop(Cm(16), WD_TAB_ALIGNMENT.RIGHT)
+        _run(p, f"{meta.get('city') or 'г. _______________'}\t{meta.get('date') or '«___» __________ 20___ г.'}", 12)
+        if meta.get("basis"):
+            _p(doc, f"Основание: {meta.get('basis')}", 12, after=10)
+        _p(
+            doc,
+            f"{meta.get('from_party') or '[передающая сторона, ФИО/наименование]'}, именуемый(ая) в дальнейшем "
+            "«Передающая сторона», с одной стороны, и "
+            f"{meta.get('to_party') or '[принимающая сторона, ФИО/наименование]'}, именуемый(ая) в дальнейшем "
+            "«Принимающая сторона», с другой стороны, составили настоящий акт о нижеследующем:",
+            12, after=10, first=1.25
+        )
+        _body(doc, sections, indent=True, head_center=False)
+        _p(doc, "Претензий по количеству, качеству и комплектности стороны друг к другу не имеют.", 12, before=8, after=18)
+        _p(doc, "ПЕРЕДАЛ                    ПРИНЯЛ", 12, True, before=6)
+        _p(doc, "__________ / [ФИО] /          __________ / [ФИО] /", 12)
 
     elif kind == "statement":
         _p(doc, meta.get("to") or "Директору [организация]", 12, align=WD_ALIGN_PARAGRAPH.RIGHT, after=0)
@@ -768,6 +951,54 @@ def build_word(path, title, sections, kind="doc", meta=None):
         _run(p, f"{meta.get('city') or 'г. _______________'}\t{meta.get('date') or '«___» __________ 20___ г.'}", 12)
         _body(doc, sections, indent=True, head_center=False)
         _p(doc, f"Подпись доверителя: __________ / {meta.get('author') or '[ФИО]'} /", 12, before=20)
+
+    elif kind == "loan":
+        _p(doc, "РАСПИСКА В ПОЛУЧЕНИИ ДЕНЕЖНЫХ СРЕДСТВ", 16, True, WD_ALIGN_PARAGRAPH.CENTER, after=2)
+        _p(doc, "(договор займа)", 11, align=WD_ALIGN_PARAGRAPH.CENTER, after=10)
+        p = doc.add_paragraph()
+        p.paragraph_format.tab_stops.add_tab_stop(Cm(16), WD_TAB_ALIGNMENT.RIGHT)
+        _run(p, f"{meta.get('city') or 'г. _______________'}\t{meta.get('date') or '«___» __________ 20___ г.'}", 12)
+        _p(
+            doc,
+            f"{meta.get('from_party') or '[Заимодавец, ФИО, паспортные данные]'}, именуемый(ая) в дальнейшем "
+            "«Заимодавец», передал(а) в долг, а "
+            f"{meta.get('to_party') or '[Заёмщик, ФИО, паспортные данные]'}, именуемый(ая) в дальнейшем "
+            "«Заёмщик», получил(а) в долг денежные средства на нижеследующих условиях:",
+            12, after=10, first=1.25
+        )
+        _body(doc, sections, indent=True, head_center=False)
+        _p(doc, "ЗАИМОДАВЕЦ                    ЗАЁМЩИК", 12, True, before=18)
+        _p(doc, "__________ / [ФИО] /          __________ / [ФИО] /", 12)
+
+    elif kind == "claim":
+        _p(doc, meta.get("to") or "[адресат претензии]", 12, align=WD_ALIGN_PARAGRAPH.RIGHT, after=0)
+        _p(doc, f"от {meta.get('from') or '[ФИО, контакты заявителя]'}", 12, align=WD_ALIGN_PARAGRAPH.RIGHT, after=18)
+        _p(doc, "ПРЕТЕНЗИЯ", 16, True, WD_ALIGN_PARAGRAPH.CENTER, after=4)
+        if meta.get("basis"):
+            _p(doc, f"Основание: {meta.get('basis')}", 11, align=WD_ALIGN_PARAGRAPH.CENTER, after=12)
+        _body(doc, sections, indent=True, head_center=False)
+        _p(
+            doc,
+            "В случае неудовлетворения настоящей претензии в указанный срок я буду вынужден(а) "
+            "обратиться в суд за защитой своих прав со взысканием всех сопутствующих расходов.",
+            12, before=10, after=18
+        )
+        _p(doc, f"{meta.get('date') or '[дата]'}                    __________ / {meta.get('from') or '[ФИО]'} /", 12)
+
+    elif kind == "consent":
+        _p(doc, "СОГЛАСИЕ", 16, True, WD_ALIGN_PARAGRAPH.CENTER, after=2)
+        _p(doc, "на выезд несовершеннолетнего ребёнка за границу", 12, align=WD_ALIGN_PARAGRAPH.CENTER, after=10)
+        p = doc.add_paragraph()
+        p.paragraph_format.tab_stops.add_tab_stop(Cm(16), WD_TAB_ALIGNMENT.RIGHT)
+        _run(p, f"{meta.get('city') or 'г. _______________'}\t{meta.get('date') or '«___» __________ 20___ г.'}", 12)
+        _p(
+            doc,
+            f"Я, {meta.get('author') or '[ФИО родителя, паспортные данные]'}, даю согласие на выезд "
+            "моего несовершеннолетнего ребёнка за пределы Российской Федерации на условиях, указанных ниже:",
+            12, after=10, first=1.25
+        )
+        _body(doc, sections, indent=True, head_center=False)
+        _p(doc, f"Подпись: __________ / {meta.get('author') or '[ФИО]'} /", 12, before=20)
 
     else:
         _p(doc, meta.get("org") or "", 11, True, after=0)
@@ -801,10 +1032,18 @@ async def word_kind(m: Message, state: FSMContext):
         kind = "rent"
     elif "коммерч" in t or "предлож" in t:
         kind = "offer"
+    elif "акт" in t or "приём" in t or "прием" in t:
+        kind = "act"
     elif "заявлен" in t:
         kind = "statement"
     elif "доверен" in t:
         kind = "proxy"
+    elif "расписк" in t or "займ" in t or "займа" in t:
+        kind = "loan"
+    elif "претенз" in t:
+        kind = "claim"
+    elif "выезд" in t or "согласи" in t:
+        kind = "consent"
     await state.update_data(word_kind=kind, extra="", extra_used=0)
     await m.answer(
         "Как собираем документ?\n\n"
@@ -870,11 +1109,15 @@ async def word_size(m: Message, state: FSMContext):
     kind_name = {
         "doc": "обычный документ",
         "referat": "реферат для университета",
-        "dkp": "договор купли-продажи",
-        "rent": "договор аренды",
-        "offer": "коммерческое предложение: о компании, задача клиента, решение и услуги, этапы, сроки, бюджет, контакты",
+        "dkp": "договор купли-продажи: предмет договора, цена и порядок расчётов, права и обязанности сторон, порядок передачи товара, ответственность сторон, срок действия",
+        "rent": "договор аренды: предмет аренды, срок, размер и порядок внесения арендной платы, права и обязанности сторон, порядок передачи и возврата имущества, ответственность",
+        "offer": "коммерческое предложение: цепляющий заголовок с конкретной выгодой (не 'КП от компании X'), о компании коротко, суть предложения и что входит, цена и условия оплаты, сроки и этапы работы, почему выбирают нас, контакты с призывом к действию",
+        "act": "акт приёма-передачи: дата и место составления, основание (договор №), кто передаёт и кто принимает, перечень передаваемого (наименование, количество, состояние), отметка об отсутствии претензий сторон",
         "statement": "заявление",
-        "proxy": "доверенность",
+        "proxy": "доверенность: кто доверяет, кому, на какие действия, срок действия доверенности",
+        "loan": "расписка / договор займа: кто занимает и кто даёт в долг, сумма, срок возврата, проценты (если есть), порядок возврата, ответственность за просрочку",
+        "claim": "досудебная претензия: кому адресована, от кого, суть нарушения, требование, срок ответа, последствия при отказе",
+        "consent": "согласие на выезд ребёнка за границу: кто даёт согласие (родитель), данные ребёнка, с кем и куда выезжает ребёнок, срок действия согласия",
     }.get(kind, "документ")
     prompt = f"""Собери черновик: {kind_name}.
 Тема/данные: {data.get('topic')}
@@ -884,6 +1127,12 @@ async def word_size(m: Message, state: FSMContext):
 Исправь ошибки. Если данных не хватает, поставь пропуски [указать ...].
 Обычным текстом: название и 4 пункта структуры. Без JSON."""
     sample = await ask_grok(prompt)
+    if grok_failed(sample):
+        await m.answer(
+            "Не получилось получить ответ от нейросети. Попробуй ещё раз через минуту.",
+            reply_markup=word_size_kb()
+        )
+        return
     await state.update_data(sample=sample)
     await m.answer(f"Черновик готов ✅\n\n{sample}\n\nЕсли всё ок — собираем файл.", reply_markup=word_confirm_kb())
     await state.set_state(Form.waiting_word_confirm)
@@ -922,6 +1171,13 @@ async def word_extra(m: Message, state: FSMContext):
     sample = await ask_grok(
         f"Обнови черновик документа.\nТема: {data.get('topic')}\nТекст: {data.get('user_text')}\nДоп: {extra}\nКороткий план. Без JSON."
     )
+    if grok_failed(sample):
+        await m.answer(
+            "Не получилось обновить черновик — нейросеть не ответила. Прошлый черновик остался как был.",
+            reply_markup=word_confirm_kb()
+        )
+        await state.set_state(Form.waiting_word_confirm)
+        return
     await state.update_data(sample=sample)
     await m.answer(f"Обновлённый черновик ✅\n\n{sample}\n\nВыбери действие:", reply_markup=word_confirm_kb())
     await state.set_state(Form.waiting_word_confirm)
@@ -932,6 +1188,9 @@ async def word_build(m: Message, state: FSMContext):
     data = await state.get_data()
     uid = m.from_user.id
     u = get_user(uid)
+    if not start_job(uid):
+        await m.answer("Уже собираю предыдущий документ, подожди немного 🙂")
+        return
     await m.answer("Собираю Word. Обычно это быстрее презентации.")
     kind = data.get("word_kind", "doc")
     size = data.get("word_size", "medium")
@@ -939,74 +1198,128 @@ async def word_build(m: Message, state: FSMContext):
     kind_name = {
         "doc": "обычный документ",
         "referat": "реферат для университета. Титульный лист, содержание, введение, 2–3 главы, заключение, список литературы. Текст живой, связный, как для сдачи преподавателю, не набор абзацев.",
-        "dkp": "договор купли-продажи",
-        "rent": "договор аренды",
-        "offer": "коммерческое предложение: о компании, задача клиента, решение и услуги, этапы, сроки, бюджет, контакты",
+        "dkp": "договор купли-продажи: предмет договора, цена и порядок расчётов, права и обязанности сторон, порядок передачи товара, ответственность сторон, срок действия и заключительные положения",
+        "rent": "договор аренды: предмет аренды с точным описанием, срок аренды, размер и порядок внесения арендной платы, права и обязанности сторон, порядок передачи и возврата имущества, ответственность сторон",
+        "offer": "коммерческое предложение уровня 2026 года: заголовок с конкретной выгодой или болью клиента (не 'КП от компании'), короткое описание сути в 1-2 абзаца, о компании, что именно входит в предложение, стоимость и условия оплаты, сроки и этапы, почему стоит выбрать именно нас (доказательства, кейсы), контакты и призыв к действию с дедлайном",
+        "act": "акт приёма-передачи: дата и место составления, номер и основание (реквизиты договора), полные данные передающей и принимающей стороны, подробный перечень передаваемого имущества/товара/документов с количеством и состоянием, отметка об отсутствии претензий, место для подписей обеих сторон",
         "statement": "заявление",
-        "proxy": "доверенность",
+        "proxy": "доверенность: кто выдаёт (доверитель), кому (представитель), точный перечень полномочий, срок действия",
+        "loan": "расписка / договор займа: заимодавец и заёмщик (ФИО, паспортные данные), сумма займа цифрами и прописью, срок возврата, проценты (если есть) или указание на беспроцентный заём, порядок возврата, ответственность за просрочку (неустойка/пени)",
+        "claim": "досудебная претензия: реквизиты адресата и заявителя, описание нарушения со ссылкой на договор/закон, конкретное требование (сумма, срок исполнения), срок для добровольного удовлетворения, предупреждение об обращении в суд",
+        "consent": "согласие на выезд ребёнка за границу: ФИО и паспортные данные родителя (доверителя), ФИО, дата рождения и данные свидетельства о рождении/паспорта ребёнка, ФИО сопровождающего (если есть), страна/страны выезда, срок действия согласия",
     }.get(kind, "документ")
+    # Схема мета-полей своя под каждый тип документа — раньше запрашивалась
+    # всегда одна и та же (реферат/договор), из-за чего для заявления,
+    # доверенности, КП поля вроде "кому"/"от кого" не заполнялись моделью
+    # и в документе оставались заглушки, даже если пользователь их указал.
+    META_SCHEMAS = {
+        "referat": '{"org":"Министерство образования","school":"[учебное заведение]","author":"[ФИО студента]","teacher":"[ФИО преподавателя]","city":"[город]","year":"2026"}',
+        "dkp": '{"city":"[город]","date":"«___» __________ 20___ г."}',
+        "rent": '{"city":"[город]","date":"«___» __________ 20___ г."}',
+        "offer": '{"number":"[номер КП]"}',
+        "act": '{"city":"[город]","date":"«___» __________ 20___ г.","basis":"[договор №/основание]","from_party":"[передающая сторона, ФИО/наименование]","to_party":"[принимающая сторона, ФИО/наименование]"}',
+        "statement": '{"to":"[должность руководителя]","to_name":"[ФИО руководителя]","from":"[должность, ФИО заявителя]","date":"[дата]","author":"[ФИО]"}',
+        "proxy": '{"city":"[город]","date":"«___» __________ 20___ г.","author":"[ФИО доверителя]"}',
+        "loan": '{"city":"[город]","date":"«___» __________ 20___ г.","from_party":"[заимодавец, ФИО/паспорт]","to_party":"[заёмщик, ФИО/паспорт]"}',
+        "claim": '{"to":"[адресат претензии]","from":"[заявитель, ФИО/контакты]","date":"[дата]","basis":"[договор №/основание]"}',
+        "consent": '{"city":"[город]","date":"«___» __________ 20___ г.","author":"[ФИО родителя]"}',
+        "doc": '{"org":"","sign":""}',
+    }
+    meta_schema = META_SCHEMAS.get(kind, META_SCHEMAS["doc"])
     raw = await ask_grok(f"""Собери Word: {kind_name}.
 Данные: {data.get('topic')}
 Текст пользователя: {data.get('user_text')}
 Доп: {data.get('extra')}
 Объём: {size_map[size]}
-Пиши как живой человек. Недостающие данные: [указать ...].
+Пиши как живой человек. Если в данных пользователя есть даты, ФИО, названия сторон — подставь их в meta и в текст.
+Недостающие данные: [указать ...].
 Только JSON:
-{{"title":"...","meta":{{"org":"Министерство образования","school":"[учебное заведение]","author":"[ФИО]","teacher":"[преподаватель]","city":"[город]","year":"2026"}},"sections":[{{"title":"Введение","content":"абзац1\\n\\nабзац2"}}]}}""")
+{{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\\n\\nабзац2"}}]}}""")
     try:
-        content = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
-    except Exception:
+        content = extract_json(raw)
+        if not isinstance(content.get("sections"), list) or not content["sections"]:
+            raise ValueError("В ответе модели нет разделов документа")
+    except Exception as e:
+        print("Word JSON parse error:", e)
+        finish_job(uid)
         await m.answer("Не собрал текст. Попробуй ещё раз.", reply_markup=main_kb())
         await state.clear()
         return
 
-    docx_path = f"doc_{uid}.docx"
-    build_word(
-        docx_path,
-        content.get("title", "Документ"),
-        content.get("sections", []),
-        kind,
-        content.get("meta") or {}
-    )
-
-    pdf_path = f"doc_{uid}.pdf"
-    pdf = canvas.Canvas(pdf_path, pagesize=A4)
-    w, h = A4
-    fn, fb = "Helvetica", "Helvetica-Bold"
     try:
-        pdfmetrics.registerFont(TTFont("DejaVu", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
-        pdfmetrics.registerFont(TTFont("DejaVuBold", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
-        fn, fb = "DejaVu", "DejaVuBold"
-    except Exception:
-        pass
-    pdf.setFont(fb, 14)
-    pdf.drawString(40, h - 50, content.get("title", "")[:65])
-    y = h - 80
-    for s in content.get("sections", []):
-        if y < 70:
-            pdf.showPage()
-            y = h - 50
-        pdf.setFont(fb, 11)
-        pdf.drawString(40, y, (s.get("title") or "")[:70])
-        y -= 16
-        pdf.setFont(fn, 9)
-        text = (s.get("content") or "")[:400]
-        while text:
-            if y < 50:
+        docx_path = f"/tmp/doc_{uid}.docx"
+        build_word(
+            docx_path,
+            content.get("title", "Документ"),
+            content.get("sections", []),
+            kind,
+            content.get("meta") or {}
+        )
+
+        pdf_path = f"/tmp/doc_{uid}.pdf"
+        pdf = canvas.Canvas(pdf_path, pagesize=A4)
+        w, h = A4
+        fn, fb = register_pdf_fonts()
+
+        def wrap_lines(text, font, size, max_width):
+            """Переносит текст по словам, а не по количеству символов,
+            чтобы слова не рвались посередине."""
+            words = text.split()
+            lines, cur = [], ""
+            for word in words:
+                test = f"{cur} {word}".strip()
+                if pdfmetrics.stringWidth(test, font, size) <= max_width:
+                    cur = test
+                else:
+                    if cur:
+                        lines.append(cur)
+                    cur = word
+            if cur:
+                lines.append(cur)
+            return lines
+
+        pdf.setFont(fb, 14)
+        pdf.drawString(40, h - 50, content.get("title", "")[:65])
+        y = h - 80
+        for s in content.get("sections", []):
+            if y < 70:
                 pdf.showPage()
                 y = h - 50
-            pdf.drawString(40, y, text[:90])
-            text = text[90:]
-            y -= 12
-        y -= 10
-    pdf.save()
+            pdf.setFont(fb, 11)
+            pdf.drawString(40, y, (s.get("title") or "")[:70])
+            y -= 16
+            pdf.setFont(fn, 9)
+            for line in wrap_lines((s.get("content") or "")[:2000], fn, 9, w - 80):
+                if y < 50:
+                    pdf.showPage()
+                    y = h - 50
+                    pdf.setFont(fn, 9)
+                pdf.drawString(40, y, line)
+                y -= 12
+            y -= 10
+        pdf.save()
 
-    await m.answer_document(FSInputFile(docx_path), caption="📄 Word — этот файл можно править")
-    await m.answer_document(FSInputFile(pdf_path), caption="📄 PDF-копия")
-    u["generations"] += 1
-    u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
-    await m.answer("Документ готов ✅", reply_markup=main_kb())
-    await state.clear()
+        await m.answer_document(FSInputFile(docx_path), caption="📄 Word — этот файл можно править")
+        await m.answer_document(FSInputFile(pdf_path), caption="📄 PDF-копия")
+        u["generations"] += 1
+        u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
+        for p in (docx_path, pdf_path):
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+        await m.answer("Документ готов ✅", reply_markup=main_kb())
+        await state.clear()
+    finally:
+        finish_job(uid)
+
+
+@dp.message(Form.waiting_word_confirm)
+async def waiting_word_confirm_fallback(m: Message, state: FSMContext):
+    await m.answer(
+        "Не понял. Выбери действие кнопкой ниже, или напиши /cancel, чтобы начать заново.",
+        reply_markup=word_confirm_kb()
+    )
 
 
 @dp.message(F.text.in_(["Моя история", "📁 Моя история"]))
@@ -1028,10 +1341,34 @@ async def grant(m: Message):
         return
     try:
         uid = int(m.text.split()[1])
-        get_user(uid)["plan"] = "premium"
-        await m.answer(f"Доступ выдан пользователю {uid}")
-    except Exception:
+        u = get_user(uid)
+        u["plan"] = "premium"
+        u["generations"] = 0
+        await m.answer(f"Доступ выдан пользователю {uid}, счётчик генераций сброшен")
+    except (IndexError, ValueError):
         await m.answer("Формат: /grant user_id")
+
+
+@dp.errors()
+async def global_error_handler(event):
+    """Подстраховка на случай непредвиденных ошибок вне двух основных
+    обработчиков (те уже защищены через try/finally выше и сами снимают
+    busy). Здесь — просто не даём боту молчать и на всякий случай ещё раз
+    снимаем блокировку, если получится определить пользователя."""
+    print("Необработанная ошибка:", repr(event.exception))
+    uid = None
+    update = getattr(event, "update", None)
+    msg = getattr(update, "message", None) or getattr(update, "callback_query", None)
+    if msg is not None:
+        user = getattr(msg, "from_user", None)
+        uid = getattr(user, "id", None)
+    if uid is not None:
+        try:
+            finish_job(uid)
+            await bot.send_message(uid, "Что-то пошло не так. Попробуй ещё раз или напиши /cancel.")
+        except Exception as e:
+            print("Не смог уведомить пользователя об ошибке:", e)
+    return True
 
 
 async def main():
