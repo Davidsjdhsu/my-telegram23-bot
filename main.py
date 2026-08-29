@@ -463,6 +463,20 @@ ANTI_AI_DETECTOR_STYLE = (
     "а не шаблонная академическая гладкость."
 )
 
+# Минимальный суммарный объём (в словах) для проверки после генерации - см.
+# комментарий у WORD_MIN_TOTAL_WORDS.get(...) в word_build. Соответствует нижней
+# границе из length_hint, но отдельной константой, чтобы не парсить текст промпта.
+WORD_MIN_TOTAL_WORDS = {
+    ("coursework", "long"): 6000,
+    ("coursework", "short"): 2000,
+    ("referat", "long"): 3000,
+    ("referat", "short"): 1200,
+    ("report", "long"): 1500,
+    ("report", "short"): 600,
+    ("essay", "long"): 1500,
+    ("essay", "short"): 600,
+}
+
 WORD_CATEGORIES = {
     "physical": {
         "title": "👤 Для физлиц",
@@ -1918,6 +1932,36 @@ async def word_build(m: Message, state: FSMContext):
         await m.answer("Не собрал текст. Попробуй ещё раз.", reply_markup=main_kb())
         await state.clear()
         return
+
+    # Числовые ориентиры по объёму в промпте модель выполняет непоследовательно -
+    # может уложиться в цель по одному разделу и заметно недобрать по другим,
+    # так что итоговый документ всё равно выходит в разы короче нужного. Вместо
+    # того чтобы полагаться на то, что промпт сработает с первого раза, меряем
+    # фактический объём и, если он далеко от цели, просим модель один раз
+    # дописать черновик подробнее - раздел за разделом, отталкиваясь от уже
+    # готового текста (модели обычно проще "дописать", чем "написать длинно с нуля").
+    min_total = WORD_MIN_TOTAL_WORDS.get((kind, size))
+    if min_total:
+        actual_words = sum(len((b.get("content") or "").split()) for b in content.get("sections", []))
+        if actual_words < min_total * 0.7:
+            await m.answer("Черновик получился короче, чем нужно — дописываю подробнее…")
+            expand_raw = await ask_grok(f"""Вот черновик документа в JSON, он слишком короткий: сейчас примерно {actual_words} слов, а нужно суммарно не менее {min_total}.
+Перепиши каждый раздел из sections (title оставь как есть), сделай текст каждого раздела заметно подробнее:
+добавь конкретные факты, примеры, аргументы, анализ, детали по теме - без воды и без повторов одной мысли разными словами.
+Разделы "Содержание" и "Список литературы"/"Список источников" не удлиняй искусственно, если они уже полные.
+{style_rule}
+Верни ТОЛЬКО JSON той же структуры, без пояснений:
+{{"title":"...","meta":{meta_schema},"sections":[{{"title":"...","content":"..."}}]}}
+Черновик:
+{json.dumps(content, ensure_ascii=False)}""", max_tokens=gen_max_tokens)
+            try:
+                expanded = extract_json(expand_raw)
+                expanded_words = sum(len((b.get("content") or "").split()) for b in expanded.get("sections", []))
+                if isinstance(expanded.get("sections"), list) and expanded["sections"] and expanded_words > actual_words:
+                    content = expanded
+            except Exception as e:
+                print("Word expand parse error:", e)
+                # оставляем исходный (короткий) черновик - лучше отдать что есть, чем ничего
 
     try:
         docx_path = f"/tmp/doc_{uid}.docx"
