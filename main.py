@@ -32,6 +32,24 @@ FONT_CANDIDATES = [
 ]
 
 
+def wrap_lines(text, font, size, max_width):
+    """Переносит текст по словам, а не по количеству символов,
+    чтобы слова не рвались посередине."""
+    words = text.split()
+    lines, cur = [], ""
+    for word in words:
+        test = f"{cur} {word}".strip()
+        if pdfmetrics.stringWidth(test, font, size) <= max_width:
+            cur = test
+        else:
+            if cur:
+                lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines
+
+
 def register_pdf_fonts():
     """Регистрирует шрифт с поддержкой кириллицы для reportlab.
     Сначала пробует шрифт, который лежит рядом со скриптом (папка fonts/),
@@ -364,6 +382,10 @@ def word_kind_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="📄 Обычный документ")],
         [KeyboardButton(text="🎓 Реферат")],
+        [KeyboardButton(text="🎤 Доклад")],
+        [KeyboardButton(text="✍️ Эссе")],
+        [KeyboardButton(text="📓 Конспект")],
+        [KeyboardButton(text="📚 Курсовая работа")],
         [KeyboardButton(text="📝 Договор купли-продажи")],
         [KeyboardButton(text="🏠 Договор аренды")],
         [KeyboardButton(text="💼 Коммерческое предложение")],
@@ -803,20 +825,46 @@ async def confirm_generate(m: Message, state: FSMContext):
         pdf = canvas.Canvas(pdf_path, pagesize=A4)
         w, h = A4
         fn, fb = register_pdf_fonts()
-        pdf.setFont(fb, 14)
-        pdf.drawString(40, h - 50, content.get("title", "")[:65])
-        y = h - 90
+
+        # Титульная "обложка" копии — как в самой презентации.
+        pdf.setFont(fb, 22)
+        for line in wrap_lines(content.get("title", "Презентация"), fb, 22, w - 80):
+            pdf.drawString(40, h - 90, line)
+            break  # заголовок короткий по промпту, одной строки почти всегда достаточно
+        pdf.setFont(fn, 11)
+        pdf.drawString(40, h - 115, "Текстовая копия презентации")
+        pdf.showPage()
+
+        y = h - 60
         for i, s in enumerate(slides_data, 1):
-            if y < 70:
+            if y < 100:
                 pdf.showPage()
-                y = h - 50
-            pdf.setFont(fb, 11)
-            pdf.drawString(40, y, f"{i}. {s.get('title', '')[:70]}")
-            y -= 20
+                y = h - 60
+            pdf.setFont(fb, 14)
+            for line in wrap_lines(f"{i}. {s.get('title', '')}", fb, 14, w - 80):
+                if y < 60:
+                    pdf.showPage()
+                    y = h - 60
+                    pdf.setFont(fb, 14)
+                pdf.drawString(40, y, line)
+                y -= 18
+            y -= 6
+            pdf.setFont(fn, 11)
+            paragraphs = [x.strip() for x in (s.get("content") or "").split("\n") if x.strip()]
+            for para in paragraphs:
+                for line in wrap_lines(para, fn, 11, w - 80):
+                    if y < 60:
+                        pdf.showPage()
+                        y = h - 60
+                        pdf.setFont(fn, 11)
+                    pdf.drawString(40, y, line)
+                    y -= 15
+                y -= 8
+            y -= 14
         pdf.save()
 
         await m.answer_document(FSInputFile(pptx_path), caption="📊 PPTX — открывай этот файл")
-        await m.answer_document(FSInputFile(pdf_path), caption="📄 PDF — текстовая копия без фото")
+        await m.answer_document(FSInputFile(pdf_path), caption="📄 PDF — полная текстовая копия (без фото)")
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
         for p in (cover_src, cover_img, pptx_path, pdf_path, *raw_sources, *[f for pair in images if pair for f in pair]):
@@ -913,6 +961,48 @@ def build_word(path, title, sections, kind="doc", meta=None):
         _p(doc, f"{meta.get('city') or '[Город]'} {meta.get('year') or '2026'}", 14, align=WD_ALIGN_PARAGRAPH.CENTER)
         doc.add_page_break()
         _body(doc, sections, indent=True, head_center=True)
+
+    elif kind == "coursework":
+        sec.left_margin = Cm(3)
+        sec.right_margin = Cm(1.5)
+        _p(doc, meta.get("org") or "Министерство образования", 14, align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
+        _p(doc, meta.get("school") or "[Название учебного заведения]", 14, align=WD_ALIGN_PARAGRAPH.CENTER)
+        if meta.get("specialty"):
+            _p(doc, f"Специальность: {meta.get('specialty')}", 12, align=WD_ALIGN_PARAGRAPH.CENTER)
+        for _ in range(4):
+            doc.add_paragraph()
+        _p(doc, "КУРСОВАЯ РАБОТА", 20, True, WD_ALIGN_PARAGRAPH.CENTER, after=8)
+        _p(doc, title, 16, True, WD_ALIGN_PARAGRAPH.CENTER)
+        for _ in range(6):
+            doc.add_paragraph()
+        _p(doc, f"Выполнил: {meta.get('author') or '[ФИО студента]'}", 14, align=WD_ALIGN_PARAGRAPH.RIGHT, after=0)
+        _p(doc, f"Научный руководитель: {meta.get('teacher') or '[ФИО преподавателя]'}", 14, align=WD_ALIGN_PARAGRAPH.RIGHT)
+        for _ in range(6):
+            doc.add_paragraph()
+        _p(doc, f"{meta.get('city') or '[Город]'} {meta.get('year') or '2026'}", 14, align=WD_ALIGN_PARAGRAPH.CENTER)
+        doc.add_page_break()
+        _body(doc, sections, indent=True, head_center=True)
+
+    elif kind == "report":
+        if meta.get("school") or meta.get("author"):
+            _p(doc, meta.get("school") or "", 11, align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
+            _p(doc, f"Выполнил: {meta.get('author')}" if meta.get("author") else "", 11, align=WD_ALIGN_PARAGRAPH.CENTER, after=10)
+        _p(doc, "ДОКЛАД", 12, True, WD_ALIGN_PARAGRAPH.CENTER, after=0)
+        _p(doc, title, 18, True, WD_ALIGN_PARAGRAPH.CENTER, before=4, after=14)
+        _body(doc, sections, indent=True, head_center=False)
+
+    elif kind == "essay":
+        if meta.get("school") or meta.get("author"):
+            _p(doc, meta.get("school") or "", 11, align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
+            _p(doc, f"{meta.get('author')}" if meta.get("author") else "", 11, align=WD_ALIGN_PARAGRAPH.CENTER, after=10)
+        _p(doc, "ЭССЕ", 12, True, WD_ALIGN_PARAGRAPH.CENTER, after=0)
+        _p(doc, title, 18, True, WD_ALIGN_PARAGRAPH.CENTER, before=4, after=14)
+        _body(doc, sections, indent=True, head_center=False)
+
+    elif kind == "notes":
+        _p(doc, "КОНСПЕКТ", 12, True, WD_ALIGN_PARAGRAPH.CENTER, after=0)
+        _p(doc, title, 18, True, WD_ALIGN_PARAGRAPH.CENTER, before=4, after=14)
+        _body(doc, sections, indent=False, head_center=False)
 
     elif kind in ("dkp", "rent"):
         cap = "ДОГОВОР КУПЛИ-ПРОДАЖИ" if kind == "dkp" else "ДОГОВОР АРЕНДЫ"
@@ -1051,6 +1141,14 @@ async def word_kind(m: Message, state: FSMContext):
     kind = "doc"
     if "реферат" in t:
         kind = "referat"
+    elif "доклад" in t:
+        kind = "report"
+    elif "эссе" in t:
+        kind = "essay"
+    elif "конспект" in t:
+        kind = "notes"
+    elif "курсов" in t:
+        kind = "coursework"
     elif "купл" in t:
         kind = "dkp"
     elif "аренд" in t:
@@ -1088,6 +1186,22 @@ WORD_KIND_HINTS = {
     "referat": {
         "ai": "Напиши тему реферата. Также укажи, если знаешь: учебное заведение, свои ФИО, ФИО преподавателя, город и год — иначе оставлю поля пустыми для заполнения.",
         "user": "Пришли текст реферата (или тезисы). Также укажи учебное заведение, свои ФИО, ФИО преподавателя, город и год, если нужно их вставить.",
+    },
+    "report": {
+        "ai": "Напиши тему доклада. Также укажи, если знаешь: учебное заведение, свои ФИО, класс/курс — иначе оставлю поля пустыми для заполнения.",
+        "user": "Пришли текст доклада (или тезисы). Также укажи учебное заведение, свои ФИО и класс/курс, если нужно их вставить.",
+    },
+    "essay": {
+        "ai": "Напиши тему эссе и свою позицию по ней, если она уже есть. Укажи, если знаешь: учебное заведение, свои ФИО.",
+        "user": "Пришли текст эссе (или тезисы, свои мысли по теме). Укажи учебное заведение и свои ФИО, если нужно их вставить.",
+    },
+    "notes": {
+        "ai": "Напиши тему или раздел, по которому нужен конспект (например: конспект лекции по клеточной биологии).",
+        "user": "Пришли материал, по которому нужно сделать конспект — я структурирую его в сжатом виде по пунктам.",
+    },
+    "coursework": {
+        "ai": "Напиши тему курсовой работы. Укажи, если знаешь: учебное заведение, специальность, свои ФИО, ФИО научного руководителя, город и год.",
+        "user": "Пришли текст или тезисы курсовой работы. Укажи учебное заведение, специальность, свои ФИО, ФИО научного руководителя, город и год, если нужно их вставить.",
     },
     "dkp": {
         "ai": "Напиши, что покупается/продаётся (например: продажа автомобиля). Укажи, если знаешь: ФИО и паспортные данные продавца и покупателя, точное описание вещи, цену, порядок оплаты, дату и место.",
@@ -1148,6 +1262,24 @@ async def word_mode_user(m: Message, state: FSMContext):
     await state.set_state(Form.waiting_word_text)
 
 
+# Выбор объёма (короткий/средний/подробный) имеет смысл только для содержательных
+# документов вроде реферата, где объём — это реальный творческий параметр.
+# Для юридических документов (договоров, доверенностей, актов и т.п.) объём определяется
+# их обязательной структурой по ГК РФ, а не пожеланием пользователя — выбор объёма там
+# выглядит как бессмыслица и предлагать его не нужно.
+WORD_SIZE_KINDS = {"doc", "referat", "report", "essay", "notes", "coursework"}
+
+
+async def word_after_input(m: Message, state: FSMContext):
+    data = await state.get_data()
+    kind = data.get("word_kind", "doc")
+    if kind in WORD_SIZE_KINDS:
+        await m.answer("Какой объём?", reply_markup=word_size_kb())
+        await state.set_state(Form.waiting_word_size)
+    else:
+        await word_build_draft(m, state, data, "medium")
+
+
 @dp.message(Form.waiting_word_topic)
 async def word_topic(m: Message, state: FSMContext):
     text = m.text or ""
@@ -1155,8 +1287,7 @@ async def word_topic(m: Message, state: FSMContext):
         await m.answer("Слишком длинно. Максимум 500 символов.")
         return
     await state.update_data(topic=text)
-    await m.answer("Какой объём?", reply_markup=word_size_kb())
-    await state.set_state(Form.waiting_word_size)
+    await word_after_input(m, state)
 
 
 @dp.message(Form.waiting_word_text)
@@ -1169,19 +1300,10 @@ async def word_user_text(m: Message, state: FSMContext):
         await m.answer("Слишком длинно. Сократи до 4000 символов.")
         return
     await state.update_data(user_text=text, topic=text[:80].replace("\n", " "))
-    await m.answer("Какой объём?", reply_markup=word_size_kb())
-    await state.set_state(Form.waiting_word_size)
+    await word_after_input(m, state)
 
 
-@dp.message(Form.waiting_word_size)
-async def word_size(m: Message, state: FSMContext):
-    t = (m.text or "").lower()
-    size = "short"
-    if "подр" in t:
-        size = "long"
-    elif "сред" in t:
-        size = "medium"
-    data = await state.get_data()
+async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str):
     await state.update_data(word_size=size)
     await m.answer("Собираю черновик…", reply_markup=ReplyKeyboardRemove())
     size_map = {"short": "1–2 страницы, коротко", "medium": "2–4 страницы, нормально", "long": "4–6 страниц, подробно"}
@@ -1189,6 +1311,10 @@ async def word_size(m: Message, state: FSMContext):
     kind_name = {
         "doc": "обычный документ",
         "referat": "реферат для университета",
+        "report": "доклад для школы/университета: краткое вступление, основная часть по теме с фактами, короткий вывод — компактный и по существу, без лишней воды",
+        "essay": "эссе: личная позиция автора по теме, аргументы и примеры, живой связный текст с логикой рассуждения, не сухой пересказ фактов",
+        "notes": "конспект: сжатое структурированное изложение материала по пунктам и подпунктам, ключевые определения и факты, без художественных отступлений",
+        "coursework": "курсовая работа: введение с целью и задачами, 2-3 главы с теоретической и практической частью, заключение с выводами, список литературы — как черновик-каркас под доработку",
         "dkp": "договор купли-продажи: предмет договора, цена и порядок расчётов, права и обязанности сторон, порядок передачи товара, ответственность сторон, срок действия",
         "rent": "договор аренды: предмет аренды, срок, размер и порядок внесения арендной платы, права и обязанности сторон, порядок передачи и возврата имущества, ответственность",
         "offer": "коммерческое предложение: цепляющий заголовок с конкретной выгодой (не 'КП от компании X'), о компании коротко, суть предложения и что входит, цена и условия оплаты, сроки и этапы работы, почему выбирают нас, контакты с призывом к действию",
@@ -1213,12 +1339,24 @@ async def word_size(m: Message, state: FSMContext):
     if grok_failed(sample):
         await m.answer(
             "Не получилось получить ответ от нейросети. Попробуй ещё раз через минуту.",
-            reply_markup=word_size_kb()
+            reply_markup=word_size_kb() if kind in WORD_SIZE_KINDS else word_confirm_kb()
         )
         return
     await state.update_data(sample=sample)
     await m.answer(f"Черновик готов ✅\n\n{sample}\n\nЕсли всё ок — собираем файл.", reply_markup=word_confirm_kb())
     await state.set_state(Form.waiting_word_confirm)
+
+
+@dp.message(Form.waiting_word_size)
+async def word_size(m: Message, state: FSMContext):
+    t = (m.text or "").lower()
+    size = "short"
+    if "подр" in t:
+        size = "long"
+    elif "сред" in t:
+        size = "medium"
+    data = await state.get_data()
+    await word_build_draft(m, state, data, size)
 
 
 @dp.message(Form.waiting_word_confirm, F.text.in_(["Изменить запрос", "✏️ Изменить запрос"]))
@@ -1281,6 +1419,10 @@ async def word_build(m: Message, state: FSMContext):
     kind_name = {
         "doc": "обычный документ",
         "referat": "реферат для университета. Титульный лист, содержание, введение, 2–3 главы, заключение, список литературы. Текст живой, связный, как для сдачи преподавателю, не набор абзацев.",
+        "report": "доклад для школы/университета. Титульный лист (упрощённый), краткое вступление, основная часть по теме с конкретными фактами, короткий вывод. Компактно и по существу, рассчитан на устное зачитывание.",
+        "essay": "эссе. Без титульного листа или с упрощённым. Личная позиция автора, аргументированное рассуждение с примерами, живой связный текст, не сухой пересказ.",
+        "notes": "конспект. Без титульного листа. Сжатое изложение материала по пунктам и подпунктам, ключевые определения выделены, без художественных отступлений — удобно для повторения перед экзаменом.",
+        "coursework": "курсовая работа. Титульный лист, содержание, введение с целью и задачами, 2-3 главы (теоретическая и практическая часть), заключение с выводами, список литературы. Это черновик-каркас под доработку с научным руководителем, а не финальная работа.",
         "dkp": "договор купли-продажи: предмет договора, цена и порядок расчётов, права и обязанности сторон, порядок передачи товара, ответственность сторон, срок действия и заключительные положения",
         "rent": "договор аренды: предмет аренды с точным описанием, срок аренды, размер и порядок внесения арендной платы, права и обязанности сторон, порядок передачи и возврата имущества, ответственность сторон",
         "offer": "коммерческое предложение уровня 2026 года: заголовок с конкретной выгодой или болью клиента (не 'КП от компании'), короткое описание сути в 1-2 абзаца, о компании, что именно входит в предложение, стоимость и условия оплаты, сроки и этапы, почему стоит выбрать именно нас (доказательства, кейсы), контакты и призыв к действию с дедлайном",
@@ -1297,6 +1439,10 @@ async def word_build(m: Message, state: FSMContext):
     # и в документе оставались заглушки, даже если пользователь их указал.
     META_SCHEMAS = {
         "referat": '{"org":"Министерство образования","school":"[учебное заведение]","author":"[ФИО студента]","teacher":"[ФИО преподавателя]","city":"[город]","year":"2026"}',
+        "coursework": '{"org":"Министерство образования","school":"[учебное заведение]","specialty":"[специальность]","author":"[ФИО студента]","teacher":"[ФИО научного руководителя]","city":"[город]","year":"2026"}',
+        "report": '{"school":"[учебное заведение]","author":"[ФИО, класс/курс]"}',
+        "essay": '{"school":"[учебное заведение]","author":"[ФИО]"}',
+        "notes": '{}',
         "dkp": '{"city":"[город]","date":"«___» __________ 20___ г."}',
         "rent": '{"city":"[город]","date":"«___» __________ 20___ г."}',
         "offer": '{"number":"[номер КП]"}',
@@ -1348,23 +1494,6 @@ async def word_build(m: Message, state: FSMContext):
         pdf = canvas.Canvas(pdf_path, pagesize=A4)
         w, h = A4
         fn, fb = register_pdf_fonts()
-
-        def wrap_lines(text, font, size, max_width):
-            """Переносит текст по словам, а не по количеству символов,
-            чтобы слова не рвались посередине."""
-            words = text.split()
-            lines, cur = [], ""
-            for word in words:
-                test = f"{cur} {word}".strip()
-                if pdfmetrics.stringWidth(test, font, size) <= max_width:
-                    cur = test
-                else:
-                    if cur:
-                        lines.append(cur)
-                    cur = word
-            if cur:
-                lines.append(cur)
-            return lines
 
         pdf.setFont(fb, 14)
         pdf.drawString(40, h - 50, content.get("title", "")[:65])
