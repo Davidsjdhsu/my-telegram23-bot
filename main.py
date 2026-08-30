@@ -20,6 +20,8 @@ from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
+from pptx.chart.data import CategoryChartData
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
@@ -421,6 +423,102 @@ def txt(slide, l, t, w, h, text, size, color, bold=False):
     p.font.color.rgb = RGBColor(*color)
     p.font.name = "Calibri"
     return box
+
+
+def add_chart(slide, l, t, w, h, chart_data_dict, colors):
+    """Рисует нативный график PowerPoint (bar/line/pie) на слайде вместо фото.
+    chart_data_dict: {"chart_type": "bar"/"line"/"pie", "title": "...",
+    "categories": [...], "series": [{"name":..., "values":[...]}]}.
+    Используется только когда модель сама решила, что тема подразумевает цифры -
+    см. инструкцию про ключ "chart" в промпте _build_presentation."""
+    ctype = chart_data_dict.get("chart_type", "bar")
+    cats = chart_data_dict.get("categories") or []
+    series_list = chart_data_dict.get("series") or []
+    if not cats or not series_list:
+        return None
+
+    cd = CategoryChartData()
+    cd.categories = cats
+    for s in series_list:
+        cd.add_series(s.get("name", ""), s.get("values", []))
+
+    xl_type = {
+        "bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
+        "line": XL_CHART_TYPE.LINE_MARKERS,
+        "pie": XL_CHART_TYPE.PIE,
+    }.get(ctype, XL_CHART_TYPE.COLUMN_CLUSTERED)
+
+    graphic_frame = slide.shapes.add_chart(xl_type, Inches(l), Inches(t), Inches(w), Inches(h), cd)
+    chart = graphic_frame.chart
+
+    # чем уже панель под график - тем мельче шрифты, иначе легенда/подписи не влезают
+    compact = w < 5.0
+    title_sz, legend_sz, label_sz, tick_sz = (13, 9, 9, 9) if compact else (15, 11, 11, 10)
+
+    palette = [colors["line"], colors["mid"], colors["mute"], colors["ink"]]
+
+    if chart_data_dict.get("title"):
+        chart.has_title = True
+        chart.chart_title.text_frame.text = chart_data_dict["title"]
+        for run in chart.chart_title.text_frame.paragraphs[0].runs:
+            run.font.size = Pt(title_sz)
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(*colors["ink"])
+            run.font.name = "Calibri"
+    else:
+        chart.has_title = False
+
+    is_pie = ctype == "pie"
+    multi_series = len(series_list) > 1
+
+    if is_pie or multi_series:
+        chart.has_legend = True
+        chart.legend.position = XL_LEGEND_POSITION.BOTTOM
+        chart.legend.include_in_layout = False
+        chart.legend.font.size = Pt(legend_sz)
+        chart.legend.font.color.rgb = RGBColor(*colors["mid"])
+        chart.legend.font.name = "Calibri"
+    else:
+        chart.has_legend = False
+
+    plot = chart.plots[0]
+    plot.has_data_labels = True
+    dl = plot.data_labels
+    dl.font.size = Pt(label_sz)
+    dl.font.color.rgb = RGBColor(*colors["ink"])
+    dl.font.name = "Calibri"
+    if is_pie:
+        dl.number_format = '0%'
+        dl.number_format_is_linked = False
+        dl.show_percentage = True
+        dl.show_value = False
+    else:
+        dl.show_value = True
+
+    for i, series in enumerate(chart.series):
+        color = palette[i % len(palette)]
+        if is_pie:
+            for j, point in enumerate(series.points):
+                point.format.fill.solid()
+                point.format.fill.fore_color.rgb = RGBColor(*palette[j % len(palette)])
+        elif ctype == "line":
+            series.format.line.color.rgb = RGBColor(*color)
+            series.format.line.width = Pt(2.5)
+        else:
+            series.format.fill.solid()
+            series.format.fill.fore_color.rgb = RGBColor(*color)
+
+    if not is_pie:
+        cat_ax = chart.category_axis
+        val_ax = chart.value_axis
+        for ax in (cat_ax, val_ax):
+            ax.tick_labels.font.size = Pt(tick_sz)
+            ax.tick_labels.font.color.rgb = RGBColor(*colors["mute"])
+            ax.tick_labels.font.name = "Calibri"
+            ax.format.line.color.rgb = RGBColor(*colors["mute"])
+        val_ax.has_major_gridlines = False
+
+    return graphic_frame
 
 
 def main_kb():
@@ -948,7 +1046,15 @@ async def _build_presentation(m: Message, state: FSMContext):
     - Между слайдами не повторяй одну и ту же структуру фразы - разнообразь подачу (факт, вопрос, сравнение, история).
     - Никаких общих фраз без содержания ("это важная тема", "мир меняется") - только конкретика: цифры, имена,
       примеры, детали, если они есть в материале или логично следуют из темы.
-    - Фото: описание живого кадра (реальная сцена, человек, объект, место), не стоковый шаблон и не абстракция."""
+    - Фото: описание живого кадра (реальная сцена, человек, объект, место), не стоковый шаблон и не абстракция.
+    - График (ключ "chart", НЕОБЯЗАТЕЛЬНЫЙ): добавляй его ТОЛЬКО если тема или конкретный слайд подразумевает
+      цифры, статистику, доли, сравнение или динамику по времени - и не больше 1-2 слайдов с графиком на всю
+      презентацию. Если тема не про цифры (например: питомцы, отношения, психология, искусство, литература,
+      рецепты, путешествия как впечатление) - НЕ добавляй chart вообще, у слайда остаётся только фото.
+      Формат: "chart": {{"chart_type": "bar" | "line" | "pie", "title": "короткий заголовок графика",
+      "categories": ["...", "..."], "series": [{{"name": "...", "values": [12, 34, ...]}}]}} - придумай
+      правдоподобные цифры по теме. У слайда с графиком image_prompt всё равно укажи (на случай, если график
+      не соберётся), но использоваться будет либо график, либо фото, не оба сразу."""
             raw = await ask_grok(f"""Собери уникальную презентацию из текста пользователя.
     Исправь ошибки, сохрани смысл и все факты из текста.
     Текст:
@@ -959,8 +1065,8 @@ async def _build_presentation(m: Message, state: FSMContext):
     Угол: {angle}
     Стиль: {theme_name}
     {common_rules}
-    Только JSON:
-    {{"title":"...","slides":[{{"title":"...","content":"абзац1\n\nабзац2","image_prompt":"unique cinematic scene"}}]}}""")
+    Только JSON (ключ "chart" добавляй лишь на 1-2 слайдах и только если тема того требует, иначе не пиши его вовсе):
+    {{"title":"...","slides":[{{"title":"...","content":"абзац1\n\nабзац2","image_prompt":"unique cinematic scene","chart":null}}]}}""")
         else:
             common_rules = """
     Правила качества (обязательны для каждого слайда):
@@ -971,7 +1077,15 @@ async def _build_presentation(m: Message, state: FSMContext):
     - Между слайдами не повторяй одну и ту же структуру фразы - разнообразь подачу (факт, вопрос, сравнение, история).
     - Никаких общих фраз без содержания ("это важная тема", "мир меняется") - только конкретика: цифры, имена,
       примеры, детали, логично следующие из темы.
-    - Фото: описание живого кадра (реальная сцена, человек, объект, место), не стоковый шаблон и не абстракция."""
+    - Фото: описание живого кадра (реальная сцена, человек, объект, место), не стоковый шаблон и не абстракция.
+    - График (ключ "chart", НЕОБЯЗАТЕЛЬНЫЙ): добавляй его ТОЛЬКО если тема или конкретный слайд подразумевает
+      цифры, статистику, доли, сравнение или динамику по времени - и не больше 1-2 слайдов с графиком на всю
+      презентацию. Если тема не про цифры (например: питомцы, отношения, психология, искусство, литература,
+      рецепты, путешествия как впечатление) - НЕ добавляй chart вообще, у слайда остаётся только фото.
+      Формат: "chart": {{"chart_type": "bar" | "line" | "pie", "title": "короткий заголовок графика",
+      "categories": ["...", "..."], "series": [{{"name": "...", "values": [12, 34, ...]}}]}} - придумай
+      правдоподобные цифры по теме. У слайда с графиком image_prompt всё равно укажи (на случай, если график
+      не соберётся), но использоваться будет либо график, либо фото, не оба сразу."""
             raw = await ask_grok(f"""Собери уникальную презентацию уровня лучшего журнала на эту тему,
     найди неочевидный и интересный угол, избегай банальностей.
     Тема: {data.get('topic')}
@@ -980,8 +1094,8 @@ async def _build_presentation(m: Message, state: FSMContext):
     Угол: {angle}
     Стиль: {theme_name}
     {common_rules}
-    Только JSON:
-    {{"title":"...","slides":[{{"title":"...","content":"абзац1\n\nабзац2","image_prompt":"unique cinematic scene"}}]}}""")
+    Только JSON (ключ "chart" добавляй лишь на 1-2 слайдах и только если тема того требует, иначе не пиши его вовсе):
+    {{"title":"...","slides":[{{"title":"...","content":"абзац1\n\nабзац2","image_prompt":"unique cinematic scene","chart":null}}]}}""")
 
         try:
             content = extract_json(raw)
@@ -1014,9 +1128,29 @@ async def _build_presentation(m: Message, state: FSMContext):
             cover(cover_own or cover_src, cover_wide, 1920, 1080)
             cover_img = cover_wide
 
+        # Если модель дала валидный chart для слайда - фото для него не генерируем вообще
+        # (график займёт то же место в раскладке, экономим время и токены на генерацию картинки).
+        MAX_CHARTS = 2
+        charts = []
+        chart_count = 0
+        for s in slides_data:
+            c = s.get("chart")
+            valid = (
+                isinstance(c, dict) and c.get("categories") and c.get("series")
+                and chart_count < MAX_CHARTS
+            )
+            if valid:
+                chart_count += 1
+                charts.append(c)
+            else:
+                charts.append(None)
+
         images = []
         raw_sources = []
         for i, s in enumerate(slides_data):
+            if charts[i]:
+                images.append(None)
+                continue
             own = user_photos.pop(0) if user_photos else None
             if own:
                 src, ok = own, True
@@ -1046,8 +1180,11 @@ async def _build_presentation(m: Message, state: FSMContext):
             rect(slide, 0, 0, 13.333, 7.5, colors["bg"])
             layout = layouts[idx % 3]
             img = images[idx] if idx < len(images) else None
+            chart_data = charts[idx] if idx < len(charts) else None
             if layout == 0:
-                if img:
+                if chart_data:
+                    add_chart(slide, 0.5, 0.6, 5.4, 6.3, chart_data, colors)
+                elif img:
                     slide.shapes.add_picture(img[1], Inches(0), Inches(0), width=Inches(6.4), height=Inches(7.5))
                 txt(slide, 7.05, 1.5, 5.5, 1.6, s.get("title", ""), 30, colors["ink"], True)
                 rect(slide, 7.05, 3.25, 0.85, 0.05, colors["line"])
@@ -1064,7 +1201,9 @@ async def _build_presentation(m: Message, state: FSMContext):
                     p.space_after = Pt(16)
                 txt(slide, 7.05, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
             elif layout == 1:
-                if img:
+                if chart_data:
+                    add_chart(slide, 0.7, 0.35, 11.9, 4.0, chart_data, colors)
+                elif img:
                     slide.shapes.add_picture(img[0], Inches(0), Inches(0), width=Inches(13.333), height=Inches(4.55))
                 txt(slide, 0.7, 4.85, 12, 1.0, s.get("title", ""), 28, colors["ink"], True)
                 box = slide.shapes.add_textbox(Inches(0.7), Inches(5.85), Inches(12), Inches(1.2))
@@ -1086,7 +1225,9 @@ async def _build_presentation(m: Message, state: FSMContext):
                 p.font.size = Pt(16)
                 p.font.color.rgb = RGBColor(*colors["mid"])
                 p.font.name = "Calibri"
-                if img:
+                if chart_data:
+                    add_chart(slide, 8.5, 1.3, 4.6, 4.7, chart_data, colors)
+                elif img:
                     slide.shapes.add_picture(img[1], Inches(8.7), Inches(1.3), width=Inches(3.9), height=Inches(4.7))
                 txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
 
@@ -1286,6 +1427,27 @@ def _add_table(doc, table_data, size=11):
     doc.add_paragraph()  # отступ после таблицы
 
 
+def _parse_markdown_table(lines):
+    """Модель иногда пишет таблицу markdown-синтаксисом прямо в тексте раздела
+    (| ячейка | ячейка |) вместо структурированного ключа "table" - на такой случай
+    разбираем это защитным парсером и рендерим как настоящую таблицу Word.
+    Возвращает {"headers": [...], "rows": [[...], ...]} или None, если это не таблица."""
+    rows = []
+    for ln in lines:
+        ln = ln.strip()
+        if not (ln.startswith("|") and ln.endswith("|") and ln.count("|") >= 3):
+            return None
+        rows.append([c.strip() for c in ln.strip("|").split("|")])
+    if len(rows) < 2:
+        return None
+    sep = rows[1]
+    if sep and all(set(c) <= set("-: ") for c in sep):
+        rows.pop(1)
+    if not rows:
+        return None
+    return {"headers": rows[0], "rows": rows[1:]}
+
+
 def _body(doc, sections, indent=True, head_center=False, size=12, line=1.15, first=1.25, head_size=13):
     for block in sections or []:
         head = (block.get("title") or "").strip()
@@ -1296,8 +1458,20 @@ def _body(doc, sections, indent=True, head_center=False, size=12, line=1.15, fir
                 align=WD_ALIGN_PARAGRAPH.CENTER if head_center else WD_ALIGN_PARAGRAPH.LEFT,
                 before=10, after=6
             )
-        for para in [x.strip() for x in body.split("\n") if x.strip()]:
-            _p(doc, para, size, first=first if indent else None, after=6, line=line)
+        raw_paras = [x.strip() for x in body.split("\n") if x.strip()]
+        i = 0
+        while i < len(raw_paras):
+            if raw_paras[i].startswith("|") and raw_paras[i].endswith("|"):
+                j = i
+                while j < len(raw_paras) and raw_paras[j].startswith("|") and raw_paras[j].endswith("|"):
+                    j += 1
+                md_table = _parse_markdown_table(raw_paras[i:j])
+                if md_table:
+                    _add_table(doc, md_table, size=size - 1 if size > 9 else size)
+                    i = j
+                    continue
+            _p(doc, raw_paras[i], size, first=first if indent else None, after=6, line=line)
+            i += 1
         table_data = block.get("table")
         if isinstance(table_data, dict):
             _add_table(doc, table_data, size=size - 1 if size > 9 else size)
@@ -2107,8 +2281,11 @@ async def word_build(m: Message, state: FSMContext):
             "и рекомендации по теме - не пересказывай содержание глав.\n"
             "Раздел со списком литературы должен содержать не менее 5 источников "
             "(автор/название/год/издательство или ссылка), оформленных по ГОСТ.\n"
-            "Если в практической/аналитической главе упоминаются конкретные цифры, статистика опроса "
-            "или сравнение показателей - вынеси их в table (см. ниже), а не только описывай текстом."
+            "ОБЯЗАТЕЛЬНО добавь хотя бы одну таблицу (ключ \"table\", см. схему ниже) в практическую/аналитическую "
+            "главу - это часть требований к курсовой/реферату, а не опция. Собери в неё конкретные цифры по теме: "
+            "результаты опроса, статистику, сравнение показателей до/после, данные по годам - придумай "
+            "правдоподобные иллюстративные значения, если реальных нет под рукой (как и с остальным текстом "
+            "черновика). Это требование не выполняется текстовым описанием цифр вместо таблицы."
         )
     raw = await ask_grok(f"""Собери Word: {kind_name}.
 Данные: {data.get('topic')}
@@ -2132,7 +2309,7 @@ async def word_build(m: Message, state: FSMContext):
 данные в таблице могут быть иллюстративными для черновика, как и остальной текст. Таблицы уместны не в каждом
 разделе - добавляй только там, где это реально яснее текста, не в каждый раздел подряд.
 Только JSON:
-{{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\n\nабзац2"}}]}}""", max_tokens=gen_max_tokens)
+{{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\n\nабзац2"}},{{"title":"...","content":"...","table":{{"headers":["...","..."],"rows":[["...","..."]]}}}}]}}""", max_tokens=gen_max_tokens)
     try:
         content = extract_json(raw)
         if not isinstance(content.get("sections"), list) or not content["sections"]:
