@@ -120,6 +120,8 @@ class Form(StatesGroup):
     waiting_theme = State()
     waiting_slides = State()
     waiting_confirm = State()
+    waiting_pres_photo_choice = State()
+    waiting_pres_photos = State()
     waiting_extra = State()
     waiting_style = State()
     waiting_word_category = State()
@@ -452,6 +454,19 @@ def confirm_kb():
         [KeyboardButton(text="➕ Добавить или изменить информацию")],
         [KeyboardButton(text="🎨 Изменить стиль")],
         [KeyboardButton(text="✏️ Изменить тему")]
+    ], resize_keyboard=True)
+
+
+def photo_source_kb():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="✨ Все фото через ИИ")],
+        [KeyboardButton(text="📷 Добавить свои фото")]
+    ], resize_keyboard=True)
+
+
+def photos_done_kb():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="✅ Готово, собери презентацию")]
     ], resize_keyboard=True)
 
 
@@ -847,7 +862,67 @@ async def process_extra(m: Message, state: FSMContext):
 
 
 @dp.message(Form.waiting_confirm, F.text.in_(["Делать полную версию", "✅ Делать полную версию", "делай", "да", "ок"]))
-async def confirm_generate(m: Message, state: FSMContext):
+async def ask_photo_source(m: Message, state: FSMContext):
+    await state.update_data(user_photos=[])
+    await m.answer(
+        "Фото для слайдов сделать через ИИ или использовать свои?\n"
+        "Если фото будет меньше, чем слайдов — оставшиеся бот дорисует сам.",
+        reply_markup=photo_source_kb()
+    )
+    await state.set_state(Form.waiting_pres_photo_choice)
+
+
+@dp.message(Form.waiting_pres_photo_choice, F.text.in_(["Все фото через ИИ", "✨ Все фото через ИИ"]))
+async def photo_source_ai(m: Message, state: FSMContext):
+    await _build_presentation(m, state)
+
+
+@dp.message(Form.waiting_pres_photo_choice, F.text.in_(["Добавить свои фото", "📷 Добавить свои фото"]))
+async def photo_source_own(m: Message, state: FSMContext):
+    await m.answer(
+        "Пришли фото по одному (можно несколько сообщений подряд). Когда закончишь — нажми "
+        "«Готово, собери презентацию».",
+        reply_markup=photos_done_kb()
+    )
+    await state.set_state(Form.waiting_pres_photos)
+
+
+@dp.message(Form.waiting_pres_photos, F.photo)
+async def collect_pres_photo(m: Message, state: FSMContext):
+    data = await state.get_data()
+    photos = data.get("user_photos") or []
+    if len(photos) >= 20:
+        await m.answer("Этого достаточно — дальше можно не присылать, нажми «Готово, собери презентацию».")
+        return
+    uid = m.from_user.id
+    path = f"/tmp/{uid}_userphoto_{len(photos)}_{random.randint(1000, 9999)}.jpg"
+    try:
+        file = await bot.get_file(m.photo[-1].file_id)
+        await bot.download_file(file.file_path, path)
+    except Exception as e:
+        print("Photo download error:", e)
+        await m.answer("Не получилось скачать это фото, пришли ещё раз или пропусти его.")
+        return
+    photos.append(path)
+    await state.update_data(user_photos=photos)
+    await m.answer(f"Фото {len(photos)} получено 📷 Пришли ещё или нажми «Готово, собери презентацию».")
+
+
+@dp.message(Form.waiting_pres_photos, F.text.in_(["Готово, собери презентацию", "✅ Готово, собери презентацию"]))
+async def finish_pres_photos(m: Message, state: FSMContext):
+    data = await state.get_data()
+    if not (data.get("user_photos") or []):
+        await m.answer("Фото пока не пришло. Пришли хотя бы одно или вернись к «Все фото через ИИ».", reply_markup=photos_done_kb())
+        return
+    await _build_presentation(m, state)
+
+
+@dp.message(Form.waiting_pres_photos)
+async def pres_photos_fallback(m: Message, state: FSMContext):
+    await m.answer("Пришли фото 📷 или нажми «Готово, собери презентацию», когда закончишь.", reply_markup=photos_done_kb())
+
+
+async def _build_presentation(m: Message, state: FSMContext):
     data = await state.get_data()
     uid = m.from_user.id
     u = get_user(uid)
@@ -924,22 +999,34 @@ async def confirm_generate(m: Message, state: FSMContext):
         slides_data = content.get("slides", [])
         n = len(slides_data)
 
+        # Свои фото пользователя (если он их прислал) идут в очередь: первое - на обложку,
+        # остальные - по слайдам по порядку; на то, что не хватило, генерируем через ИИ как раньше.
+        user_photos = list(data.get("user_photos") or [])
+
         cover_img = None
         cover_src = f"/tmp/{uid}_cover.png"
-        if await generate_image(f"{content.get('title')}, wide cinematic opening shot, {colors['photo']}", cover_src):
+        cover_own = user_photos.pop(0) if user_photos else None
+        cover_ok = bool(cover_own) or await generate_image(
+            f"{content.get('title')}, wide cinematic opening shot, {colors['photo']}", cover_src
+        )
+        if cover_ok:
             cover_wide = f"/tmp/{uid}_cover_w.png"
-            cover(cover_src, cover_wide, 1920, 1080)
+            cover(cover_own or cover_src, cover_wide, 1920, 1080)
             cover_img = cover_wide
 
         images = []
         raw_sources = []
         for i, s in enumerate(slides_data):
-            src = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}.png"
-            prompt = f"{s.get('image_prompt') or s.get('title')}, {colors['photo']}, unique composition"
-            ok = await generate_image(prompt, src)
+            own = user_photos.pop(0) if user_photos else None
+            if own:
+                src, ok = own, True
+            else:
+                src = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}.png"
+                prompt = f"{s.get('image_prompt') or s.get('title')}, {colors['photo']}, unique composition"
+                ok = await generate_image(prompt, src)
             if ok:
                 raw_sources.append(src)
-                wide, tall = f"{src}_w.png", f"{src}_t.png"
+                wide, tall = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}_w.png", f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}_t.png"
                 cover(src, wide, 1920, 1080)
                 cover(src, tall, 1260, 1500)
                 images.append((wide, tall))
@@ -1052,7 +1139,7 @@ async def confirm_generate(m: Message, state: FSMContext):
         await m.answer_document(FSInputFile(pdf_path, filename=f"{pres_fname}.pdf"), caption="📄 PDF — полная текстовая копия (без фото)")
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
-        for p in (cover_src, cover_img, pptx_path, pdf_path, *raw_sources, *[f for pair in images if pair for f in pair]):
+        for p in (cover_src, cover_own, cover_img, pptx_path, pdf_path, *raw_sources, *[f for pair in images if pair for f in pair]):
             try:
                 if p and os.path.exists(p):
                     os.remove(p)
