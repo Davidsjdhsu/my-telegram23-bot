@@ -13,6 +13,9 @@ from openai import AsyncOpenAI
 from docx import Document
 from docx.shared import Pt as DocxPt, Cm, RGBColor as DocxRGB
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
@@ -32,16 +35,26 @@ FONT_CANDIDATES = [
 ]
 
 
-def safe_filename(title: str, fallback: str = "Документ") -> str:
+def safe_filename(title: str, fallback: str = "Документ", author: str = None) -> str:
     """Делает из темы/заголовка документа безопасное имя файла:
     убирает символы, которые нельзя использовать в имени файла (Windows/Telegram),
     обрезает длину, чтобы не упереться в лимиты, и подставляет fallback, если
-    заголовок пустой."""
+    заголовок пустой. Если передан author (реальное ФИО, не плейсхолдер вида
+    "[ФИО студента]") - добавляет его через тире, чтобы файл не выглядел безлико."""
     import re as _re
-    text = (title or "").strip() or fallback
-    text = _re.sub(r'[\\/:*?"<>|\n\r\t]', " ", text)
-    text = _re.sub(r"\s+", " ", text).strip()
-    text = text[:80].strip() or fallback
+
+    def _clean(s):
+        s = _re.sub(r'[\\/:*?"<>|\n\r\t]', " ", s)
+        return _re.sub(r"\s+", " ", s).strip()
+
+    text = _clean((title or "").strip() or fallback)
+    text = text[:70].strip() or fallback
+    if author:
+        a = _clean(author.strip())
+        if a and not a.startswith("["):  # не подставляем невыполненный плейсхолдер
+            a = a[:40]
+            text = f"{text[:95 - len(a) - 3]} - {a}"
+    text = text[:110].strip() or fallback
     return text
 
 
@@ -1091,6 +1104,101 @@ def _p(doc, text, size=12, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT, before=0, 
     return p
 
 
+def _tabbed_line(doc, parts, tabs_cm=(9, 13), size=12, before=0, after=0):
+    """Строка с элементами по табуляции - для строк вида 'подпись ___ И.О. Фамилия'.
+    parts: список (текст, bold)."""
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = DocxPt(before)
+    p.paragraph_format.space_after = DocxPt(after)
+    for cm in tabs_cm:
+        p.paragraph_format.tab_stops.add_tab_stop(Cm(cm))
+    for i, (text, bold) in enumerate(parts):
+        if i > 0:
+            p.add_run("\t")
+        _run(p, text, size, bold)
+    return p
+
+
+def _student_title_page(doc, kind_label, title, meta):
+    """Титульный лист по образцу техникума/ссуза: жирные лейблы ВЫПОЛНИЛ/ПРОВЕРИЛ/ОЦЕНКА
+    слева, линия подписи с ФИО справа от неё, мелкие подписи (подпись)/(ФИО) под линией."""
+    _p(doc, meta.get("org") or "Министерство образования", 13, align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
+    _p(doc, meta.get("school") or "[Название учебного заведения]", 13, align=WD_ALIGN_PARAGRAPH.CENTER)
+    for _ in range(5):
+        doc.add_paragraph()
+    _p(doc, title, 16, True, WD_ALIGN_PARAGRAPH.CENTER, after=10)
+    _p(doc, kind_label, 14, True, WD_ALIGN_PARAGRAPH.CENTER, after=10)
+    if meta.get("discipline"):
+        _p(doc, f"по предмету/дисциплине: {meta.get('discipline')}", 12, True, WD_ALIGN_PARAGRAPH.CENTER)
+    for _ in range(5):
+        doc.add_paragraph()
+    _p(doc, "ВЫПОЛНИЛ", 12, True, after=0)
+    _tabbed_line(
+        doc,
+        [(f"студент {meta.get('group') or '[группа]'} группы", False), ("__________", False), (meta.get("author") or "И.О. Фамилия", True)],
+        after=0,
+    )
+    _tabbed_line(doc, [("", False), ("(подпись)", False), ("(ФИО)", False)], size=9, after=8)
+    _p(doc, "«___»____________ 20___ г.", 12, before=0, after=16)
+    _p(doc, "ПРОВЕРИЛ", 12, True, after=0)
+    _tabbed_line(
+        doc,
+        [(meta.get("teacher_position") or "[должность]", False), ("__________", False), (meta.get("teacher") or "И.О. Фамилия", True)],
+        after=0,
+    )
+    _tabbed_line(doc, [("", False), ("(подпись)", False), ("(ФИО)", False)], size=9, after=8)
+    doc.add_paragraph()
+    _p(doc, "ОЦЕНКА", 12, True, after=0)
+    _tabbed_line(doc, [("", False), ("__________________________", False)], after=16)
+    _p(doc, "«___»____________ 20___ г.", 12, after=30)
+    _p(doc, f"{meta.get('city') or '[Город]'} {meta.get('year') or '2026'}", 12, align=WD_ALIGN_PARAGRAPH.CENTER)
+    doc.add_page_break()
+
+
+def _set_cell_borders(cell):
+    """Тонкая чёрная рамка у ячейки таблицы - python-docx не даёт это напрямую, только через XML."""
+    tcPr = cell._tc.get_or_add_tcPr()
+    borders = OxmlElement("w:tcBorders")
+    for edge in ("top", "left", "bottom", "right"):
+        el = OxmlElement(f"w:{edge}")
+        el.set(qn("w:val"), "single")
+        el.set(qn("w:sz"), "4")
+        el.set(qn("w:color"), "000000")
+        borders.append(el)
+    tcPr.append(borders)
+
+
+def _add_table(doc, table_data, size=11):
+    """table_data: {"headers": [...], "rows": [[...], ...]}. Рисует таблицу с рамками
+    и жирной шапкой - для перечней товаров/имущества в договорах и актах, статистики
+    и практических данных в курсовых/рефератах."""
+    headers = table_data.get("headers") or []
+    rows = table_data.get("rows") or []
+    if not headers and not rows:
+        return
+    ncols = len(headers) if headers else max((len(r) for r in rows), default=0)
+    if ncols == 0:
+        return
+    t = doc.add_table(rows=0, cols=ncols)
+    t.alignment = WD_TABLE_ALIGNMENT.CENTER
+    if headers:
+        row = t.add_row()
+        for i, htext in enumerate(headers):
+            cell = row.cells[i]
+            cell.text = ""
+            _run(cell.paragraphs[0], str(htext), size, True)
+            _set_cell_borders(cell)
+    for r in rows:
+        row = t.add_row()
+        for i in range(ncols):
+            cell = row.cells[i]
+            cell.text = ""
+            val = str(r[i]) if i < len(r) else ""
+            _run(cell.paragraphs[0], val, size, False)
+            _set_cell_borders(cell)
+    doc.add_paragraph()  # отступ после таблицы
+
+
 def _body(doc, sections, indent=True, head_center=False, size=12, line=1.15, first=1.25, head_size=13):
     for block in sections or []:
         head = (block.get("title") or "").strip()
@@ -1103,6 +1211,9 @@ def _body(doc, sections, indent=True, head_center=False, size=12, line=1.15, fir
             )
         for para in [x.strip() for x in body.split("\n") if x.strip()]:
             _p(doc, para, size, first=first if indent else None, after=6, line=line)
+        table_data = block.get("table")
+        if isinstance(table_data, dict):
+            _add_table(doc, table_data, size=size - 1 if size > 9 else size)
 
 
 # Семейства новых юридических документов: чтобы не дублировать почти одинаковый
@@ -1149,10 +1260,10 @@ DECLARATION_FAMILY = {
 # (как образец JSON, который нужно заполнить), и напрямую как список плейсхолдеров
 # для режима "Скачать шаблон" (без обращения к ИИ).
 META_SCHEMAS = {
-    "referat": '{"org":"Министерство образования","school":"[учебное заведение]","author":"[ФИО студента]","teacher":"[ФИО преподавателя]","city":"[город]","year":"2026"}',
+    "referat": '{"org":"Министерство образования","school":"[учебное заведение]","discipline":"[предмет/дисциплина/МДК]","group":"[номер группы]","author":"[ФИО студента]","teacher":"[должность и/или ФИО преподавателя]","city":"[город]","year":"2026"}',
     "coursework": '{"org":"Министерство образования","school":"[учебное заведение]","specialty":"[специальность]","author":"[ФИО студента]","teacher":"[ФИО научного руководителя]","city":"[город]","year":"2026"}',
-    "report": '{"school":"[учебное заведение]","author":"[ФИО, класс/курс]"}',
-    "essay": '{"school":"[учебное заведение]","author":"[ФИО]"}',
+    "report": '{"school":"[учебное заведение]","discipline":"[предмет/дисциплина]","group":"[номер группы]","author":"[ФИО]","teacher":"[должность и/или ФИО преподавателя]"}',
+    "essay": '{"school":"[учебное заведение]","discipline":"[предмет/дисциплина]","group":"[номер группы]","author":"[ФИО]","teacher":"[должность и/или ФИО преподавателя]"}',
     "notes": '{}',
     "dkp": '{"city":"[город]","date":"«___» __________ 20___ г."}',
     "rent": '{"city":"[город]","date":"«___» __________ 20___ г."}',
@@ -1258,20 +1369,7 @@ def build_word(path, title, sections, kind="doc", meta=None):
         # поля 20мм со всех сторон, абзацный отступ 1см).
         sec.left_margin = Cm(2)
         sec.right_margin = Cm(2)
-        _p(doc, meta.get("org") or "Министерство образования", 14, align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
-        _p(doc, meta.get("school") or "[Название учебного заведения]", 14, align=WD_ALIGN_PARAGRAPH.CENTER)
-        for _ in range(4):
-            doc.add_paragraph()
-        _p(doc, "РЕФЕРАТ", 20, True, WD_ALIGN_PARAGRAPH.CENTER, after=8)
-        _p(doc, title, 16, True, WD_ALIGN_PARAGRAPH.CENTER)
-        for _ in range(6):
-            doc.add_paragraph()
-        _p(doc, f"Выполнил: {meta.get('author') or '[ФИО студента]'}", 14, align=WD_ALIGN_PARAGRAPH.RIGHT, after=0)
-        _p(doc, f"Проверил: {meta.get('teacher') or '[ФИО преподавателя]'}", 14, align=WD_ALIGN_PARAGRAPH.RIGHT)
-        for _ in range(6):
-            doc.add_paragraph()
-        _p(doc, f"{meta.get('city') or '[Город]'} {meta.get('year') or '2026'}", 14, align=WD_ALIGN_PARAGRAPH.CENTER)
-        doc.add_page_break()
+        _student_title_page(doc, "РЕФЕРАТ", title, meta)
         _body(doc, sections, indent=True, head_center=True, size=14, line=1.2, first=1.0, head_size=14)
 
     elif kind == "coursework":
@@ -1296,19 +1394,15 @@ def build_word(path, title, sections, kind="doc", meta=None):
         _body(doc, sections, indent=True, head_center=True, size=14, line=1.2, first=1.0, head_size=14)
 
     elif kind == "report":
-        if meta.get("school") or meta.get("author"):
-            _p(doc, meta.get("school") or "", 11, align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
-            _p(doc, f"Выполнил: {meta.get('author')}" if meta.get("author") else "", 11, align=WD_ALIGN_PARAGRAPH.CENTER, after=10)
-        _p(doc, "ДОКЛАД", 12, True, WD_ALIGN_PARAGRAPH.CENTER, after=0)
-        _p(doc, title, 18, True, WD_ALIGN_PARAGRAPH.CENTER, before=4, after=14)
+        sec.left_margin = Cm(2)
+        sec.right_margin = Cm(2)
+        _student_title_page(doc, "ДОКЛАД", title, meta)
         _body(doc, sections, indent=True, head_center=False)
 
     elif kind == "essay":
-        if meta.get("school") or meta.get("author"):
-            _p(doc, meta.get("school") or "", 11, align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
-            _p(doc, f"{meta.get('author')}" if meta.get("author") else "", 11, align=WD_ALIGN_PARAGRAPH.CENTER, after=10)
-        _p(doc, "ЭССЕ", 12, True, WD_ALIGN_PARAGRAPH.CENTER, after=0)
-        _p(doc, title, 18, True, WD_ALIGN_PARAGRAPH.CENTER, before=4, after=14)
+        sec.left_margin = Cm(2)
+        sec.right_margin = Cm(2)
+        _student_title_page(doc, "ЭССЕ", title, meta)
         _body(doc, sections, indent=True, head_center=False)
 
     elif kind == "notes":
@@ -1939,6 +2033,12 @@ async def word_build(m: Message, state: FSMContext):
 Не создавай в sections отдельный раздел «Титульный лист» - обложка (организация, учебное заведение, ФИО
 автора и руководителя, город, год) формируется отдельно из title и meta и так уже попадёт в документ;
 первым разделом в sections должно идти «Введение» (или «Содержание», если оно есть в структуре документа).
+Если в разделе уместна таблица (перечень товаров/имущества с ценой и количеством в договоре/акте, статистика
+или практические данные в курсовой/реферате) - добавь в объект этого раздела ключ "table":
+{{"headers":["...","..."],"rows":[["...","..."],["...","..."]]}}. Не выдумывай реальные официальные цифры
+(даты, номера, суммы) для юридических документов - только то, что дал пользователь; для курсовых/рефератов
+данные в таблице могут быть иллюстративными для черновика, как и остальной текст. Таблицы уместны не в каждом
+разделе - добавляй только там, где это реально яснее текста, не в каждый раздел подряд.
 Только JSON:
 {{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\n\nабзац2"}}]}}""", max_tokens=gen_max_tokens)
     try:
@@ -1966,7 +2066,8 @@ async def word_build(m: Message, state: FSMContext):
         attempts = 0
         while actual_words < min_total * 0.7 and attempts < 2:
             attempts += 1
-            await m.answer("Черновик получился короче, чем нужно — дописываю подробнее…")
+            msg = "Черновик получился короче, чем нужно — дописываю подробнее…" if attempts == 1 else "Ещё чуть-чуть осталось — дописываю…"
+            await m.answer(msg)
             orig_sections = content.get("sections", [])
             targets_text = "\n".join(
                 f"{i}. «{(b.get('title') or '').strip()}» — сейчас {len((b.get('content') or '').split())} слов, "
@@ -2045,7 +2146,7 @@ async def word_build(m: Message, state: FSMContext):
             y -= 10
         pdf.save()
 
-        fname = safe_filename(content.get("title"), fallback=WORD_KIND_DESC.get(kind, "Документ"))
+        fname = safe_filename(content.get("title"), fallback=WORD_KIND_DESC.get(kind, "Документ"), author=(content.get("meta") or {}).get("author"))
         await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption="📄 Word — этот файл можно править")
         await m.answer_document(FSInputFile(pdf_path, filename=f"{fname}.pdf"), caption="📄 PDF-копия")
         u["generations"] += 1
