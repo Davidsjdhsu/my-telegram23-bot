@@ -2034,6 +2034,19 @@ def _xl_num(v, default=0.0):
     return float(m.group()) if m else default
 
 
+# Приблизительный курс к рублю на момент написания (конец августа 2026) - используется
+# только для финмодели стартапа, если пользователь называет суммы не в рублях, а всё
+# остальное в таблице считается в ₽. Курс плавает, поэтому в итоговый файл всегда
+# добавляется примечание с датой и курсом, чтобы пользователь мог свериться и при
+# необходимости попросить пересчитать по актуальному курсу.
+FX_TO_RUB = {"RUB": 1.0, "РУБ": 1.0, "₽": 1.0, "USD": 85.0, "$": 85.0, "EUR": 95.0, "€": 95.0}
+FX_NOTE_DATE = "конец августа 2026"
+
+
+def _xl_fx_rate(currency):
+    return FX_TO_RUB.get((currency or "RUB").strip().upper(), 1.0)
+
+
 def _xl_style_sheet(ws, colors, n_cols):
     """Базовое оформление листа под тему презентаций/документов: акцентная шапка,
     тонкие границы у таблицы, читаемая ширина колонок, альбомная печать по ширине
@@ -2227,7 +2240,14 @@ def build_excel_startup(path, title, colors, data):
         r += 1
     total_exp_row = r
     _xl_total_row(ws, total_exp_row, "Итого расходов в месяц", [None, None, None, f"=SUM(E{exp_first}:E{exp_last})"], colors, n_cols, money_cols={5})
-    r = total_exp_row + 2
+    r = total_exp_row + 1
+
+    fx_note = data.get("_fx_note")
+    if fx_note:
+        ws.cell(row=r, column=1, value=f"💱 {fx_note}").font = XlFont(italic=True, size=9, color=_xl_hex(colors["mute"]))
+        r += 1
+
+    r += 1
 
     ws.cell(row=r, column=1, value=f"Цена за единицу: {price:,.0f} ₽ · Продажи в месяц: {monthly_sales:,.0f} шт.".replace(",", " ")).font = XlFont(italic=True, size=10)
     r += 2
@@ -2448,12 +2468,46 @@ async def excel_build(m: Message, state: FSMContext):
             raw = await ask_grok(f"""Извлеки структурированные данные для финансовой модели стартапа
 из сообщения пользователя. НИЧЕГО не выдумывай и не досчитывай за пользователя - если какого-то
 числа нет в тексте, ставь 0 (кроме horizon_months - если не указано, ставь 12).
+Для КАЖДОЙ суммы (стартовые вложения, каждая статья расходов, цена за единицу) отдельно определи,
+в какой валюте её назвал пользователь - по явному указанию ("долларов", "$", "евро", "€") или по
+контексту. Если валюта явно не указана - ставь "RUB". НИКОГДА не конвертируй суммы сам и не пересчитывай
+их в рубли - оставляй исходное число ровно как в сообщении пользователя, конвертация делается отдельно
+кодом по курсу, а не тобой.
 Сообщение пользователя:
 {topic}
 Доп. уточнения: {extra}
 Только JSON:
-{{"title":"короткое название проекта по смыслу сообщения","investment":0,"expenses":[{{"name":"...","amount":0}}],"price":0,"monthly_sales":0,"horizon_months":12}}""")
+{{"title":"короткое название проекта по смыслу сообщения","investment":0,"investment_currency":"RUB",
+"expenses":[{{"name":"...","amount":0,"currency":"RUB"}}],"price":0,"price_currency":"RUB",
+"monthly_sales":0,"horizon_months":12}}""")
             parsed = extract_json(raw)
+
+            # Конвертация в рубли делается здесь кодом по фиксированному курсу (FX_TO_RUB),
+            # а не доверяется модели - иначе есть риск, что она либо забудет сконвертировать
+            # (как было раньше: доллары просто вставлялись как есть вместо рублей), либо
+            # применит собственный устаревший/придуманный курс. Собираем список реальных
+            # конвертаций, чтобы честно показать пользователю, что и по какому курсу пересчитано.
+            fx_notes = []
+
+            def _conv(amount, currency, label):
+                rate = _xl_fx_rate(currency)
+                amount = _xl_num(amount)
+                if rate != 1.0 and amount:
+                    converted = amount * rate
+                    fx_notes.append(f"{label}: {amount:,.0f} {currency} → {converted:,.0f} ₽".replace(",", " "))
+                    return converted
+                return amount
+
+            parsed["investment"] = _conv(parsed.get("investment"), parsed.get("investment_currency"), "Стартовые вложения")
+            parsed["price"] = _conv(parsed.get("price"), parsed.get("price_currency"), "Цена за единицу")
+            for e in (parsed.get("expenses") or []):
+                e["amount"] = _conv(e.get("amount"), e.get("currency"), e.get("name") or "Расход")
+            if fx_notes:
+                parsed["_fx_note"] = (
+                    f"Курс на {FX_NOTE_DATE} (примерный, уточни актуальный при необходимости): "
+                    + "; ".join(fx_notes)
+                )
+
             xlsx_path = f"/tmp/xl_{uid}.xlsx"
             build_excel_startup(xlsx_path, parsed.get("title") or "Финансовая модель", colors, parsed)
             title_for_name = parsed.get("title") or "Финмодель"
@@ -2496,6 +2550,8 @@ async def excel_build(m: Message, state: FSMContext):
         note = "Таблица готова ✅"
         if kind == "startup_model":
             note += "\n\n⚠️ Проверь исходные цифры — модель только оформила то, что ты прислал, ничего не добавляла от себя."
+            if parsed.get("_fx_note"):
+                note += f"\n\n💱 {parsed['_fx_note']}"
         await m.answer(note, reply_markup=main_kb())
         await state.clear()
     except Exception as e:
