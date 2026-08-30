@@ -2,6 +2,9 @@ import os
 import asyncio
 import json
 import random
+import re
+import time
+from collections import deque
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -22,6 +25,9 @@ from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+import openpyxl
+from openpyxl.styles import Font as XlFont, PatternFill, Border, Side, Alignment
+from openpyxl.utils import get_column_letter
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
@@ -134,6 +140,14 @@ class Form(StatesGroup):
     waiting_word_size = State()
     waiting_word_confirm = State()
     waiting_word_extra = State()
+    waiting_excel_category = State()
+    waiting_excel_kind = State()
+    waiting_excel_mode = State()
+    waiting_excel_topic = State()
+    waiting_excel_data = State()
+    waiting_excel_startup_data = State()
+    waiting_excel_confirm = State()
+    waiting_excel_extra = State()
 
 THEMES = {
     "nature": {"bg": (248, 246, 241), "ink": (22, 22, 24), "mid": (70, 70, 74), "mute": (130, 128, 124), "line": (22, 22, 24),
@@ -215,18 +229,92 @@ def can_generate(uid):
     return u["generations"] < PLAN_LIMITS.get(u["plan"], 15)
 
 
+# --- Защита от флуда и DDoS ------------------------------------------------
+# Три уровня, все проверяются в start_job() — единой точке входа перед любой
+# тяжёлой генерацией (презентация/Word/Excel/шаблон):
+#   1) rate-limit по времени на одного пользователя — не чаще раза в
+#      RATE_LIMIT_SECONDS, независимо от того, завершилась ли предыдущая
+#      генерация (per-uid busy-флаг это не покрывал);
+#   2) глобальный потолок одновременных генераций по всему боту сразу —
+#      защищает от атаки с множества разных Telegram-аккаунтов;
+#   3) алерт админу при аномальной нагрузке за скользящий час — суточного
+#      лимита нет (по запросу), но при подозрительном всплеске бот сам
+#      предупредит владельца, чтобы среагировать вручную до того, как
+#      выгорит баланс на xAI.
+RATE_LIMIT_SECONDS = 30
+MAX_CONCURRENT_GENERATIONS = 20
+HOURLY_ALERT_THRESHOLD = 50
+ALERT_COOLDOWN_SECONDS = 900  # не чаще раза в 15 минут, чтобы не заспамить одним и тем же
+
+_last_request_time = {}          # uid -> monotonic-время последнего успешного старта генерации
+_generation_timestamps = deque() # monotonic-метки всех начатых генераций за последний час
+_active_generations = 0          # сколько генераций сейчас реально выполняется одновременно
+_last_alert_time = float("-inf") # когда в последний раз слали алерт админу.
+# ВАЖНО: именно -inf, а не 0.0 — time.monotonic() отсчитывается от произвольной
+# точки (не от старта процесса и не от эпохи), и если бы тут был 0.0, проверка
+# "now - _last_alert_time > ALERT_COOLDOWN_SECONDS" в первые ~15 минут после
+# старта бота была бы ложно False (потому что now ещё меньше 900), и самый
+# первый алерт об атаке — то есть ровно тот момент, когда бот только что
+# перезапустили и он особенно уязвим — просто не дошёл бы до админа.
+
+
+def _check_hourly_load():
+    """Чистит метки старше часа и, если нагрузка аномально высокая, шлёт
+    алерт админу (не чаще раза в ALERT_COOLDOWN_SECONDS)."""
+    global _last_alert_time
+    now = time.monotonic()
+    while _generation_timestamps and now - _generation_timestamps[0] > 3600:
+        _generation_timestamps.popleft()
+    if len(_generation_timestamps) >= HOURLY_ALERT_THRESHOLD and now - _last_alert_time > ALERT_COOLDOWN_SECONDS:
+        _last_alert_time = now
+        count = len(_generation_timestamps)
+        for admin_id in ADMIN_IDS:
+            asyncio.create_task(bot.send_message(
+                admin_id,
+                f"⚠️ Аномальная нагрузка на бота: {count} генераций за последний час.\n"
+                f"Похоже на флуд или атаку — стоит проверить."
+            ))
+
+
 def start_job(uid):
-    """Помечает пользователя как занятого дорогой генерацией.
-    Возвращает False, если задача уже выполняется (защита от двойного нажатия)."""
+    """Помечает пользователя как занятого дорогой генерацией и проверяет
+    защиту от флуда/DDoS (rate-limit + глобальный потолок).
+    Возвращает (True, None) при успехе, иначе (False, "текст для пользователя")."""
+    global _active_generations
     u = get_user(uid)
+
     if u.get("busy"):
-        return False
+        return False, "Уже собираю предыдущую версию, подожди немного 🙂"
+
+    now = time.monotonic()
+    last = _last_request_time.get(uid, 0)
+    if now - last < RATE_LIMIT_SECONDS:
+        wait = int(RATE_LIMIT_SECONDS - (now - last)) + 1
+        return False, f"Слишком часто 🙂 Подожди ещё {wait} сек. и попробуй снова."
+
+    if _active_generations >= MAX_CONCURRENT_GENERATIONS:
+        return False, "Сейчас бот перегружен — очень много запросов одновременно. Попробуй, пожалуйста, через минуту 🙏"
+
     u["busy"] = True
-    return True
+    u["_counted"] = True
+    _last_request_time[uid] = now
+    _active_generations += 1
+    _generation_timestamps.append(now)
+    _check_hourly_load()
+    return True, None
 
 
 def finish_job(uid):
-    get_user(uid)["busy"] = False
+    """Снимает занятость пользователя. Идемпотентна: если по этому uid уже
+    финишировали (например, /cancel сработал раньше, чем реально завершилась
+    генерация), счётчик _active_generations не уйдёт в минус и не спишется
+    дважды за одну и ту же генерацию."""
+    global _active_generations
+    u = get_user(uid)
+    if u.get("_counted"):
+        _active_generations = max(0, _active_generations - 1)
+        u["_counted"] = False
+    u["busy"] = False
 
 
 # Telegram режет любое сообщение длиннее 4096 символов и просто не отправляет его
@@ -525,6 +613,7 @@ def main_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="📊 Сделать презентацию")],
         [KeyboardButton(text="📄 Сделать документ Word")],
+        [KeyboardButton(text="📈 Сделать таблицу Excel")],
         [KeyboardButton(text="📁 Моя история"), KeyboardButton(text="ℹ️ Мой тариф")]
     ], resize_keyboard=True)
 
@@ -704,6 +793,82 @@ def word_size_kb():
 def word_confirm_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="✅ Собрать документ")],
+        [KeyboardButton(text="➕ Добавить или изменить информацию")],
+        [KeyboardButton(text="✏️ Изменить запрос")]
+    ], resize_keyboard=True)
+
+
+EXCEL_CATEGORIES = {
+    "physical": {
+        "title": "👤 Для физлиц",
+        "kinds": ["expense_estimate", "family_budget", "startup_model"],
+    },
+    "entity": {
+        "title": "🏢 Для юрлиц / ИП",
+        "kinds": ["project_budget", "price_list"],
+    },
+    "study": {
+        "title": "🎓 Для учёбы",
+        "kinds": ["calc_table"],
+    },
+}
+
+EXCEL_KIND_LABELS = {
+    "expense_estimate": "🧾 Смета расходов",
+    "family_budget": "💰 Семейный бюджет",
+    "startup_model": "🚀 Финмодель стартапа",
+    "project_budget": "📊 Смета проекта / бизнес-план",
+    "price_list": "🏷️ Прайс-лист",
+    "calc_table": "📐 Расчётная таблица к работе",
+}
+EXCEL_LABEL_TO_KIND = {v: k for k, v in EXCEL_KIND_LABELS.items()}
+
+# У финмодели стартапа данные всегда реальные, от пользователя - модель их не придумывает,
+# только оформляет реальными формулами Excel (см. решение в этой сессии). Остальные виды
+# работают как таблицы в презентациях/курсовых: можно как сгенерировать иллюстративные цифры
+# по теме, так и вставить свои реальные данные - и в том, и в другом случае формулы настоящие.
+EXCEL_KIND_HINTS = {
+    "expense_estimate": {
+        "ai": "На что смета? Например: смета на ремонт кухни, смета на свадьбу на 40 человек.",
+        "user": "Пришли список статей расходов с количеством и ценой (например: линолеум - 25 м² - 800 ₽) - я оформлю в таблицу с формулами.",
+    },
+    "family_budget": {
+        "ai": "Опиши примерный бюджет, который нужно смоделировать (например: бюджет семьи из 3 человек на месяц).",
+        "user": "Пришли свои статьи доходов и расходов с суммами - я оформлю в таблицу с формулами (итого доходы/расходы/остаток).",
+    },
+    "project_budget": {
+        "ai": "На какой проект нужна смета/бизнес-план? Опиши в двух словах.",
+        "user": "Пришли статьи доходов и расходов проекта с суммами - оформлю в таблицу с формулами (итого доходы/расходы/прибыль).",
+    },
+    "price_list": {
+        "ai": "Прайс на что? Например: прайс-лист кофейни, прайс на клининговые услуги.",
+        "user": "Пришли позиции прайса: наименование, единица, количество, цена, скидка (если есть) - оформлю с формулами сумм.",
+    },
+    "calc_table": {
+        "ai": "По какой теме нужна расчётная таблица для работы? Например: результаты опроса по теме курсовой.",
+        "user": "Пришли показатели и значения - оформлю в таблицу с формулой доли в % и итогом.",
+    },
+}
+
+
+def excel_category_kb():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text=EXCEL_CATEGORIES["physical"]["title"])],
+        [KeyboardButton(text=EXCEL_CATEGORIES["entity"]["title"])],
+        [KeyboardButton(text=EXCEL_CATEGORIES["study"]["title"])],
+    ], resize_keyboard=True)
+
+
+def excel_kind_kb(category):
+    cat = EXCEL_CATEGORIES.get(category, EXCEL_CATEGORIES["physical"])
+    rows = [[KeyboardButton(text=EXCEL_KIND_LABELS[k])] for k in cat["kinds"]]
+    rows.append([KeyboardButton(text=BTN_BACK_TO_CATEGORIES)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def excel_confirm_kb():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="✅ Собрать таблицу")],
         [KeyboardButton(text="➕ Добавить или изменить информацию")],
         [KeyboardButton(text="✏️ Изменить запрос")]
     ], resize_keyboard=True)
@@ -1024,8 +1189,9 @@ async def _build_presentation(m: Message, state: FSMContext):
     data = await state.get_data()
     uid = m.from_user.id
     u = get_user(uid)
-    if not start_job(uid):
-        await m.answer("Уже собираю предыдущую версию, подожди немного 🙂")
+    ok, reason = start_job(uid)
+    if not ok:
+        await m.answer(reason)
         return
     await m.answer("Собираю презентацию с картинками. Это займёт 1–2 минуты.")
     try:
@@ -1847,6 +2013,504 @@ def build_word(path, title, sections, kind="doc", meta=None):
     doc.save(path)
 
 
+# ==================== EXCEL ====================
+
+def _xl_hex(color_tuple):
+    return "%02X%02X%02X" % color_tuple
+
+
+def _xl_num(v, default=0.0):
+    # Модель/пользователь должны прислать чистое число, но это не гарантировано -
+    # иногда проскакивает "500 000", "500 000 ₽" или "12 месяцев" вместо 500000/12.
+    # Вместо падения с ValueError на float()/int() достаём первое число из строки,
+    # иначе одна нечисловая ячейка ломает формулу умножения/суммы на всём листе
+    # (Excel даёт #VALUE! на любую арифметику с текстом).
+    if v is None:
+        return default
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).replace("\xa0", " ").replace(" ", "").replace(",", ".")
+    m = re.search(r"-?\d+(\.\d+)?", s)
+    return float(m.group()) if m else default
+
+
+def _xl_style_sheet(ws, colors, n_cols):
+    """Базовое оформление листа под тему презентаций/документов: акцентная шапка,
+    тонкие границы у таблицы, читаемая ширина колонок, альбомная печать по ширине
+    (чтобы при печати/экспорте в PDF таблица не резалась на колонки по границе листа)."""
+    ws.sheet_view.showGridLines = False
+    for i in range(1, n_cols + 1):
+        ws.column_dimensions[get_column_letter(i)].width = 22 if i == 1 else 16
+    ws.page_setup.orientation = "landscape"
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.print_options.horizontalCentered = False
+
+
+def _xl_header_row(ws, row_idx, headers, colors):
+    fill = PatternFill(start_color=_xl_hex(colors["line"]), end_color=_xl_hex(colors["line"]), fill_type="solid")
+    font = XlFont(bold=True, color=_xl_hex((255, 255, 255) if sum(colors["line"]) < 400 else (20, 20, 20)), size=11)
+    thin = Side(style="thin", color=_xl_hex(colors["mute"]))
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=row_idx, column=i, value=h)
+        c.fill = fill
+        c.font = font
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+
+def _xl_body_row(ws, row_idx, values, colors, number_cols=None, money_cols=None, percent_cols=None):
+    thin = Side(style="thin", color=_xl_hex(colors["mute"]))
+    for i, v in enumerate(values, 1):
+        c = ws.cell(row=row_idx, column=i, value=v)
+        c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        c.alignment = Alignment(horizontal="left" if i == 1 else "center", vertical="center")
+        if money_cols and i in money_cols:
+            c.number_format = '#,##0.00 ₽'
+        elif percent_cols and i in percent_cols:
+            c.number_format = '0.0%'
+        elif number_cols and i in number_cols:
+            c.number_format = '#,##0.##'
+
+
+def _xl_total_row(ws, row_idx, label, values, colors, n_cols, money_cols=None, percent_cols=None):
+    fill = PatternFill(start_color=_xl_hex(colors["bg"] if sum(colors["bg"]) < 400 else (235, 235, 235)),
+                        end_color=_xl_hex(colors["bg"] if sum(colors["bg"]) < 400 else (235, 235, 235)), fill_type="solid")
+    thin = Side(style="thin", color=_xl_hex(colors["mute"]))
+    ws.cell(row=row_idx, column=1, value=label).font = XlFont(bold=True)
+    for i in range(1, n_cols + 1):
+        c = ws.cell(row=row_idx, column=i)
+        c.border = Border(left=thin, right=thin, top=Side(style="double", color=_xl_hex(colors["mute"])), bottom=thin)
+        c.font = XlFont(bold=True)
+        if i > 1 and i - 2 < len(values) and values[i - 2] is not None:
+            c.value = values[i - 2]
+            if money_cols and i in money_cols:
+                c.number_format = '#,##0.00 ₽'
+            elif percent_cols and i in percent_cols:
+                c.number_format = '0.0%'
+
+
+def _xl_title(ws, title, colors, n_cols):
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
+    c = ws.cell(row=1, column=1, value=title)
+    c.font = XlFont(bold=True, size=14, color=_xl_hex(colors["ink"] if sum(colors["bg"]) > 400 else (30, 30, 30)))
+    ws.row_dimensions[1].height = 28
+
+
+# Фиксированные схемы колонок под каждый вид - модель (или сам пользователь) поставляет
+# только содержимое строк (rows), формулы и оформление всегда собираются кодом, а не ИИ,
+# чтобы суммы/проценты/итоги были настоящими формулами Excel, а не текстом.
+EXCEL_ROW_SCHEMA = {
+    "expense_estimate": {"fields": ["name", "qty", "price"], "example": '{"name":"...", "qty": 1, "price": 1000}'},
+    "family_budget": {"fields": ["name", "type", "amount"], "example": '{"name":"...", "type": "доход"|"расход", "amount": 1000}'},
+    "project_budget": {"fields": ["name", "type", "amount"], "example": '{"name":"...", "type": "доход"|"расход", "amount": 1000}'},
+    "price_list": {"fields": ["name", "unit", "qty", "price", "discount"], "example": '{"name":"...", "unit":"шт", "qty": 1, "price": 1000, "discount": 0}'},
+    "calc_table": {"fields": ["name", "value"], "example": '{"name":"...", "value": 100}'},
+}
+
+
+def build_excel_items(path, title, kind, colors, rows):
+    """Собирает смету/бюджет/прайс/расчётную таблицу с реальными формулами Excel.
+    rows - список dict по схеме EXCEL_ROW_SCHEMA[kind]."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Таблица"
+
+    if kind == "expense_estimate":
+        headers = ["№", "Статья расходов", "Кол-во", "Цена, ₽", "Сумма, ₽"]
+        _xl_style_sheet(ws, colors, len(headers))
+        _xl_title(ws, title, colors, len(headers))
+        _xl_header_row(ws, 3, headers, colors)
+        r = 4
+        for i, row in enumerate(rows, 1):
+            _xl_body_row(ws, r, [i, row.get("name", ""), _xl_num(row.get("qty"), 1), _xl_num(row.get("price")), f"=C{r}*D{r}"],
+                         colors, number_cols={3}, money_cols={4, 5})
+            r += 1
+        _xl_total_row(ws, r, "ИТОГО", [None, None, None, f"=SUM(E4:E{r - 1})"], colors, len(headers), money_cols={5})
+
+    elif kind in ("family_budget", "project_budget"):
+        headers = ["№", "Статья", "Тип", "Сумма, ₽"]
+        _xl_style_sheet(ws, colors, len(headers))
+        _xl_title(ws, title, colors, len(headers))
+        _xl_header_row(ws, 3, headers, colors)
+        income_label, expense_label = "Доход", "Расход"
+        r = 4
+        for i, row in enumerate(rows, 1):
+            # Нормализуем "Тип" в самом коде, а не полагаемся на то, что модель/пользователь
+            # напишет ровно "доход"/"расход" - иначе SUMIF ниже просто не найдёт совпадение
+            # (он сравнивает строки целиком, а не по смыслу) и итог молча окажется нулевым.
+            raw_type = (row.get("type") or "").strip().lower()
+            norm_type = expense_label if "расход" in raw_type else income_label
+            _xl_body_row(ws, r, [i, row.get("name", ""), norm_type, _xl_num(row.get("amount"))],
+                         colors, money_cols={4})
+            r += 1
+        last = r - 1
+        r_inc, r_exp = r, r + 1
+        ws.cell(row=r_inc, column=1, value="").border = Border()
+        _xl_total_row(ws, r_inc, "Итого доходы", [None, None, f'=SUMIF(C4:C{last},"{income_label}",D4:D{last})'], colors, len(headers), money_cols={4})
+        _xl_total_row(ws, r_exp, "Итого расходы", [None, None, f'=SUMIF(C4:C{last},"{expense_label}",D4:D{last})'], colors, len(headers), money_cols={4})
+        r_res = r_exp + 1
+        res_label = "Остаток" if kind == "family_budget" else "Прибыль"
+        _xl_total_row(ws, r_res, res_label, [None, None, f"=D{r_inc}-D{r_exp}"], colors, len(headers), money_cols={4})
+
+    elif kind == "price_list":
+        headers = ["№", "Наименование", "Ед.", "Кол-во", "Цена, ₽", "Скидка, %", "Сумма, ₽"]
+        _xl_style_sheet(ws, colors, len(headers))
+        _xl_title(ws, title, colors, len(headers))
+        _xl_header_row(ws, 3, headers, colors)
+        r = 4
+        for i, row in enumerate(rows, 1):
+            disc = _xl_num(row.get("discount"))
+            _xl_body_row(ws, r, [i, row.get("name", ""), row.get("unit", "шт"), _xl_num(row.get("qty"), 1),
+                                  _xl_num(row.get("price")), disc / 100 if disc else 0, f"=D{r}*E{r}*(1-F{r})"],
+                         colors, number_cols={4}, money_cols={5, 7}, percent_cols={6})
+            r += 1
+        _xl_total_row(ws, r, "ИТОГО", [None, None, None, None, None, f"=SUM(G4:G{r - 1})"], colors, len(headers), money_cols={7})
+
+    elif kind == "calc_table":
+        headers = ["№", "Показатель", "Значение", "Доля, %"]
+        _xl_style_sheet(ws, colors, len(headers))
+        _xl_title(ws, title, colors, len(headers))
+        _xl_header_row(ws, 3, headers, colors)
+        r = 4
+        first_r = r
+        for i, row in enumerate(rows, 1):
+            _xl_body_row(ws, r, [i, row.get("name", ""), _xl_num(row.get("value")), None], colors, number_cols={3}, percent_cols={4})
+            r += 1
+        last_r = r - 1
+        # IFERROR - если все значения окажутся нулевыми (или их сумма равна нулю), формула
+        # деления вернёт #DIV/0! в каждой строке; выводим 0% вместо ошибки на весь лист.
+        for rr in range(first_r, r):
+            ws.cell(row=rr, column=4, value=f"=IFERROR(C{rr}/SUM($C${first_r}:$C${last_r}),0)")
+            ws.cell(row=rr, column=4).number_format = '0.0%'
+        total_pct_formula = f"=IFERROR(SUM(C{first_r}:C{last_r})/SUM(C{first_r}:C{last_r}),0)"
+        _xl_total_row(ws, r, "ИТОГО", [None, f"=SUM(C{first_r}:C{last_r})", total_pct_formula], colors, len(headers), percent_cols={4})
+
+    wb.save(path)
+
+
+def build_excel_startup(path, title, colors, data):
+    """Финмодель стартапа - данные (инвестиции, расходы, цена, продажи, срок) реальные,
+    от пользователя, никогда не придумываются моделью. Всё, что видно в файле кроме
+    самих исходных чисел - настоящие формулы Excel (выручка/прибыль/накопительный итог)."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Финмодель"
+
+    horizon = max(1, min(int(_xl_num(data.get("horizon_months"), 12)), 36))
+    investment = _xl_num(data.get("investment"))
+    price = _xl_num(data.get("price"))
+    monthly_sales = _xl_num(data.get("monthly_sales"))
+    expenses = [{"name": (e or {}).get("name", ""), "amount": _xl_num((e or {}).get("amount"))}
+                for e in (data.get("expenses") or [])]
+
+    n_cols = 5
+    _xl_style_sheet(ws, colors, n_cols)
+    _xl_title(ws, title, colors, n_cols)
+
+    ws.cell(row=2, column=1, value=f"Стартовые вложения: {investment:,.0f} ₽".replace(",", " ")).font = XlFont(italic=True, size=10)
+
+    # блок постоянных ежемесячных расходов - отдельной таблицей, чтобы сумма расходов
+    # в помесячном расчёте тоже была формулой (SUM), а не готовым числом
+    r = 4
+    ws.cell(row=r, column=1, value="Ежемесячные расходы").font = XlFont(bold=True)
+    r += 1
+    exp_first = r
+    for e in expenses:
+        _xl_body_row(ws, r, [None, e.get("name", ""), None, None, e.get("amount", 0)], colors, money_cols={5})
+        r += 1
+    exp_last = r - 1 if expenses else exp_first
+    if not expenses:
+        _xl_body_row(ws, r, [None, "—", None, None, 0], colors, money_cols={5})
+        exp_last = r
+        r += 1
+    total_exp_row = r
+    _xl_total_row(ws, total_exp_row, "Итого расходов в месяц", [None, None, None, f"=SUM(E{exp_first}:E{exp_last})"], colors, n_cols, money_cols={5})
+    r = total_exp_row + 2
+
+    ws.cell(row=r, column=1, value=f"Цена за единицу: {price:,.0f} ₽ · Продажи в месяц: {monthly_sales:,.0f} шт.".replace(",", " ")).font = XlFont(italic=True, size=10)
+    r += 2
+
+    headers = ["Месяц", "Выручка, ₽", "Расходы, ₽", "Прибыль, ₽", "Накопительно, ₽"]
+    _xl_header_row(ws, r, headers, colors)
+    table_start = r + 1
+    r = table_start
+    for month in range(1, horizon + 1):
+        rev_formula = f"={price}*{monthly_sales}"
+        exp_formula = f"=E{total_exp_row}"
+        profit_formula = f"=B{r}-C{r}"
+        if month == 1:
+            cum_formula = f"=D{r}-{investment}"
+        else:
+            cum_formula = f"=D{r}+E{r - 1}"
+        _xl_body_row(ws, r, [f"Месяц {month}", rev_formula, exp_formula, profit_formula, cum_formula], colors, money_cols={2, 3, 4, 5})
+        r += 1
+    table_end = r - 1
+
+    # срок окупаемости - первый месяц, где накопительный итог формулой стал неотрицательным;
+    # считается по-настоящему из реальных чисел пользователя (это математика, а не выдумка),
+    # но записывается как обычная сводная ячейка, а не как сложная формула поиска,
+    # чтобы не зависеть от array-формул, которые по-разному ведут себя в разных версиях Excel.
+    cum_values = []
+    running = -investment
+    for month in range(1, horizon + 1):
+        running += price * monthly_sales - sum(e.get("amount", 0) or 0 for e in expenses)
+        cum_values.append(running)
+    payback = next((i + 1 for i, v in enumerate(cum_values) if v >= 0), None)
+
+    r += 1
+    ws.cell(row=r, column=1, value="Срок окупаемости").font = XlFont(bold=True)
+    ws.cell(row=r, column=2, value=(f"{payback} мес." if payback else f"не достигается за {horizon} мес."))
+    r += 1
+    ws.cell(row=r, column=1, value="Точка безубыточности (продаж/мес)").font = XlFont(bold=True)
+    be_cell = ws.cell(row=r, column=2, value=f"=ROUNDUP(E{total_exp_row}/{price},0)" if price else "—")
+    if price:
+        be_cell.number_format = '#,##0 "шт."'
+
+    for i in range(1, n_cols + 1):
+        ws.column_dimensions[get_column_letter(i)].width = 20
+    ws.column_dimensions["A"].width = 34
+
+    wb.save(path)
+
+
+EXCEL_KIND_DESC = {
+    "expense_estimate": "смета расходов",
+    "family_budget": "семейный бюджет",
+    "project_budget": "смета проекта / бизнес-план",
+    "price_list": "прайс-лист",
+    "calc_table": "расчётная таблица к учебной работе",
+    "startup_model": "финансовая модель стартапа",
+}
+
+
+def excel_mode_kb():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="✨ Сгенерировать с ИИ")],
+        [KeyboardButton(text="📝 Ввести свои данные")],
+    ], resize_keyboard=True)
+
+
+@dp.message(F.text.in_(["Сделать таблицу Excel", "📈 Сделать таблицу Excel"]))
+async def start_excel(m: Message, state: FSMContext):
+    if not can_generate(m.from_user.id):
+        await m.answer("Лимит генераций закончился.")
+        return
+    await m.answer("Для кого таблица?", reply_markup=excel_category_kb())
+    await state.set_state(Form.waiting_excel_category)
+
+
+@dp.message(Form.waiting_excel_category)
+async def excel_category(m: Message, state: FSMContext):
+    t = (m.text or "").lower()
+    cat = None
+    if "физ" in t:
+        cat = "physical"
+    elif "юр" in t or "ип" in t:
+        cat = "entity"
+    elif "учеб" in t or "учёб" in t:
+        cat = "study"
+    if not cat:
+        await m.answer("Выбери категорию кнопкой ниже.", reply_markup=excel_category_kb())
+        return
+    await state.update_data(excel_category=cat)
+    await m.answer("Какая таблица нужна?", reply_markup=excel_kind_kb(cat))
+    await state.set_state(Form.waiting_excel_kind)
+
+
+@dp.message(Form.waiting_excel_kind, F.text == BTN_BACK_TO_CATEGORIES)
+async def excel_kind_back(m: Message, state: FSMContext):
+    await m.answer("Для кого таблица?", reply_markup=excel_category_kb())
+    await state.set_state(Form.waiting_excel_category)
+
+
+@dp.message(Form.waiting_excel_kind)
+async def excel_kind(m: Message, state: FSMContext):
+    kind = EXCEL_LABEL_TO_KIND.get((m.text or "").strip())
+    if not kind:
+        data = await state.get_data()
+        cat = data.get("excel_category", "physical")
+        await m.answer("Выбери таблицу кнопкой ниже.", reply_markup=excel_kind_kb(cat))
+        return
+    await state.update_data(excel_kind=kind, extra="")
+    if kind == "startup_model":
+        # Финмодель - данные всегда реальные от пользователя, режим "сгенерировать" тут не предлагаем.
+        await m.answer(
+            "Пришли исходные данные для расчёта одним сообщением:\n\n"
+            "• стартовые вложения\n"
+            "• ежемесячные расходы списком (аренда, зарплаты, реклама и т.д. — с суммами)\n"
+            "• цена за единицу товара/услуги\n"
+            "• ожидаемое количество продаж в месяц\n"
+            "• на сколько месяцев считать\n\n"
+            "Например: вложения 500 000 ₽, аренда 40 000, зарплаты 90 000, реклама 25 000, "
+            "цена 350 ₽, продажи 600 шт/мес, считать на 12 месяцев.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        await state.set_state(Form.waiting_excel_startup_data)
+        return
+    await m.answer(
+        "Как собираем таблицу?\n\n"
+        "✨ Сгенерировать с ИИ — сам придумаю правдоподобные данные по теме.\n"
+        "📝 Ввести свои данные — пришли реальные цифры, я оформлю их в таблицу с формулами.",
+        reply_markup=excel_mode_kb()
+    )
+    await state.set_state(Form.waiting_excel_mode)
+
+
+@dp.message(Form.waiting_excel_mode, F.text.in_(["Сгенерировать с ИИ", "✨ Сгенерировать с ИИ"]))
+async def excel_mode_ai(m: Message, state: FSMContext):
+    data = await state.get_data()
+    kind = data.get("excel_kind", "expense_estimate")
+    await state.update_data(excel_mode="ai")
+    await m.answer(EXCEL_KIND_HINTS.get(kind, EXCEL_KIND_HINTS["expense_estimate"])["ai"], reply_markup=ReplyKeyboardRemove())
+    await state.set_state(Form.waiting_excel_topic)
+
+
+@dp.message(Form.waiting_excel_mode, F.text.in_(["Ввести свои данные", "📝 Ввести свои данные"]))
+async def excel_mode_user(m: Message, state: FSMContext):
+    data = await state.get_data()
+    kind = data.get("excel_kind", "expense_estimate")
+    await state.update_data(excel_mode="user")
+    await m.answer(EXCEL_KIND_HINTS.get(kind, EXCEL_KIND_HINTS["expense_estimate"])["user"], reply_markup=ReplyKeyboardRemove())
+    await state.set_state(Form.waiting_excel_data)
+
+
+@dp.message(Form.waiting_excel_topic)
+async def excel_topic(m: Message, state: FSMContext):
+    await state.update_data(excel_topic=m.text or "")
+    await m.answer("Собрать таблицу?", reply_markup=excel_confirm_kb())
+    await state.set_state(Form.waiting_excel_confirm)
+
+
+@dp.message(Form.waiting_excel_data)
+async def excel_data(m: Message, state: FSMContext):
+    await state.update_data(excel_topic=m.text or "")
+    await m.answer("Собрать таблицу?", reply_markup=excel_confirm_kb())
+    await state.set_state(Form.waiting_excel_confirm)
+
+
+@dp.message(Form.waiting_excel_startup_data)
+async def excel_startup_data(m: Message, state: FSMContext):
+    await state.update_data(excel_topic=m.text or "")
+    await m.answer("Собрать финмодель?", reply_markup=excel_confirm_kb())
+    await state.set_state(Form.waiting_excel_confirm)
+
+
+@dp.message(Form.waiting_excel_confirm, F.text.in_(["Изменить запрос", "✏️ Изменить запрос"]))
+async def excel_change_request(m: Message, state: FSMContext):
+    data = await state.get_data()
+    kind = data.get("excel_kind", "expense_estimate")
+    if kind == "startup_model":
+        await m.answer("Пришли исходные данные заново.", reply_markup=ReplyKeyboardRemove())
+        await state.set_state(Form.waiting_excel_startup_data)
+    else:
+        mode = data.get("excel_mode", "ai")
+        hint_key = "ai" if mode == "ai" else "user"
+        await m.answer(EXCEL_KIND_HINTS.get(kind, EXCEL_KIND_HINTS["expense_estimate"])[hint_key], reply_markup=ReplyKeyboardRemove())
+        await state.set_state(Form.waiting_excel_topic if mode == "ai" else Form.waiting_excel_data)
+
+
+@dp.message(Form.waiting_excel_confirm, F.text.in_(["Добавить информацию", "➕ Добавить информацию", "➕ Добавить или изменить информацию"]))
+async def excel_add_extra(m: Message, state: FSMContext):
+    await m.answer("Что добавить или уточнить?", reply_markup=ReplyKeyboardRemove())
+    await state.set_state(Form.waiting_excel_extra)
+
+
+@dp.message(Form.waiting_excel_extra)
+async def excel_extra(m: Message, state: FSMContext):
+    data = await state.get_data()
+    extra = (data.get("extra", "") + "\n" + (m.text or "")).strip()
+    await state.update_data(extra=extra)
+    await m.answer("Собрать таблицу?", reply_markup=excel_confirm_kb())
+    await state.set_state(Form.waiting_excel_confirm)
+
+
+@dp.message(Form.waiting_excel_confirm, F.text.in_(["Собрать таблицу", "✅ Собрать таблицу", "делай", "да", "ок"]))
+async def excel_build(m: Message, state: FSMContext):
+    data = await state.get_data()
+    uid = m.from_user.id
+    u = get_user(uid)
+    ok, reason = start_job(uid)
+    if not ok:
+        await m.answer(reason)
+        return
+    await m.answer("Собираю Excel…")
+    kind = data.get("excel_kind", "expense_estimate")
+    topic = data.get("excel_topic", "")
+    extra = data.get("extra", "")
+    theme_name, colors = pick_theme(topic)
+
+    try:
+        if kind == "startup_model":
+            # Только извлечение реальных чисел, которые пользователь уже прислал -
+            # модель не имеет права ничего досочинять или менять числа.
+            raw = await ask_grok(f"""Извлеки структурированные данные для финансовой модели стартапа
+из сообщения пользователя. НИЧЕГО не выдумывай и не досчитывай за пользователя - если какого-то
+числа нет в тексте, ставь 0 (кроме horizon_months - если не указано, ставь 12).
+Сообщение пользователя:
+{topic}
+Доп. уточнения: {extra}
+Только JSON:
+{{"title":"короткое название проекта по смыслу сообщения","investment":0,"expenses":[{{"name":"...","amount":0}}],"price":0,"monthly_sales":0,"horizon_months":12}}""")
+            parsed = extract_json(raw)
+            xlsx_path = f"/tmp/xl_{uid}.xlsx"
+            build_excel_startup(xlsx_path, parsed.get("title") or "Финансовая модель", colors, parsed)
+            title_for_name = parsed.get("title") or "Финмодель"
+        else:
+            schema = EXCEL_ROW_SCHEMA[kind]
+            if data.get("excel_mode") == "user":
+                task_line = (
+                    "Ниже данные прислал сам пользователь - структурируй их в JSON СТРОГО как есть, "
+                    "ничего не досочиняя и не меняя числа. Если каких-то полей не хватает - оставь "
+                    "разумные значения по умолчанию (0 или пустая строка), но не выдумывай новые позиции."
+                )
+            else:
+                task_line = (
+                    "Пользователь не прислал реальные данные - подбери сам правдоподобные иллюстративные "
+                    "данные по теме (как в примерах для учебных работ), 5-8 строк, разумные по масштабу цифры."
+                )
+            raw = await ask_grok(f"""Собери содержимое для Excel-таблицы: {EXCEL_KIND_DESC.get(kind)}.
+{task_line}
+Тема/данные: {topic}
+Доп: {extra}
+Каждая строка - объект с полями {schema['fields']}, например {schema['example']}.
+Только JSON:
+{{"title":"короткое название таблицы по теме","rows":[{schema['example']}]}}""")
+            parsed = extract_json(raw)
+            rows = parsed.get("rows") or []
+            if not rows:
+                raise ValueError("Модель не вернула строки таблицы")
+            xlsx_path = f"/tmp/xl_{uid}.xlsx"
+            build_excel_items(xlsx_path, parsed.get("title") or EXCEL_KIND_DESC.get(kind, "Таблица"), kind, colors, rows)
+            title_for_name = parsed.get("title") or EXCEL_KIND_DESC.get(kind)
+
+        fname = safe_filename(title_for_name, fallback=EXCEL_KIND_DESC.get(kind, "Таблица"))
+        await m.answer_document(FSInputFile(xlsx_path, filename=f"{fname}.xlsx"), caption="📈 Excel — с формулами, можно редактировать")
+        u["generations"] += 1
+        u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {title_for_name}")
+        try:
+            os.remove(xlsx_path)
+        except Exception:
+            pass
+        note = "Таблица готова ✅"
+        if kind == "startup_model":
+            note += "\n\n⚠️ Проверь исходные цифры — модель только оформила то, что ты прислал, ничего не добавляла от себя."
+        await m.answer(note, reply_markup=main_kb())
+        await state.clear()
+    except Exception as e:
+        print("Excel build error:", e)
+        await m.answer("Не собрал таблицу. Попробуй ещё раз.", reply_markup=main_kb())
+        await state.clear()
+    finally:
+        finish_job(uid)
+
+
+@dp.message(Form.waiting_excel_confirm)
+async def excel_confirm_fallback(m: Message, state: FSMContext):
+    await m.answer("Выбери действие кнопкой ниже.", reply_markup=excel_confirm_kb())
+
+
 @dp.message(F.text.in_(["Сделать документ Word", "📄 Сделать документ Word"]))
 async def start_word(m: Message, state: FSMContext):
     if not can_generate(m.from_user.id):
@@ -2061,8 +2725,9 @@ async def word_mode_template(m: Message, state: FSMContext):
     if kind in STUDY_KINDS:
         await m.answer("Для учебных документов шаблон не предусмотрен.", reply_markup=mode_kb(False))
         return
-    if not start_job(uid):
-        await m.answer("Уже собираю документ, подожди немного 🙂")
+    ok, reason = start_job(uid)
+    if not ok:
+        await m.answer(reason)
         return
     await m.answer("Собираю шаблон…", reply_markup=ReplyKeyboardRemove())
     try:
@@ -2216,8 +2881,9 @@ async def word_build(m: Message, state: FSMContext):
     data = await state.get_data()
     uid = m.from_user.id
     u = get_user(uid)
-    if not start_job(uid):
-        await m.answer("Уже собираю предыдущий документ, подожди немного 🙂")
+    ok, reason = start_job(uid)
+    if not ok:
+        await m.answer(reason)
         return
     await m.answer("Собираю Word. Обычно это быстрее презентации.")
     kind = data.get("word_kind", "doc")
