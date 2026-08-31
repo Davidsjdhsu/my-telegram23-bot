@@ -34,6 +34,15 @@ from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from PIL import Image, ImageOps, ImageEnhance, ImageChops, ImageStat, ImageFilter
+
+try:
+    import cv2
+    _FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+except Exception:
+    # opencv-python может отсутствовать на сервере (тяжёлая зависимость) - в этом случае
+    # размытие фона просто откатится на центр кадра вместо детекции лица, без падений.
+    cv2 = None
+    _FACE_CASCADE = None
 import httpx
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -494,13 +503,14 @@ TR = {
                          "zh": "幻灯片图片用AI生成还是使用你自己的照片？\n如果照片数量少于幻灯片数，机器人会自动补全其余部分。",
                          "es": "¿Las fotos de las diapositivas se generan con IA o usas las tuyas?\nSi envías menos fotos que diapositivas, el bot generará el resto.",
                          "fr": "Les photos des diapositives doivent-elles être générées par l'IA ou tes propres photos ?\nSi tu envoies moins de photos que de diapositives, le bot complétera le reste."},
-    "msg_send_photos_one_by_one": {"ru": "Пришли фото по одному (можно несколько сообщений подряд). Когда закончишь — нажми «Готово, собери презентацию».",
-                                   "en": "Send photos one by one (several messages in a row is fine). When done, tap \"Done, build the presentation\".",
-                                   "de": "Sende Fotos einzeln (mehrere Nachrichten hintereinander sind ok). Wenn fertig, tippe auf „Fertig, Präsentation erstellen“.",
-                                   "ar": "أرسل الصور واحدة تلو الأخرى (يمكن عدة رسائل متتالية). عند الانتهاء، اضغط «تم، أنشئ العرض التقديمي».",
-                                   "zh": "请逐张发送照片（可以连续发送多条消息）。完成后点击「完成，生成演示文稿」。",
-                                   "es": "Envía las fotos una por una (varios mensajes seguidos está bien). Cuando termines, toca «Listo, crea la presentación».",
-                                   "fr": "Envoie les photos une par une (plusieurs messages à la suite, c'est possible). Une fois terminé, appuie sur « Terminé, créez la présentation »."},
+    "msg_send_photos_one_by_one": {
+        "ru": "У тебя {slides} слайдов — самое то прислать до {slides} фото, по одному на слайд (недостающие я дорисую сам через ИИ). Можно пачкой (альбомом, Telegram отправляет до 10 за раз) или по одному. Когда закончишь — нажми «Готово, собери презентацию».",
+        "en": "You picked {slides} slides — feel free to send up to {slides} photos, one per slide (I'll generate the rest with AI if you send fewer). All at once as an album (Telegram allows up to 10 per batch) or one by one, whatever's easier. When done, tap \"Done, build the presentation\".",
+        "de": "Du hast {slides} Folien gewählt — sende am besten bis zu {slides} Fotos, eins pro Folie (den Rest erstelle ich per KI, falls du weniger sendest). Alle auf einmal als Album (Telegram erlaubt bis zu 10 pro Stapel) oder einzeln, wie du magst. Wenn fertig, tippe auf „Fertig, Präsentation erstellen“.",
+        "ar": "اخترت {slides} شريحة — يمكنك إرسال حتى {slides} صورة، صورة لكل شريحة (سأكمل الباقي بالذكاء الاصطناعي إذا أرسلت أقل). دفعة واحدة كألبوم (يسمح Telegram بحتى 10 دفعة واحدة) أو واحدة تلو الأخرى، كما يناسبك. عند الانتهاء، اضغط «تم، أنشئ العرض التقديمي».",
+        "zh": "你选择了{slides}张幻灯片——建议发送最多{slides}张照片，每张幻灯片配一张（如果照片不够，我会用AI补全）。可以整批作为相册一次发送（Telegram单次最多10张），也可以逐张发送，随你方便。完成后点击「完成，生成演示文稿」。",
+        "es": "Elegiste {slides} diapositivas — lo ideal es enviar hasta {slides} fotos, una por diapositiva (completaré el resto con IA si envías menos). Todas juntas como álbum (Telegram permite hasta 10 por lote) o una por una, como prefieras. Cuando termines, toca «Listo, crea la presentación».",
+        "fr": "Tu as choisi {slides} diapositives — envoie idéalement jusqu'à {slides} photos, une par diapositive (je génère le reste avec l'IA si tu en envoies moins). Toutes en une fois comme un album (Telegram autorise jusqu'à 10 par envoi) ou une par une, comme tu préfères. Une fois terminé, appuie sur « Terminé, créez la présentation »."},
     "msg_photo_received": {"ru": "Фото {n} получено 📷 Пришли ещё или нажми «Готово, собери презентацию».",
                            "en": "Photo {n} received 📷 Send more or tap \"Done, build the presentation\".",
                            "de": "Foto {n} erhalten 📷 Sende weitere oder tippe auf „Fertig, Präsentation erstellen“.",
@@ -832,6 +842,21 @@ def _check_hourly_load():
             ))
 
 
+_photo_locks: dict = {}
+
+
+def _get_photo_lock(uid) -> asyncio.Lock:
+    """Блокировка на пользователя для сборки user_photos. Telegram присылает альбом
+    из нескольких фото как отдельные сообщения почти одновременно - без этой блокировки
+    конкурентные обработчики читают один и тот же список ДО того, как другие успели
+    его перезаписать, и "затирают" друг друга (часть фото из альбома молча терялась бы)."""
+    lock = _photo_locks.get(uid)
+    if lock is None:
+        lock = asyncio.Lock()
+        _photo_locks[uid] = lock
+    return lock
+
+
 def start_job(uid):
     """Помечает пользователя как занятого дорогой генерацией и проверяет
     защиту от флуда/DDoS (rate-limit + глобальный потолок).
@@ -1104,40 +1129,123 @@ def average_luminance(paths):
     return sum(vals) / len(vals) if vals else None
 
 
+def _detect_subject_region(im: Image.Image):
+    """Ищет лицо человека на фото через OpenCV (Haar cascade) и возвращает зону резкости
+    (cx, cy, r) в относительных координатах 0..1 от размера фото. Если лиц несколько -
+    охватывает все; если лиц нет (пейзаж, еда, предметы) или OpenCV недоступен - None,
+    и размытие фона тогда откатится на центр кадра (разумное допущение для большинства
+    любительских фото, где объект съёмки обычно в центре)."""
+    if _FACE_CASCADE is None:
+        return None
+    try:
+        import numpy as np
+        gray = np.asarray(im.convert("L"))
+        min_size = max(20, int(min(im.size) * 0.06))
+        faces = _FACE_CASCADE.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(min_size, min_size))
+        if len(faces) == 0:
+            return None
+        x1 = min(x for x, y, w, h in faces)
+        y1 = min(y for x, y, w, h in faces)
+        x2 = max(x + w for x, y, w, h in faces)
+        y2 = max(y + h for x, y, w, h in faces)
+        cx, cy = (x1 + x2) / 2 / im.width, (y1 + y2) / 2 / im.height
+        span = max(x2 - x1, y2 - y1) / max(im.width, im.height)
+        r = min(0.42, max(0.24, span * 1.3))  # запас вокруг лица (тело/плечи), но не более трети кадра
+        return cx, cy, r
+    except Exception as e:
+        print("Face detection error:", e)
+        return None
+
+
+def _apply_depth_blur(im: Image.Image, subject=None, blur_radius: float = 7.0) -> Image.Image:
+    """Имитация малой глубины резкости (боке) как на портретном объективе: зона объекта
+    (лицо человека, если найдено детекцией, иначе центр кадра) остаётся чёткой, периферия
+    кадра плавно размывается. Классический профессиональный портретный приём, визуально
+    сразу читается как "обработанное" фото, а не просто вставленное."""
+    import numpy as np
+    w, h = im.size
+    blurred = im.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+    y, x = np.ogrid[:h, :w]
+    if subject:
+        cx_rel, cy_rel, r_rel = subject
+        cx, cy = cx_rel * w, cy_rel * h
+        r_px = r_rel * max(w, h)
+    else:
+        cx, cy = w / 2, h / 2
+        r_px = 0.40 * max(w, h)
+    dist = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+    # 0 внутри зоны резкости, плавно нарастает до 1 к периферии
+    mask = np.clip((dist - r_px) / (0.32 * max(w, h)), 0, 1).astype("float32")
+    arr_sharp = np.asarray(im).astype("float32")
+    arr_blur = np.asarray(blurred).astype("float32")
+    out = arr_sharp * (1 - mask[:, :, None]) + arr_blur * mask[:, :, None]
+    return Image.fromarray(out.clip(0, 255).astype("uint8"))
+
+
+def _apply_vignette(im: Image.Image, strength: float = 0.22) -> Image.Image:
+    """Классическое фото-виньетирование - плавное затемнение к краям кадра, притягивает
+    взгляд к центру/объекту. Один из самых заметных и при этом безопасных для лиц приёмов
+    (центр кадра, где обычно и находится человек, не темнеет вовсе)."""
+    import numpy as np
+    w, h = im.size
+    y, x = np.ogrid[:h, :w]
+    cx, cy = w / 2, h / 2
+    # расстояние до центра, нормированное так, что края кадра ~= 1.0
+    dist = np.sqrt(((x - cx) / (w / 2)) ** 2 + ((y - cy) / (h / 2)) ** 2)
+    mask = 1 - np.clip(dist - 0.4, 0, 1) / 0.9 * strength
+    mask = np.clip(mask, 1 - strength, 1.0).astype("float32")
+    arr = np.asarray(im).astype("float32")
+    arr *= mask[:, :, None]
+    return Image.fromarray(arr.clip(0, 255).astype("uint8"))
+
+
 def enhance_user_photo(src_path: str, colors: dict, target_luminance=None) -> Image.Image:
-    """Лёгкая профессиональная доработка ЛИЧНОГО фото пользователя под стиль презентации:
-    выравнивает контраст и резкость (телефонные фото часто плоские/мягкие после сжатия
-    мессенджером), мягко подтягивает яркость к общему уровню остальных фото в этой же
-    презентации, и добавляет едва заметный цветовой тон в духе темы (как в Canva/Lightroom
-    presets) - фото перестают выглядеть "вставленными как есть", но остаются собой.
-    Намеренно НЕ используется генеративный ИИ (img2img) - на личных фото людей это рискует
-    исказить лица и черты, что хуже, чем не трогать фото вовсе."""
+    """Профессиональная доработка ЛИЧНОГО фото пользователя под стиль презентации:
+    выравнивает контраст и резкость, подтягивает яркость к общему уровню остальных фото
+    в этой же презентации, размывает фон вокруг объекта (эффект боке - как на портретном
+    объективе, объект ищется детекцией лица), добавляет заметный, но не разрушающий
+    цветовой тон в духе темы (как в Canva/Lightroom presets) и лёгкую виньетку - фото
+    перестаёт выглядеть "вставленным как есть", но остаётся собой. Намеренно НЕ используется
+    генеративный ИИ (img2img) - на личных фото людей это рискует исказить лица и черты,
+    что хуже, чем не трогать фото вовсе."""
     im = Image.open(src_path).convert("RGB")
 
+    # Ищем лицо ДО любых правок - на необработанном изображении детекция надёжнее.
+    subject = _detect_subject_region(im)
+
     # 1. Автоконтраст - тянет тусклые/плоские фото к полному диапазону тонов
-    im = ImageOps.autocontrast(im, cutoff=1)
+    im = ImageOps.autocontrast(im, cutoff=2)
 
-    # 2. Лёгкое повышение насыщенности и контраста - делает фото более "глянцевым"
-    im = ImageEnhance.Color(im).enhance(1.08)
-    im = ImageEnhance.Contrast(im).enhance(1.04)
+    # 2. Повышение насыщенности и контраста - делает фото более "глянцевым" и заметно живее
+    im = ImageEnhance.Color(im).enhance(1.2)
+    im = ImageEnhance.Contrast(im).enhance(1.12)
 
-    # 3. Мягкая подстройка яркости к общему уровню комплекта фото (если он известен)
+    # 3. Подстройка яркости к общему уровню комплекта фото (если он известен)
     if target_luminance is not None:
         cur = ImageStat.Stat(im.convert("L")).mean[0]
         if cur > 0:
-            factor = 1 + 0.35 * ((target_luminance - cur) / 255)
-            factor = max(0.85, min(1.2, factor))
+            factor = 1 + 0.5 * ((target_luminance - cur) / 255)
+            factor = max(0.75, min(1.35, factor))
             im = ImageEnhance.Brightness(im).enhance(factor)
 
-    # 4. Едва заметный цветовой тон в духе темы презентации (soft-light блендинг на 16%) -
+    # 4. Доводка резкости/чёткости - делаем ДО размытия фона, иначе шарпен на следующем
+    # шаге частично "отменил" бы размытие периферии.
+    im = im.filter(ImageFilter.UnsharpMask(radius=1.6, percent=90, threshold=2))
+
+    # 5. Размытие фона вокруг объекта (боке) - объект (лицо/люди, если найдены) остаётся
+    # чётким, периферия кадра мягко уходит в размытие, как при съёмке с открытой диафрагмой.
+    im = _apply_depth_blur(im, subject=subject, blur_radius=10.0)
+
+    # 6. Заметный цветовой тон в духе темы презентации (soft-light блендинг на 28%) -
     # объединяет разномастные фото пользователя визуально с остальными слайдами.
     tint_color = _photo_tint_color(colors)
     tint_layer = Image.new("RGB", im.size, tint_color)
     graded = ImageChops.soft_light(im, tint_layer)
-    im = Image.blend(im, graded, 0.16)
+    im = Image.blend(im, graded, 0.28)
 
-    # 5. Лёгкая доводка резкости после сжатия/пересылки через Telegram
-    im = im.filter(ImageFilter.UnsharpMask(radius=1.4, percent=60, threshold=2))
+    # 7. Виньетка - лёгкое затемнение к краям, придаёт фото "обработанный" вид с первого взгляда
+    im = _apply_vignette(im, strength=0.22)
+
     return im
 
 
@@ -2013,8 +2121,10 @@ async def photo_source_ai(m: Message, state: FSMContext):
 @dp.message(Form.waiting_pres_photo_choice, F.text.in_(ALL_BTN_OWN_PHOTOS_LABELS))
 async def photo_source_own(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
+    data = await state.get_data()
+    slides = data.get("slides", 8)
     await m.answer(
-        tr("msg_send_photos_one_by_one", lang),
+        tr("msg_send_photos_one_by_one", lang, slides=slides),
         reply_markup=photos_done_kb(lang)
     )
     await state.set_state(Form.waiting_pres_photos)
@@ -2029,13 +2139,16 @@ async def waiting_pres_photo_choice_fallback(m: Message, state: FSMContext):
 @dp.message(Form.waiting_pres_photos, F.photo)
 async def collect_pres_photo(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
+    uid = m.from_user.id
     data = await state.get_data()
-    photos = data.get("user_photos") or []
-    if len(photos) >= 20:
+    # Лимит фото = число выбранных слайдов (одно фото на слайд) - больше просто некуда
+    # использовать, лишние присланные фото молча игнорируются с вежливым сообщением.
+    max_photos = data.get("slides", 20)
+    hint_count = len(data.get("user_photos") or [])
+    if hint_count >= max_photos:
         await m.answer(tr("msg_enough_photos", lang))
         return
-    uid = m.from_user.id
-    path = f"/tmp/{uid}_userphoto_{len(photos)}_{random.randint(1000, 9999)}.jpg"
+    path = f"/tmp/{uid}_userphoto_{hint_count}_{random.randint(1000, 9999)}.jpg"
     try:
         file = await bot.get_file(m.photo[-1].file_id)
         await bot.download_file(file.file_path, path)
@@ -2043,9 +2156,21 @@ async def collect_pres_photo(m: Message, state: FSMContext):
         print("Photo download error:", e)
         await m.answer(tr("msg_photo_download_fail", lang))
         return
-    photos.append(path)
-    await state.update_data(user_photos=photos)
-    await m.answer(tr("msg_photo_received", lang, n=len(photos)))
+    # Скачивание выше идёт БЕЗ блокировки (можно параллельно, это самая долгая часть);
+    # а вот изменение общего списка user_photos - под блокировкой на пользователя, иначе
+    # несколько фото одного альбома, скачавшихся почти одновременно, затрут друг друга
+    # в state (см. _get_photo_lock).
+    async with _get_photo_lock(uid):
+        data = await state.get_data()
+        photos = data.get("user_photos") or []
+        max_photos = data.get("slides", 20)
+        if len(photos) >= max_photos:
+            await m.answer(tr("msg_enough_photos", lang))
+            return
+        photos.append(path)
+        await state.update_data(user_photos=photos)
+        n = len(photos)
+    await m.answer(tr("msg_photo_received", lang, n=n))
 
 
 @dp.message(Form.waiting_pres_photos, F.text.in_(ALL_BTN_PHOTOS_DONE_LABELS))
@@ -2079,8 +2204,6 @@ async def _build_presentation(m: Message, state: FSMContext):
         theme_name = data.get("theme_name") or pick_theme(data.get("topic", ""))[0]
         colors = THEMES.get(theme_name, THEMES["default"])
         angle = data.get("angle") or random.choice(ANGLES)
-        layouts = [0, 1, 2]
-        random.shuffle(layouts)
         cgl = content_gen_lang(data, lang)
 
         if data.get("mode") == "user":
@@ -2160,6 +2283,19 @@ async def _build_presentation(m: Message, state: FSMContext):
         slides_data = content.get("slides", [])
         n = len(slides_data)
 
+        # 6 раскладок (3 базовых + 3 зеркальных: фото слева/справа, сверху/снизу, крупно/мелко) -
+        # выбираются случайно без повтора одной и той же раскладки два слайда подряд, чтобы
+        # презентация не выглядела как один и тот же шаблон, повторённый N раз, и чтобы разные
+        # презентации не были визуально неотличимы друг от друга.
+        LAYOUT_COUNT = 6
+        layout_sequence = []
+        prev_layout = None
+        for _ in range(n):
+            choice_pool = [l for l in range(LAYOUT_COUNT) if l != prev_layout]
+            next_layout = random.choice(choice_pool)
+            layout_sequence.append(next_layout)
+            prev_layout = next_layout
+
         # Свои фото пользователя (если он их прислал) идут в очередь: первое - на обложку,
         # остальные - по слайдам по порядку; на то, что не хватило, генерируем через ИИ как раньше.
         user_photos = list(data.get("user_photos") or [])
@@ -2168,6 +2304,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         user_photos_luminance = average_luminance(user_photos) if user_photos else None
 
         cover_img = None
+        cover_panel_img = None
         cover_src = f"/tmp/{uid}_cover.png"
         cover_own = user_photos.pop(0) if user_photos else None
         user_photo_originals = []
@@ -2177,10 +2314,21 @@ async def _build_presentation(m: Message, state: FSMContext):
         cover_ok = bool(cover_own) or await generate_image(
             f"{content.get('title')}, wide cinematic opening shot, {colors['photo']}", cover_src
         )
+        # Два стиля обложки, выбираются случайно - чтобы первый (самый запоминающийся) слайд
+        # тоже не был всегда одинаковым в каждой презентации:
+        # "band" - фото на весь кадр, плашка с заголовком снизу (классический вариант);
+        # "split" - фото на половину кадра (слева или справа), заголовок на цветной панели рядом.
+        cover_style = random.choice(["band", "split"]) if cover_ok else "band"
+        cover_split_side = random.choice(["left", "right"])
         if cover_ok:
-            cover_wide = f"/tmp/{uid}_cover_w.png"
-            cover(cover_own or cover_src, cover_wide, 1920, 1080)
-            cover_img = cover_wide
+            if cover_style == "split":
+                cover_panel = f"/tmp/{uid}_cover_panel.png"
+                cover(cover_own or cover_src, cover_panel, 1280, 1500)
+                cover_panel_img = cover_panel
+            else:
+                cover_wide = f"/tmp/{uid}_cover_w.png"
+                cover(cover_own or cover_src, cover_wide, 1920, 1080)
+                cover_img = cover_wide
 
         # Если модель дала валидный chart для слайда - фото для него не генерируем вообще
         # (график займёт то же место в раскладке, экономим время и токены на генерацию картинки).
@@ -2224,16 +2372,25 @@ async def _build_presentation(m: Message, state: FSMContext):
 
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         rect(slide, 0, 0, 13.333, 7.5, colors["bg"])
-        if cover_img:
-            slide.shapes.add_picture(cover_img, Inches(0), Inches(0), width=Inches(13.333), height=Inches(7.5))
-            rect(slide, 0, 4.7, 13.333, 2.8, colors["bg"])
-        txt(slide, 0.7, 5.0, 12, 1.5, content.get("title", "Презентация"), 40, colors["ink"], True)
-        txt(slide, 0.7, 6.6, 12, 0.4, "01  /  введение", 13, colors["mute"])
+        if cover_panel_img:
+            photo_x = 0 if cover_split_side == "left" else 6.933
+            panel_x = 6.933 if cover_split_side == "left" else 0
+            slide.shapes.add_picture(cover_panel_img, Inches(photo_x), Inches(0), width=Inches(6.4), height=Inches(7.5))
+            rect(slide, panel_x, 0, 6.4, 7.5, colors["bg"])
+            txt(slide, panel_x + 0.5, 2.9, 5.4, 2.0, content.get("title", "Презентация"), 32, colors["ink"], True)
+            rect(slide, panel_x + 0.5, 4.9, 0.85, 0.05, colors["line"])
+            txt(slide, panel_x + 0.5, 6.6, 5.4, 0.4, "01  /  введение", 13, colors["mute"])
+        else:
+            if cover_img:
+                slide.shapes.add_picture(cover_img, Inches(0), Inches(0), width=Inches(13.333), height=Inches(7.5))
+                rect(slide, 0, 4.7, 13.333, 2.8, colors["bg"])
+            txt(slide, 0.7, 5.0, 12, 1.5, content.get("title", "Презентация"), 40, colors["ink"], True)
+            txt(slide, 0.7, 6.6, 12, 0.4, "01  /  введение", 13, colors["mute"])
 
         for idx, s in enumerate(slides_data):
             slide = prs.slides.add_slide(prs.slide_layouts[6])
             rect(slide, 0, 0, 13.333, 7.5, colors["bg"])
-            layout = layouts[idx % 3]
+            layout = layout_sequence[idx]
             img = images[idx] if idx < len(images) else None
             chart_data = charts[idx] if idx < len(charts) else None
             if layout == 0:
@@ -2269,7 +2426,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                 p.font.size = Pt(15)
                 p.font.color.rgb = RGBColor(*colors["mid"])
                 p.font.name = "Calibri"
-            else:
+            elif layout == 2:
                 txt(slide, 0.7, 1.3, 8.2, 2.2, s.get("title", ""), 36, colors["ink"], True)
                 rect(slide, 0.7, 3.6, 1.1, 0.06, colors["line"])
                 box = slide.shapes.add_textbox(Inches(0.7), Inches(3.9), Inches(7.4), Inches(2.6))
@@ -2285,6 +2442,58 @@ async def _build_presentation(m: Message, state: FSMContext):
                 elif img:
                     slide.shapes.add_picture(img[1], Inches(8.7), Inches(1.3), width=Inches(3.9), height=Inches(4.7))
                 txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
+            elif layout == 3:
+                # Зеркало layout 0: фото - правая половина кадра, текст - слева.
+                if chart_data:
+                    add_chart(slide, 0.7, 0.6, 5.4, 6.3, chart_data, colors)
+                elif img:
+                    slide.shapes.add_picture(img[1], Inches(6.933), Inches(0), width=Inches(6.4), height=Inches(7.5))
+                txt(slide, 0.7, 1.5, 5.5, 1.6, s.get("title", ""), 30, colors["ink"], True)
+                rect(slide, 0.7, 3.25, 0.85, 0.05, colors["line"])
+                box = slide.shapes.add_textbox(Inches(0.7), Inches(3.5), Inches(5.5), Inches(3.2))
+                tf = box.text_frame
+                tf.word_wrap = True
+                blocks = [x.strip() for x in (s.get("content") or "").split("\n") if x.strip()][:2]
+                for i, b in enumerate(blocks or [""]):
+                    p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+                    p.text = b
+                    p.font.size = Pt(16)
+                    p.font.color.rgb = RGBColor(*colors["mid"])
+                    p.font.name = "Calibri"
+                    p.space_after = Pt(16)
+                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
+            elif layout == 4:
+                # Зеркало layout 1: фото - нижняя полоса кадра, текст - сверху.
+                txt(slide, 0.7, 0.4, 12, 1.0, s.get("title", ""), 28, colors["ink"], True)
+                box = slide.shapes.add_textbox(Inches(0.7), Inches(1.4), Inches(12), Inches(1.2))
+                tf = box.text_frame
+                tf.word_wrap = True
+                p = tf.paragraphs[0]
+                p.text = " ".join((s.get("content") or "").split())
+                p.font.size = Pt(15)
+                p.font.color.rgb = RGBColor(*colors["mid"])
+                p.font.name = "Calibri"
+                if chart_data:
+                    add_chart(slide, 0.7, 3.15, 11.9, 4.0, chart_data, colors)
+                elif img:
+                    slide.shapes.add_picture(img[0], Inches(0), Inches(2.95), width=Inches(13.333), height=Inches(4.55))
+            else:
+                # Зеркало layout 2: фото - слева мелко, текст - справа.
+                txt(slide, 5.2, 1.3, 7.4, 2.2, s.get("title", ""), 36, colors["ink"], True)
+                rect(slide, 5.2, 3.6, 1.1, 0.06, colors["line"])
+                box = slide.shapes.add_textbox(Inches(5.2), Inches(3.9), Inches(7.4), Inches(2.6))
+                tf = box.text_frame
+                tf.word_wrap = True
+                p = tf.paragraphs[0]
+                p.text = " ".join((s.get("content") or "").split())
+                p.font.size = Pt(16)
+                p.font.color.rgb = RGBColor(*colors["mid"])
+                p.font.name = "Calibri"
+                if chart_data:
+                    add_chart(slide, 0.7, 1.3, 4.6, 4.7, chart_data, colors)
+                elif img:
+                    slide.shapes.add_picture(img[1], Inches(0.7), Inches(1.3), width=Inches(3.9), height=Inches(4.7))
+                txt(slide, 5.2, 6.95, 7.4, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
 
         pptx_path = f"/tmp/pres_{uid}.pptx"
         prs.save(pptx_path)
@@ -2335,7 +2544,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         await m.answer_document(FSInputFile(pdf_path, filename=f"{pres_fname}.pdf"), caption=tr("msg_pptx_pdf_caption", lang))
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
-        for p in (cover_src, cover_own, cover_img, pptx_path, pdf_path, *raw_sources, *user_photo_originals, *[f for pair in images if pair for f in pair]):
+        for p in (cover_src, cover_own, cover_img, cover_panel_img, pptx_path, pdf_path, *raw_sources, *user_photo_originals, *[f for pair in images if pair for f in pair]):
             try:
                 if p and os.path.exists(p):
                     os.remove(p)
