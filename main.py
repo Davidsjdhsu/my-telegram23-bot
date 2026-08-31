@@ -4,6 +4,7 @@ import json
 import random
 import re
 import time
+import colorsys
 from collections import deque
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F
@@ -32,7 +33,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from PIL import Image
+from PIL import Image, ImageOps, ImageEnhance, ImageChops, ImageStat, ImageFilter
 import httpx
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -121,6 +122,25 @@ dp = Dispatcher(storage=MemoryStorage())
 users_db = {}
 PLAN_LIMITS = {"premium": 15}
 
+_bot_username_cache = {"value": None}
+
+
+async def get_bot_username() -> str:
+    """Юзернейм бота (без @), запрашивается у Telegram один раз при первом обращении
+    и кешируется - чтобы не дёргать get_me() на каждую отправку файла."""
+    if _bot_username_cache["value"] is None:
+        me = await bot.get_me()
+        _bot_username_cache["value"] = me.username or "bot"
+    return _bot_username_cache["value"]
+
+
+async def signature_line(lang: str) -> str:
+    """Строка-подпись 'Рад был помочь! Ваш, @ИмяБота', добавляется в конец финального
+    сообщения после отправки готового файла - как у SaveAsBot."""
+    username = await get_bot_username()
+    return tr("msg_signature", lang, bot=f"@{username}")
+
+
 class Form(StatesGroup):
     waiting_mode = State()
     waiting_topic = State()
@@ -149,6 +169,9 @@ class Form(StatesGroup):
     waiting_excel_confirm = State()
     waiting_excel_extra = State()
     waiting_language = State()
+    waiting_pres_content_lang = State()
+    waiting_word_content_lang = State()
+    waiting_excel_content_lang = State()
 
 
 # ==================== ЯЗЫКИ / i18n ====================
@@ -181,6 +204,8 @@ TR = {
                  "ar": "ℹ️ خطتي", "zh": "ℹ️ 我的套餐", "es": "ℹ️ Mi plan", "fr": "ℹ️ Mon forfait"},
     "btn_language": {"ru": "🌐 Язык", "en": "🌐 Language", "de": "🌐 Sprache",
                      "ar": "🌐 اللغة", "zh": "🌐 语言", "es": "🌐 Idioma", "fr": "🌐 Langue"},
+    "btn_same_as_interface": {"ru": "Как в интерфейсе ({iface_lang})", "en": "Same as interface ({iface_lang})", "de": "Wie die Oberfläche ({iface_lang})",
+                              "ar": "نفس لغة الواجهة ({iface_lang})", "zh": "与界面语言相同（{iface_lang}）", "es": "Igual que la interfaz ({iface_lang})", "fr": "Comme l'interface ({iface_lang})"},
     "btn_main_menu": {"ru": "🏠 Главное меню", "en": "🏠 Main menu", "de": "🏠 Hauptmenü",
                       "ar": "🏠 القائمة الرئيسية", "zh": "🏠 主菜单", "es": "🏠 Menú principal", "fr": "🏠 Menu principal"},
     "btn_ai_generate": {"ru": "✨ Сгенерировать с ИИ", "en": "✨ Generate with AI", "de": "✨ Mit KI generieren",
@@ -215,9 +240,9 @@ TR = {
                       "ar": "➕ عرض المزيد من المستندات", "zh": "➕ 显示更多文档", "es": "➕ Mostrar más documentos", "fr": "➕ Afficher plus de documents"},
     "btn_back_categories": {"ru": "⬅️ Назад к категориям", "en": "⬅️ Back to categories", "de": "⬅️ Zurück zu Kategorien",
                             "ar": "⬅️ العودة إلى الفئات", "zh": "⬅️ 返回分类", "es": "⬅️ Volver a categorías", "fr": "⬅️ Retour aux catégories"},
-    "btn_5slides": {"ru": "5️⃣ 5 слайдов", "en": "5️⃣ 5 slides", "de": "5️⃣ 5 Folien", "ar": "5️⃣ 5 شرائح", "zh": "5️⃣ 5张幻灯片", "es": "5️⃣ 5 diapositivas", "fr": "5️⃣ 5 diapositives"},
     "btn_8slides": {"ru": "8️⃣ 8 слайдов", "en": "8️⃣ 8 slides", "de": "8️⃣ 8 Folien", "ar": "8️⃣ 8 شرائح", "zh": "8️⃣ 8张幻灯片", "es": "8️⃣ 8 diapositivas", "fr": "8️⃣ 8 diapositives"},
-    "btn_10slides": {"ru": "🔟 10 слайдов", "en": "🔟 10 slides", "de": "🔟 10 Folien", "ar": "🔟 10 شرائح", "zh": "🔟 10张幻灯片", "es": "🔟 10 diapositivas", "fr": "🔟 10 diapositives"},
+    "btn_12slides": {"ru": "1️⃣2️⃣ 12 слайдов", "en": "1️⃣2️⃣ 12 slides", "de": "1️⃣2️⃣ 12 Folien", "ar": "1️⃣2️⃣ 12 شريحة", "zh": "1️⃣2️⃣ 12张幻灯片", "es": "1️⃣2️⃣ 12 diapositivas", "fr": "1️⃣2️⃣ 12 diapositives"},
+    "btn_16slides": {"ru": "1️⃣6️⃣ 16 слайдов", "en": "1️⃣6️⃣ 16 slides", "de": "1️⃣6️⃣ 16 Folien", "ar": "1️⃣6️⃣ 16 شريحة", "zh": "1️⃣6️⃣ 16张幻灯片", "es": "1️⃣6️⃣ 16 diapositivas", "fr": "1️⃣6️⃣ 16 diapositives"},
     "btn_shallow": {"ru": "Поверхностное раскрытие темы", "en": "Brief coverage of the topic", "de": "Oberflächliche Themenbehandlung",
                     "ar": "تغطية سطحية للموضوع", "zh": "简要阐述主题", "es": "Cobertura breve del tema", "fr": "Traitement succinct du sujet"},
     "btn_deep": {"ru": "Полное раскрытие темы", "en": "Full coverage of the topic", "de": "Vollständige Themenbehandlung",
@@ -567,6 +592,32 @@ TR = {
                       "zh": "ℹ️ 生成次数：{used} / {limit}\n剩余：{left}",
                       "es": "ℹ️ Generaciones: {used} de {limit}\nRestantes: {left}",
                       "fr": "ℹ️ Générations : {used} sur {limit}\nRestant : {left}"},
+    "msg_pptx_ready": {
+        "ru": "Готово ✅\n\nОткрывай именно PPTX в PowerPoint, Keynote или Google Презентациях.\n\nЕсли на телефоне все фото одинаковые, это не ошибка файла. Так бывает в предпросмотре Telegram, WPS и встроенных «Документах». Открой тот же файл на другом устройстве или в нормальном редакторе презентаций.",
+        "en": "Done ✅\n\nOpen the PPTX file specifically in PowerPoint, Keynote, or Google Slides.\n\nIf all the photos look the same on your phone, that's not a file error. This happens in Telegram's preview, WPS, and built-in \"Files\" apps. Open the same file on another device or in a proper presentation editor.",
+        "de": "Fertig ✅\n\nÖffne die PPTX-Datei speziell in PowerPoint, Keynote oder Google Präsentationen.\n\nWenn auf dem Handy alle Fotos gleich aussehen, ist das kein Dateifehler. Das passiert bei der Telegram-Vorschau, WPS und integrierten „Dateien“-Apps. Öffne dieselbe Datei auf einem anderen Gerät oder in einem richtigen Präsentationseditor.",
+        "ar": "تم ✅\n\nافتح ملف PPTX تحديداً في PowerPoint أو Keynote أو Google Slides.\n\nإذا بدت كل الصور متشابهة على الهاتف، فهذا ليس خطأً في الملف. يحدث هذا في معاينة Telegram وWPS وتطبيقات «الملفات» المدمجة. افتح نفس الملف على جهاز آخر أو في محرر عروض تقديمية حقيقي.",
+        "zh": "完成 ✅\n\n请务必在 PowerPoint、Keynote 或 Google 幻灯片中打开该 PPTX 文件。\n\n如果手机上所有照片看起来都一样，这不是文件错误。这在 Telegram 预览、WPS 和内置「文件」应用中很常见。请在其他设备或正规演示文稿编辑器中打开同一文件。",
+        "es": "Listo ✅\n\nAbre el archivo PPTX específicamente en PowerPoint, Keynote o Presentaciones de Google.\n\nSi en el teléfono todas las fotos se ven iguales, no es un error del archivo. Esto pasa en la vista previa de Telegram, WPS y las apps integradas de «Archivos». Abre el mismo archivo en otro dispositivo o en un editor de presentaciones real.",
+        "fr": "Terminé ✅\n\nOuvre bien le fichier PPTX dans PowerPoint, Keynote ou Google Slides.\n\nSi toutes les photos se ressemblent sur ton téléphone, ce n'est pas une erreur du fichier. Cela arrive dans l'aperçu de Telegram, WPS et les applications « Fichiers » intégrées. Ouvre le même fichier sur un autre appareil ou dans un vrai éditeur de présentations."},
+    "msg_pptx_caption": {"ru": "📊 PPTX — открывай этот файл", "en": "📊 PPTX — open this file", "de": "📊 PPTX — öffne diese Datei",
+                         "ar": "📊 PPTX — افتح هذا الملف", "zh": "📊 PPTX——请打开此文件", "es": "📊 PPTX — abre este archivo", "fr": "📊 PPTX — ouvre ce fichier"},
+    "msg_pptx_pdf_caption": {"ru": "📄 PDF — полная текстовая копия (без фото)", "en": "📄 PDF — full text copy (without photos)",
+                             "de": "📄 PDF — vollständige Textkopie (ohne Fotos)", "ar": "📄 PDF — نسخة نصية كاملة (بدون صور)",
+                             "zh": "📄 PDF——完整文字副本（不含图片）", "es": "📄 PDF — copia completa en texto (sin fotos)",
+                             "fr": "📄 PDF — copie texte complète (sans photos)"},
+    "msg_content_lang_prompt": {
+        "ru": "На каком языке сделать содержимое? Это не обязательно тот же язык, что и у интерфейса.",
+        "en": "What language should the content be in? It doesn't have to match the interface language.",
+        "de": "In welcher Sprache soll der Inhalt sein? Das muss nicht die Sprache der Oberfläche sein.",
+        "ar": "بأي لغة تريد المحتوى؟ لا يلزم أن تكون نفس لغة الواجهة.",
+        "zh": "内容需要用什么语言？不一定要和界面语言相同。",
+        "es": "¿En qué idioma debe estar el contenido? No tiene por qué coincidir con el idioma de la interfaz.",
+        "fr": "Dans quelle langue doit être le contenu ? Ce n'est pas obligatoirement la langue de l'interface."},
+    "msg_pick_content_lang": {"ru": "Выбери язык кнопкой ниже.", "en": "Pick a language using the button below.", "de": "Wähle eine Sprache mit dem Button unten.",
+                              "ar": "اختر لغة من الأزرار أدناه.", "zh": "请用下方按钮选择语言。", "es": "Elige un idioma con el botón de abajo.", "fr": "Choisis une langue avec le bouton ci-dessous."},
+    "msg_signature": {"ru": "Рад был помочь! Ваш, {bot}", "en": "Glad I could help! Yours, {bot}", "de": "Gern geholfen! Dein {bot}",
+                      "ar": "سعيد بمساعدتك! صديقك، {bot}", "zh": "很高兴能帮到你！你的 {bot}", "es": "¡Encantado de ayudar! Tuyo, {bot}", "fr": "Ravi d'avoir pu t'aider ! Ton {bot}"},
 }
 
 
@@ -615,6 +666,27 @@ def lang_kb():
 
 
 LANG_LABEL_TO_CODE = {f"{v['flag']} {v['name']}": k for k, v in LANGS.items()}
+
+
+def content_lang_kb(interface_lang):
+    """Клавиатура выбора языка КОНТЕНТА документа/презентации - отдельно от языка интерфейса,
+    т.к. это разные вещи (например, интерфейс на английском, а презентация нужна на русском).
+    Первая кнопка - быстрый вариант "как в интерфейсе", дальше все 7 языков."""
+    rows = [[KeyboardButton(text=tr("btn_same_as_interface", interface_lang, iface_lang=LANGS[interface_lang]["name"]))]]
+    codes = list(LANGS.keys())
+    for i in range(0, len(codes), 2):
+        pair = codes[i:i + 2]
+        rows.append([KeyboardButton(text=f"{LANGS[c]['flag']} {LANGS[c]['name']}") for c in pair])
+    rows.append([KeyboardButton(text=tr("btn_main_menu", interface_lang))])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def resolve_content_lang(text: str, interface_lang: str):
+    """Разбирает нажатие кнопки на клавиатуре content_lang_kb. Возвращает код языка
+    или None, если текст не распознан ни как "как в интерфейсе", ни как конкретный язык."""
+    if text == tr("btn_same_as_interface", interface_lang, iface_lang=LANGS[interface_lang]["name"]):
+        return interface_lang
+    return LANG_LABEL_TO_CODE.get(text)
 
 
 THEMES = {
@@ -935,6 +1007,16 @@ def grok_json_lang_instruction(lang: str) -> str:
     return GROK_JSON_LANG_HINT.get(lang, "")
 
 
+def content_gen_lang(data: dict, interface_lang: str, mode_key: str = "mode"):
+    """Язык, на котором нужно генерировать контент через ИИ - отдельно от языка интерфейса
+    (человек может пользоваться ботом на английском, а презентацию просить на русском).
+    Возвращает None для режима "свой текст/данные" - там язык уже задан текстом пользователя,
+    форсировать его незачем и даже вредно (можно случайно попросить модель перевести текст)."""
+    if data.get(mode_key) == "ai":
+        return data.get("content_lang") or interface_lang
+    return None
+
+
 async def ask_grok(prompt: str, max_tokens: int = 4000) -> str:
     try:
         r = await client.chat.completions.create(
@@ -990,6 +1072,82 @@ async def generate_image(prompt: str, path: str) -> bool:
     except Exception as e:
         print("Image generation error:", e)
         return False
+
+
+def _photo_tint_color(colors: dict):
+    """Цвет для тонирования фото на основе акцентного цвета темы (colors["line"]/["ink"]),
+    но с яркостью, безопасной для soft-light блендинга. Акцентные цвета тем часто почти
+    чёрные (это цвет текста/линий, не для фото) - если тонировать фото им напрямую, тёмный
+    тон "давит" все фото в тень сильнее, чем работает коррекция яркости. Поэтому берём только
+    оттенок (hue) темы, а яркость и насыщенность тонирующего слоя всегда держим в безопасном
+    среднем диапазоне."""
+    base = colors.get("line") or colors.get("ink") or (190, 190, 190)
+    r, g, b = (c / 255 for c in base)
+    h, s, _v = colorsys.rgb_to_hsv(r, g, b)
+    s = min(s, 0.5)
+    v = 0.64  # чуть выше нейтральной точки soft-light (128/255 ≈ 0.5) - лёгкое, не разрушающее тонирование
+    r2, g2, b2 = colorsys.hsv_to_rgb(h, s, v)
+    return (int(r2 * 255), int(g2 * 255), int(b2 * 255))
+
+
+def average_luminance(paths):
+    """Средняя яркость по набору фото - используется как общий ориентир, чтобы все
+    личные фото пользователя в одной презентации выглядели как единый комплект по свету,
+    а не вразнобой (одно тёмное, другое пересвеченное)."""
+    vals = []
+    for p in paths:
+        try:
+            im = Image.open(p).convert("L")
+            vals.append(ImageStat.Stat(im).mean[0])
+        except Exception:
+            continue
+    return sum(vals) / len(vals) if vals else None
+
+
+def enhance_user_photo(src_path: str, colors: dict, target_luminance=None) -> Image.Image:
+    """Лёгкая профессиональная доработка ЛИЧНОГО фото пользователя под стиль презентации:
+    выравнивает контраст и резкость (телефонные фото часто плоские/мягкие после сжатия
+    мессенджером), мягко подтягивает яркость к общему уровню остальных фото в этой же
+    презентации, и добавляет едва заметный цветовой тон в духе темы (как в Canva/Lightroom
+    presets) - фото перестают выглядеть "вставленными как есть", но остаются собой.
+    Намеренно НЕ используется генеративный ИИ (img2img) - на личных фото людей это рискует
+    исказить лица и черты, что хуже, чем не трогать фото вовсе."""
+    im = Image.open(src_path).convert("RGB")
+
+    # 1. Автоконтраст - тянет тусклые/плоские фото к полному диапазону тонов
+    im = ImageOps.autocontrast(im, cutoff=1)
+
+    # 2. Лёгкое повышение насыщенности и контраста - делает фото более "глянцевым"
+    im = ImageEnhance.Color(im).enhance(1.08)
+    im = ImageEnhance.Contrast(im).enhance(1.04)
+
+    # 3. Мягкая подстройка яркости к общему уровню комплекта фото (если он известен)
+    if target_luminance is not None:
+        cur = ImageStat.Stat(im.convert("L")).mean[0]
+        if cur > 0:
+            factor = 1 + 0.35 * ((target_luminance - cur) / 255)
+            factor = max(0.85, min(1.2, factor))
+            im = ImageEnhance.Brightness(im).enhance(factor)
+
+    # 4. Едва заметный цветовой тон в духе темы презентации (soft-light блендинг на 16%) -
+    # объединяет разномастные фото пользователя визуально с остальными слайдами.
+    tint_color = _photo_tint_color(colors)
+    tint_layer = Image.new("RGB", im.size, tint_color)
+    graded = ImageChops.soft_light(im, tint_layer)
+    im = Image.blend(im, graded, 0.16)
+
+    # 5. Лёгкая доводка резкости после сжатия/пересылки через Telegram
+    im = im.filter(ImageFilter.UnsharpMask(radius=1.4, percent=60, threshold=2))
+    return im
+
+
+def prepare_user_photo(src_path: str, colors: dict, target_luminance=None) -> str:
+    """Доработка + сохранение в новый временный файл, путь к которому можно передавать
+    дальше в cover() как обычный источник изображения."""
+    im = enhance_user_photo(src_path, colors, target_luminance)
+    out_path = src_path.rsplit(".", 1)[0] + "_enhanced.png"
+    im.save(out_path, "PNG")
+    return out_path
 
 
 def cover(src, dest, w, h):
@@ -1155,8 +1313,8 @@ def mode_kb(show_template=False, lang="ru"):
 
 def slides_kb(lang="ru"):
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text=tr("btn_5slides", lang)), KeyboardButton(text=tr("btn_8slides", lang))],
-        [KeyboardButton(text=tr("btn_10slides", lang))],
+        [KeyboardButton(text=tr("btn_8slides", lang)), KeyboardButton(text=tr("btn_12slides", lang))],
+        [KeyboardButton(text=tr("btn_16slides", lang))],
         [KeyboardButton(text=tr("btn_main_menu", lang))]
     ], resize_keyboard=True)
 
@@ -1546,11 +1704,11 @@ STYLE_BY_LABEL = {label: k for k, variants in THEME_LABELS_I18N.items() for labe
 @dp.message(Command("start"))
 async def cmd_start(m: Message, state: FSMContext):
     u = get_user(m.from_user.id)
-    u["name"] = m.from_user.first_name or "друг"
+    u["name"] = m.from_user.first_name or ""
     await state.clear()
     if u.get("lang_chosen"):
         lang = user_lang(m.from_user.id)
-        await m.answer(tr("msg_welcome", lang, name=u["name"]), reply_markup=main_kb(lang))
+        await m.answer(tr("msg_welcome", lang, name=u["name"] or "🙂"), reply_markup=main_kb(lang))
         return
     await state.set_state(Form.waiting_language)
     intro = " / ".join(TR["msg_choose_lang"][c] for c in ("ru", "en", "ar", "zh"))
@@ -1612,6 +1770,18 @@ async def start_pres(m: Message, state: FSMContext):
 async def mode_ai(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     await state.update_data(mode="ai", user_text="")
+    await m.answer(tr("msg_content_lang_prompt", lang), reply_markup=content_lang_kb(lang))
+    await state.set_state(Form.waiting_pres_content_lang)
+
+
+@dp.message(Form.waiting_pres_content_lang)
+async def pres_content_lang(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    code = resolve_content_lang((m.text or "").strip(), lang)
+    if not code:
+        await m.answer(tr("msg_pick_content_lang", lang), reply_markup=content_lang_kb(lang))
+        return
+    await state.update_data(content_lang=code)
     await m.answer(tr("msg_topic_prompt", lang), reply_markup=cancel_kb(lang))
     await state.set_state(Form.waiting_topic)
 
@@ -1622,6 +1792,12 @@ async def mode_user(m: Message, state: FSMContext):
     await state.update_data(mode="user")
     await m.answer(tr("msg_own_text_prompt", lang), reply_markup=cancel_kb(lang))
     await state.set_state(Form.waiting_user_text)
+
+
+@dp.message(Form.waiting_mode)
+async def waiting_mode_fallback(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    await m.answer(tr("msg_didnt_understand", lang), reply_markup=mode_kb(lang=lang))
 
 
 @dp.message(Form.waiting_topic)
@@ -1681,15 +1857,15 @@ async def process_slides(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     slides = 8
     t = m.text or ""
-    if "5" in t:
-        slides = 5
-    elif "10" in t:
-        slides = 10
+    if "16" in t:
+        slides = 16
+    elif "12" in t:
+        slides = 12
     data = await state.get_data()
     angle = random.choice(ANGLES)
     await state.update_data(slides=slides, angle=angle)
     await m.answer(tr("msg_building_sample", lang), reply_markup=cancel_kb(lang))
-    lang_instr = grok_lang_instruction(lang)
+    lang_instr = grok_lang_instruction(content_gen_lang(data, lang) or "ru")
 
     if data.get("mode") == "user":
         prompt = f"""Ты — редактор презентаций высокого уровня. Пользователь прислал свой текст.
@@ -1790,7 +1966,7 @@ async def process_extra(m: Message, state: FSMContext):
     angle = random.choice(ANGLES)
     await state.update_data(extra=extra, extra_used=data.get("extra_used", 0) + 1, angle=angle)
     await m.answer(tr("msg_updating_draft", lang))
-    lang_instr = grok_lang_instruction(lang)
+    lang_instr = grok_lang_instruction(content_gen_lang(data, lang) or "ru")
     if data.get("mode") == "user":
         prompt = f"""Исправь и обнови структуру.
 Исходный текст:
@@ -1842,6 +2018,12 @@ async def photo_source_own(m: Message, state: FSMContext):
         reply_markup=photos_done_kb(lang)
     )
     await state.set_state(Form.waiting_pres_photos)
+
+
+@dp.message(Form.waiting_pres_photo_choice)
+async def waiting_pres_photo_choice_fallback(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    await m.answer(tr("msg_didnt_understand", lang), reply_markup=photo_source_kb(lang))
 
 
 @dp.message(Form.waiting_pres_photos, F.photo)
@@ -1899,6 +2081,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         angle = data.get("angle") or random.choice(ANGLES)
         layouts = [0, 1, 2]
         random.shuffle(layouts)
+        cgl = content_gen_lang(data, lang)
 
         if data.get("mode") == "user":
             common_rules = """
@@ -1930,7 +2113,7 @@ async def _build_presentation(m: Message, state: FSMContext):
     Стиль: {theme_name}
     {common_rules}
     Только JSON (ключ "chart" добавляй лишь на 1-2 слайдах и только если тема того требует, иначе не пиши его вовсе):
-    {{"title":"...","slides":[{{"title":"...","content":"абзац1\n\nабзац2","image_prompt":"unique cinematic scene","chart":null}}]}}{grok_json_lang_instruction(lang)}""")
+    {{"title":"...","slides":[{{"title":"...","content":"абзац1\n\nабзац2","image_prompt":"unique cinematic scene","chart":null}}]}}{grok_json_lang_instruction(cgl or "ru")}""")
         else:
             common_rules = """
     Правила качества (обязательны для каждого слайда):
@@ -1959,7 +2142,7 @@ async def _build_presentation(m: Message, state: FSMContext):
     Стиль: {theme_name}
     {common_rules}
     Только JSON (ключ "chart" добавляй лишь на 1-2 слайдах и только если тема того требует, иначе не пиши его вовсе):
-    {{"title":"...","slides":[{{"title":"...","content":"абзац1\n\nабзац2","image_prompt":"unique cinematic scene","chart":null}}]}}{grok_json_lang_instruction(lang)}""")
+    {{"title":"...","slides":[{{"title":"...","content":"абзац1\n\nабзац2","image_prompt":"unique cinematic scene","chart":null}}]}}{grok_json_lang_instruction(cgl or "ru")}""")
 
         try:
             content = extract_json(raw)
@@ -1980,10 +2163,17 @@ async def _build_presentation(m: Message, state: FSMContext):
         # Свои фото пользователя (если он их прислал) идут в очередь: первое - на обложку,
         # остальные - по слайдам по порядку; на то, что не хватило, генерируем через ИИ как раньше.
         user_photos = list(data.get("user_photos") or [])
+        # Общий уровень яркости по ВСЕМ присланным фото - ориентир для enhance_user_photo(),
+        # чтобы фото с разных камер/освещения в одной презентации смотрелись как единый комплект.
+        user_photos_luminance = average_luminance(user_photos) if user_photos else None
 
         cover_img = None
         cover_src = f"/tmp/{uid}_cover.png"
         cover_own = user_photos.pop(0) if user_photos else None
+        user_photo_originals = []
+        if cover_own:
+            user_photo_originals.append(cover_own)
+            cover_own = prepare_user_photo(cover_own, colors, user_photos_luminance)
         cover_ok = bool(cover_own) or await generate_image(
             f"{content.get('title')}, wide cinematic opening shot, {colors['photo']}", cover_src
         )
@@ -2017,7 +2207,8 @@ async def _build_presentation(m: Message, state: FSMContext):
                 continue
             own = user_photos.pop(0) if user_photos else None
             if own:
-                src, ok = own, True
+                user_photo_originals.append(own)
+                src, ok = prepare_user_photo(own, colors, user_photos_luminance), True
             else:
                 src = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}.png"
                 prompt = f"{s.get('image_prompt') or s.get('title')}, {colors['photo']}, unique composition"
@@ -2095,9 +2286,9 @@ async def _build_presentation(m: Message, state: FSMContext):
                     slide.shapes.add_picture(img[1], Inches(8.7), Inches(1.3), width=Inches(3.9), height=Inches(4.7))
                 txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
 
-        pptx_path = f"pres_{uid}.pptx"
+        pptx_path = f"/tmp/pres_{uid}.pptx"
         prs.save(pptx_path)
-        pdf_path = f"pres_{uid}.pdf"
+        pdf_path = f"/tmp/pres_{uid}.pdf"
         pdf = canvas.Canvas(pdf_path, pagesize=A4)
         w, h = A4
         fn, fb = register_pdf_fonts()
@@ -2140,23 +2331,19 @@ async def _build_presentation(m: Message, state: FSMContext):
         pdf.save()
 
         pres_fname = safe_filename(content.get("title"), fallback="Презентация")
-        await m.answer_document(FSInputFile(pptx_path, filename=f"{pres_fname}.pptx"), caption="📊 PPTX — открывай этот файл")
-        await m.answer_document(FSInputFile(pdf_path, filename=f"{pres_fname}.pdf"), caption="📄 PDF — полная текстовая копия (без фото)")
+        await m.answer_document(FSInputFile(pptx_path, filename=f"{pres_fname}.pptx"), caption=tr("msg_pptx_caption", lang))
+        await m.answer_document(FSInputFile(pdf_path, filename=f"{pres_fname}.pdf"), caption=tr("msg_pptx_pdf_caption", lang))
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
-        for p in (cover_src, cover_own, cover_img, pptx_path, pdf_path, *raw_sources, *[f for pair in images if pair for f in pair]):
+        for p in (cover_src, cover_own, cover_img, pptx_path, pdf_path, *raw_sources, *user_photo_originals, *[f for pair in images if pair for f in pair]):
             try:
                 if p and os.path.exists(p):
                     os.remove(p)
             except Exception:
                 pass
         await m.answer(
-            "Готово ✅\n\n"
-            "Открывай именно PPTX в PowerPoint, Keynote или Google Презентациях.\n\n"
-            "Если на телефоне все фото одинаковые, это не ошибка файла. "
-            "Так бывает в предпросмотре Telegram, WPS и встроенных «Документах». "
-            "Открой тот же файл на другом устройстве или в нормальном редакторе презентаций.",
-            reply_markup=main_kb()
+            tr("msg_pptx_ready", lang) + "\n\n" + await signature_line(lang),
+            reply_markup=main_kb(lang)
         )
         await state.clear()
     finally:
@@ -2167,9 +2354,10 @@ async def _build_presentation(m: Message, state: FSMContext):
 async def waiting_confirm_fallback(m: Message, state: FSMContext):
     """Ловит любой текст, не совпавший с кнопками выше, чтобы диалог никогда
     не зависал без ответа."""
+    lang = user_lang(m.from_user.id)
     await m.answer(
-        "Не понял. Выбери действие кнопкой ниже, или напиши /cancel, чтобы начать заново.",
-        reply_markup=confirm_kb()
+        tr("msg_didnt_understand", lang),
+        reply_markup=confirm_kb(lang)
     )
 
 
@@ -3149,9 +3337,21 @@ async def excel_kind(m: Message, state: FSMContext):
 @dp.message(Form.waiting_excel_mode, F.text.in_(ALL_BTN_AI_GENERATE_LABELS))
 async def excel_mode_ai(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
+    await state.update_data(excel_mode="ai")
+    await m.answer(tr("msg_content_lang_prompt", lang), reply_markup=content_lang_kb(lang))
+    await state.set_state(Form.waiting_excel_content_lang)
+
+
+@dp.message(Form.waiting_excel_content_lang)
+async def excel_content_lang(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    code = resolve_content_lang((m.text or "").strip(), lang)
+    if not code:
+        await m.answer(tr("msg_pick_content_lang", lang), reply_markup=content_lang_kb(lang))
+        return
+    await state.update_data(content_lang=code)
     data = await state.get_data()
     kind = data.get("excel_kind", "expense_estimate")
-    await state.update_data(excel_mode="ai")
     await m.answer(excel_kind_hint(kind, "ai", lang), reply_markup=cancel_kb(lang))
     await state.set_state(Form.waiting_excel_topic)
 
@@ -3164,6 +3364,12 @@ async def excel_mode_user(m: Message, state: FSMContext):
     await state.update_data(excel_mode="user")
     await m.answer(excel_kind_hint(kind, "user", lang), reply_markup=cancel_kb(lang))
     await state.set_state(Form.waiting_excel_data)
+
+
+@dp.message(Form.waiting_excel_mode)
+async def waiting_excel_mode_fallback(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    await m.answer(tr("msg_didnt_understand", lang), reply_markup=excel_mode_kb(lang))
 
 
 @dp.message(Form.waiting_excel_topic)
@@ -3237,7 +3443,7 @@ async def excel_build(m: Message, state: FSMContext):
     topic = data.get("excel_topic", "")
     extra = data.get("extra", "")
     theme_name, colors = pick_theme(topic)
-    lang_instr = grok_json_lang_instruction(lang)
+    lang_instr = grok_json_lang_instruction(content_gen_lang(data, lang, mode_key="excel_mode") or "ru")
 
     try:
         if kind == "startup_model":
@@ -3330,6 +3536,7 @@ async def excel_build(m: Message, state: FSMContext):
             note += tr("msg_check_source_numbers", lang)
             if parsed.get("_fx_note"):
                 note += f"\n\n💱 {parsed['_fx_note']}"
+        note += "\n\n" + await signature_line(lang)
         await m.answer(note, reply_markup=main_kb(lang))
         await state.clear()
     except Exception as e:
@@ -3402,140 +3609,485 @@ async def word_kind(m: Message, state: FSMContext):
 
 
 
-WORD_KIND_HINTS = {
+WORD_KIND_HINTS_I18N = {
     "doc": {
-        "ai": "Напиши тему документа. Например: доклад про историю китов.",
-        "user": "Пришли текст документа — я поправлю грамотность и оформлю по стандарту.",
-    },
+        "ai": {"ru": "Напиши тему документа. Например: доклад про историю китов.",
+               "en": "Write the document's topic. For example: a report on the history of whales.",
+               "de": "Schreibe das Thema des Dokuments. Zum Beispiel: ein Vortrag über die Geschichte der Wale.",
+               "ar": "اكتب موضوع المستند. مثال: تقرير عن تاريخ الحيتان.",
+               "zh": "请输入文档主题。例如：关于鲸鱼历史的报告。",
+               "es": "Escribe el tema del documento. Por ejemplo: un informe sobre la historia de las ballenas.",
+               "fr": "Écris le sujet du document. Par exemple : un exposé sur l'histoire des baleines."},
+        "user": {"ru": "Пришли текст документа — я поправлю грамотность и оформлю по стандарту.",
+                 "en": "Send the document's text — I'll fix the grammar and format it to standard.",
+                 "de": "Sende den Text des Dokuments — ich korrigiere die Grammatik und formatiere ihn nach Standard.",
+                 "ar": "أرسل نص المستند — سأصحح الأخطاء وأنسقه وفق المعايير.",
+                 "zh": "请发送文档文本——我会修正语法并按标准排版。",
+                 "es": "Envía el texto del documento — corregiré la gramática y le daré formato estándar.",
+                 "fr": "Envoie le texte du document — je corrigerai la grammaire et je le mettrai en forme selon le standard."}},
     "referat": {
-        "ai": "Напиши тему реферата. Также укажи, если знаешь: учебное заведение, свои ФИО, ФИО преподавателя, город и год — иначе оставлю поля пустыми для заполнения.",
-        "user": "Пришли текст реферата (или тезисы). Также укажи учебное заведение, свои ФИО, ФИО преподавателя, город и год, если нужно их вставить.",
-    },
+        "ai": {"ru": "Напиши тему реферата. Также укажи, если знаешь: учебное заведение, свои ФИО, ФИО преподавателя, город и год — иначе оставлю поля пустыми для заполнения.",
+               "en": "Write the topic of the research paper. Also specify, if known: institution, your full name, instructor's full name, city and year — otherwise I'll leave those fields blank to fill in.",
+               "de": "Schreibe das Thema des Referats. Gib außerdem an, falls bekannt: Bildungseinrichtung, deinen vollen Namen, den Namen des Dozenten, Stadt und Jahr — sonst lasse ich diese Felder leer zum Ausfüllen.",
+               "ar": "اكتب موضوع البحث. حدد أيضاً إن كنت تعرف: المؤسسة التعليمية، اسمك الكامل، اسم الأستاذ، المدينة والسنة — وإلا سأترك هذه الحقول فارغة للتعبئة.",
+               "zh": "请输入学术论文主题。如果知道的话，也请注明：学校、你的姓名、指导教师姓名、城市和年份——否则这些字段将留空待填。",
+               "es": "Escribe el tema del trabajo de investigación. Indica también, si lo sabes: institución, tu nombre completo, nombre del profesor, ciudad y año — si no, dejaré esos campos en blanco para completar.",
+               "fr": "Écris le sujet du dossier de recherche. Indique aussi, si tu les connais : établissement, ton nom complet, nom de l'enseignant, ville et année — sinon je laisserai ces champs vides à compléter."},
+        "user": {"ru": "Пришли текст реферата (или тезисы). Также укажи учебное заведение, свои ФИО, ФИО преподавателя, город и год, если нужно их вставить.",
+                 "en": "Send the text of the research paper (or an outline). Also specify institution, your full name, instructor's full name, city and year if you need them inserted.",
+                 "de": "Sende den Text des Referats (oder Thesen). Gib außerdem Bildungseinrichtung, deinen vollen Namen, den Namen des Dozenten, Stadt und Jahr an, falls diese eingefügt werden sollen.",
+                 "ar": "أرسل نص البحث (أو النقاط الرئيسية). حدد أيضاً المؤسسة التعليمية واسمك الكامل واسم الأستاذ والمدينة والسنة إذا كنت تريد إدراجها.",
+                 "zh": "请发送论文文本（或提纲）。如需插入，请同时注明学校、你的姓名、指导教师姓名、城市和年份。",
+                 "es": "Envía el texto del trabajo (o las ideas principales). Indica también institución, tu nombre completo, nombre del profesor, ciudad y año si necesitas incluirlos.",
+                 "fr": "Envoie le texte du dossier (ou les grandes lignes). Indique aussi l'établissement, ton nom complet, le nom de l'enseignant, la ville et l'année si tu veux les insérer."}},
     "report": {
-        "ai": "Напиши тему доклада. Также укажи, если знаешь: учебное заведение, свои ФИО, класс/курс — иначе оставлю поля пустыми для заполнения.",
-        "user": "Пришли текст доклада (или тезисы). Также укажи учебное заведение, свои ФИО и класс/курс, если нужно их вставить.",
-    },
+        "ai": {"ru": "Напиши тему доклада. Также укажи, если знаешь: учебное заведение, свои ФИО, класс/курс — иначе оставлю поля пустыми для заполнения.",
+               "en": "Write the topic of the report. Also specify, if known: institution, your full name, grade/year — otherwise I'll leave those fields blank to fill in.",
+               "de": "Schreibe das Thema des Vortrags. Gib außerdem an, falls bekannt: Bildungseinrichtung, deinen vollen Namen, Klasse/Kurs — sonst lasse ich diese Felder leer zum Ausfüllen.",
+               "ar": "اكتب موضوع التقرير. حدد أيضاً إن كنت تعرف: المؤسسة التعليمية، اسمك الكامل، الصف/السنة الدراسية — وإلا سأترك هذه الحقول فارغة للتعبئة.",
+               "zh": "请输入报告主题。如果知道的话，也请注明：学校、你的姓名、年级——否则这些字段将留空待填。",
+               "es": "Escribe el tema de la exposición. Indica también, si lo sabes: institución, tu nombre completo, curso/grado — si no, dejaré esos campos en blanco para completar.",
+               "fr": "Écris le sujet de l'exposé. Indique aussi, si tu les connais : établissement, ton nom complet, classe/année — sinon je laisserai ces champs vides à compléter."},
+        "user": {"ru": "Пришли текст доклада (или тезисы). Также укажи учебное заведение, свои ФИО и класс/курс, если нужно их вставить.",
+                 "en": "Send the text of the report (or an outline). Also specify institution, your full name and grade/year if you need them inserted.",
+                 "de": "Sende den Text des Vortrags (oder Thesen). Gib außerdem Bildungseinrichtung, deinen vollen Namen und Klasse/Kurs an, falls diese eingefügt werden sollen.",
+                 "ar": "أرسل نص التقرير (أو النقاط الرئيسية). حدد أيضاً المؤسسة التعليمية واسمك الكامل والصف/السنة الدراسية إذا كنت تريد إدراجها.",
+                 "zh": "请发送报告文本（或提纲）。如需插入，请同时注明学校、你的姓名和年级。",
+                 "es": "Envía el texto de la exposición (o las ideas principales). Indica también institución, tu nombre completo y curso/grado si necesitas incluirlos.",
+                 "fr": "Envoie le texte de l'exposé (ou les grandes lignes). Indique aussi l'établissement, ton nom complet et ta classe/année si tu veux les insérer."}},
     "essay": {
-        "ai": "Напиши тему эссе и свою позицию по ней, если она уже есть. Укажи, если знаешь: учебное заведение, свои ФИО.",
-        "user": "Пришли текст эссе (или тезисы, свои мысли по теме). Укажи учебное заведение и свои ФИО, если нужно их вставить.",
-    },
+        "ai": {"ru": "Напиши тему эссе и свою позицию по ней, если она уже есть. Укажи, если знаешь: учебное заведение, свои ФИО.",
+               "en": "Write the essay topic and your stance on it, if you already have one. Specify, if known: institution, your full name.",
+               "de": "Schreibe das Thema des Essays und deine Position dazu, falls du bereits eine hast. Gib an, falls bekannt: Bildungseinrichtung, deinen vollen Namen.",
+               "ar": "اكتب موضوع المقال وموقفك منه إن كان لديك بالفعل. حدد إن كنت تعرف: المؤسسة التعليمية، اسمك الكامل.",
+               "zh": "请输入论文主题，以及你对该主题的观点（如果已有）。如知道的话，也请注明学校和你的姓名。",
+               "es": "Escribe el tema del ensayo y tu postura al respecto, si ya la tienes. Indica, si lo sabes: institución, tu nombre completo.",
+               "fr": "Écris le sujet de l'essai et ta position sur celui-ci, si tu en as déjà une. Indique, si tu les connais : établissement, ton nom complet."},
+        "user": {"ru": "Пришли текст эссе (или тезисы, свои мысли по теме). Укажи учебное заведение и свои ФИО, если нужно их вставить.",
+                 "en": "Send the essay text (or an outline, your thoughts on the topic). Specify institution and your full name if you need them inserted.",
+                 "de": "Sende den Text des Essays (oder Thesen, deine Gedanken zum Thema). Gib Bildungseinrichtung und deinen vollen Namen an, falls diese eingefügt werden sollen.",
+                 "ar": "أرسل نص المقال (أو النقاط الرئيسية، أفكارك حول الموضوع). حدد المؤسسة التعليمية واسمك الكامل إذا كنت تريد إدراجهما.",
+                 "zh": "请发送论文文本（或提纲、你对主题的想法）。如需插入，请注明学校和你的姓名。",
+                 "es": "Envía el texto del ensayo (o las ideas principales, tus reflexiones sobre el tema). Indica institución y tu nombre completo si necesitas incluirlos.",
+                 "fr": "Envoie le texte de l'essai (ou les grandes lignes, tes réflexions sur le sujet). Indique l'établissement et ton nom complet si tu veux les insérer."}},
     "notes": {
-        "ai": "Напиши тему или раздел, по которому нужен конспект (например: конспект лекции по клеточной биологии).",
-        "user": "Пришли материал, по которому нужно сделать конспект — я структурирую его в сжатом виде по пунктам.",
-    },
+        "ai": {"ru": "Напиши тему или раздел, по которому нужен конспект (например: конспект лекции по клеточной биологии).",
+               "en": "Write the topic or section you need notes on (for example: notes on a cell biology lecture).",
+               "de": "Schreibe das Thema oder den Abschnitt, für den du Notizen brauchst (zum Beispiel: Mitschrift einer Vorlesung zur Zellbiologie).",
+               "ar": "اكتب الموضوع أو القسم الذي تحتاج ملخصاً له (مثال: ملخص محاضرة عن بيولوجيا الخلية).",
+               "zh": "请输入需要做笔记的主题或章节（例如：细胞生物学讲座笔记）。",
+               "es": "Escribe el tema o la sección de la que necesitas apuntes (por ejemplo: apuntes de una clase de biología celular).",
+               "fr": "Écris le sujet ou la section pour lequel tu as besoin de notes (par exemple : notes d'un cours sur la biologie cellulaire)."},
+        "user": {"ru": "Пришли материал, по которому нужно сделать конспект — я структурирую его в сжатом виде по пунктам.",
+                 "en": "Send the material to make notes from — I'll structure it concisely into points.",
+                 "de": "Sende das Material, aus dem Notizen erstellt werden sollen — ich strukturiere es kompakt in Stichpunkten.",
+                 "ar": "أرسل المادة التي تريد تلخيصها — سأنظمها بإيجاز في نقاط.",
+                 "zh": "请发送需要整理笔记的材料——我会将其精炼为要点结构。",
+                 "es": "Envía el material del que hay que hacer apuntes — lo estructuraré de forma concisa en puntos.",
+                 "fr": "Envoie le contenu à partir duquel faire des notes — je le structurerai de façon concise en points."}},
     "coursework": {
-        "ai": "Напиши тему курсовой работы. Укажи, если знаешь: учебное заведение, специальность, свои ФИО, ФИО научного руководителя, город и год.",
-        "user": "Пришли текст или тезисы курсовой работы. Укажи учебное заведение, специальность, свои ФИО, ФИО научного руководителя, город и год, если нужно их вставить.",
-    },
+        "ai": {"ru": "Напиши тему курсовой работы. Укажи, если знаешь: учебное заведение, специальность, свои ФИО, ФИО научного руководителя, город и год.",
+               "en": "Write the topic of the coursework. Specify, if known: institution, major, your full name, supervisor's full name, city and year.",
+               "de": "Schreibe das Thema der Kursarbeit. Gib an, falls bekannt: Bildungseinrichtung, Studienfach, deinen vollen Namen, den Namen des Betreuers, Stadt und Jahr.",
+               "ar": "اكتب موضوع البحث الفصلي. حدد إن كنت تعرف: المؤسسة التعليمية، التخصص، اسمك الكامل، اسم المشرف، المدينة والسنة.",
+               "zh": "请输入课程论文主题。如知道的话，也请注明学校、专业、你的姓名、导师姓名、城市和年份。",
+               "es": "Escribe el tema del trabajo de curso. Indica, si lo sabes: institución, carrera, tu nombre completo, nombre del director, ciudad y año.",
+               "fr": "Écris le sujet du mémoire. Indique, si tu les connais : établissement, filière, ton nom complet, nom du directeur, ville et année."},
+        "user": {"ru": "Пришли текст или тезисы курсовой работы. Укажи учебное заведение, специальность, свои ФИО, ФИО научного руководителя, город и год, если нужно их вставить.",
+                 "en": "Send the text or outline of the coursework. Specify institution, major, your full name, supervisor's full name, city and year if you need them inserted.",
+                 "de": "Sende den Text oder die Thesen der Kursarbeit. Gib Bildungseinrichtung, Studienfach, deinen vollen Namen, den Namen des Betreuers, Stadt und Jahr an, falls diese eingefügt werden sollen.",
+                 "ar": "أرسل نص أو نقاط البحث الفصلي. حدد المؤسسة التعليمية والتخصص واسمك الكامل واسم المشرف والمدينة والسنة إذا كنت تريد إدراجها.",
+                 "zh": "请发送课程论文文本或提纲。如需插入，请注明学校、专业、你的姓名、导师姓名、城市和年份。",
+                 "es": "Envía el texto o las ideas principales del trabajo de curso. Indica institución, carrera, tu nombre completo, nombre del director, ciudad y año si necesitas incluirlos.",
+                 "fr": "Envoie le texte ou les grandes lignes du mémoire. Indique l'établissement, la filière, ton nom complet, le nom du directeur, la ville et l'année si tu veux les insérer."}},
     "dkp": {
-        "ai": "Напиши, что покупается/продаётся (например: продажа автомобиля). Укажи, если знаешь: ФИО и паспортные данные продавца и покупателя, точное описание вещи, цену, порядок оплаты, дату и место.",
-        "user": "Пришли данные для договора купли-продажи: ФИО и паспортные данные продавца и покупателя, описание предмета продажи, цену, порядок оплаты, дату и место составления.",
-    },
+        "ai": {"ru": "Напиши, что покупается/продаётся (например: продажа автомобиля). Укажи, если знаешь: ФИО и паспортные данные продавца и покупателя, точное описание вещи, цену, порядок оплаты, дату и место.",
+               "en": "Write what's being bought/sold (for example: sale of a car). Specify, if known: full names and ID details of seller and buyer, exact description of the item, price, payment terms, date and place.",
+               "de": "Schreibe, was gekauft/verkauft wird (zum Beispiel: Verkauf eines Autos). Gib an, falls bekannt: Namen und Ausweisdaten von Verkäufer und Käufer, genaue Beschreibung der Sache, Preis, Zahlungsbedingungen, Datum und Ort.",
+               "ar": "اكتب ما يُشترى/يُباع (مثال: بيع سيارة). حدد إن كنت تعرف: الاسم الكامل وبيانات الهوية للبائع والمشتري، وصفاً دقيقاً للشيء، السعر، شروط الدفع، التاريخ والمكان.",
+               "zh": "请说明买卖的是什么（例如：出售汽车）。如知道的话，请注明卖方和买方的姓名及证件信息、物品的准确描述、价格、付款方式、日期和地点。",
+               "es": "Escribe qué se compra/vende (por ejemplo: venta de un coche). Indica, si lo sabes: nombre completo y datos de identificación del vendedor y comprador, descripción exacta del bien, precio, forma de pago, fecha y lugar.",
+               "fr": "Écris ce qui est acheté/vendu (par exemple : vente d'une voiture). Indique, si tu les connais : noms complets et pièces d'identité du vendeur et de l'acheteur, description exacte du bien, prix, modalités de paiement, date et lieu."},
+        "user": {"ru": "Пришли данные для договора купли-продажи: ФИО и паспортные данные продавца и покупателя, описание предмета продажи, цену, порядок оплаты, дату и место составления.",
+                 "en": "Send the details for the sale agreement: full names and ID details of seller and buyer, description of the item, price, payment terms, date and place of drafting.",
+                 "de": "Sende die Daten für den Kaufvertrag: Namen und Ausweisdaten von Verkäufer und Käufer, Beschreibung des Kaufgegenstands, Preis, Zahlungsbedingungen, Datum und Ort der Erstellung.",
+                 "ar": "أرسل بيانات عقد البيع: الاسم الكامل وبيانات الهوية للبائع والمشتري، وصف الشيء المباع، السعر، شروط الدفع، تاريخ ومكان التحرير.",
+                 "zh": "请发送买卖合同所需信息：卖方和买方的姓名及证件信息、销售物品描述、价格、付款方式、签订日期和地点。",
+                 "es": "Envía los datos para el contrato de compraventa: nombre completo y datos de identificación del vendedor y comprador, descripción del bien vendido, precio, forma de pago, fecha y lugar de redacción.",
+                 "fr": "Envoie les données du contrat de vente : noms complets et pièces d'identité du vendeur et de l'acheteur, description du bien vendu, prix, modalités de paiement, date et lieu de rédaction."}},
     "rent": {
-        "ai": "Напиши, что сдаётся в аренду (например: аренда квартиры). Укажи, если знаешь: данные сторон, точный адрес/описание объекта, срок аренды, сумму и порядок оплаты.",
-        "user": "Пришли данные для договора аренды: ФИО сторон, точный адрес или описание объекта аренды, срок, сумму и порядок оплаты, кто оплачивает коммунальные услуги/ремонт.",
-    },
+        "ai": {"ru": "Напиши, что сдаётся в аренду (например: аренда квартиры). Укажи, если знаешь: данные сторон, точный адрес/описание объекта, срок аренды, сумму и порядок оплаты.",
+               "en": "Write what's being rented out (for example: apartment rental). Specify, if known: parties' details, exact address/description of the property, lease term, amount and payment terms.",
+               "de": "Schreibe, was vermietet wird (zum Beispiel: Vermietung einer Wohnung). Gib an, falls bekannt: Daten der Parteien, genaue Adresse/Beschreibung des Objekts, Mietdauer, Betrag und Zahlungsbedingungen.",
+               "ar": "اكتب ما الذي يُؤجَّر (مثال: تأجير شقة). حدد إن كنت تعرف: بيانات الطرفين، العنوان الدقيق/وصف العقار، مدة الإيجار، المبلغ وشروط الدفع.",
+               "zh": "请说明出租的是什么（例如：出租公寓）。如知道的话，请注明双方信息、准确地址/物业描述、租期、金额和付款方式。",
+               "es": "Escribe qué se alquila (por ejemplo: alquiler de un piso). Indica, si lo sabes: datos de las partes, dirección exacta/descripción del inmueble, plazo del alquiler, importe y forma de pago.",
+               "fr": "Écris ce qui est loué (par exemple : location d'un appartement). Indique, si tu les connais : coordonnées des parties, adresse exacte/description du bien, durée du bail, montant et modalités de paiement."},
+        "user": {"ru": "Пришли данные для договора аренды: ФИО сторон, точный адрес или описание объекта аренды, срок, сумму и порядок оплаты, кто оплачивает коммунальные услуги/ремонт.",
+                 "en": "Send the details for the lease agreement: full names of the parties, exact address or description of the rented property, term, amount and payment terms, who pays for utilities/repairs.",
+                 "de": "Sende die Daten für den Mietvertrag: Namen der Parteien, genaue Adresse oder Beschreibung des Mietobjekts, Mietdauer, Betrag und Zahlungsbedingungen, wer für Nebenkosten/Reparaturen zahlt.",
+                 "ar": "أرسل بيانات عقد الإيجار: الاسم الكامل للطرفين، العنوان الدقيق أو وصف العقار المؤجر، المدة، المبلغ وشروط الدفع، من يدفع الخدمات/الصيانة.",
+                 "zh": "请发送租赁合同所需信息：双方姓名、租赁物业的准确地址或描述、租期、金额和付款方式、由谁支付水电费/维修费。",
+                 "es": "Envía los datos para el contrato de alquiler: nombre completo de las partes, dirección exacta o descripción del inmueble, plazo, importe y forma de pago, quién paga los suministros/reparaciones.",
+                 "fr": "Envoie les données du bail : noms complets des parties, adresse exacte ou description du bien loué, durée, montant et modalités de paiement, qui paie les charges/réparations."}},
     "offer": {
-        "ai": "Напиши, что за услугу/товар предлагаете и кому. Укажи, если знаешь: название компании, суть предложения, цену и условия, срок действия КП.",
-        "user": "Пришли данные для коммерческого предложения: название компании, суть предложения, цену и условия оплаты, сроки, контакты.",
-    },
+        "ai": {"ru": "Напиши, что за услугу/товар предлагаете и кому. Укажи, если знаешь: название компании, суть предложения, цену и условия, срок действия КП.",
+               "en": "Write what service/product you're offering and to whom. Specify, if known: company name, essence of the offer, price and terms, validity period of the proposal.",
+               "de": "Schreibe, welche Dienstleistung/welches Produkt du anbietest und wem. Gib an, falls bekannt: Firmenname, Kern des Angebots, Preis und Bedingungen, Gültigkeitsdauer des Angebots.",
+               "ar": "اكتب ما هي الخدمة/المنتج الذي تقدمه ولمن. حدد إن كنت تعرف: اسم الشركة، جوهر العرض، السعر والشروط، مدة صلاحية العرض.",
+               "zh": "请说明你提供的服务/产品是什么，面向谁。如知道的话，请注明公司名称、提案要点、价格和条件、报价有效期。",
+               "es": "Escribe qué servicio/producto ofreces y a quién. Indica, si lo sabes: nombre de la empresa, esencia de la propuesta, precio y condiciones, plazo de validez de la oferta.",
+               "fr": "Écris quel service/produit tu proposes et à qui. Indique, si tu les connais : nom de l'entreprise, essence de l'offre, prix et conditions, durée de validité de la proposition."},
+        "user": {"ru": "Пришли данные для коммерческого предложения: название компании, суть предложения, цену и условия оплаты, сроки, контакты.",
+                 "en": "Send the details for the commercial proposal: company name, essence of the offer, price and payment terms, deadlines, contacts.",
+                 "de": "Sende die Daten für das Angebot: Firmenname, Kern des Angebots, Preis und Zahlungsbedingungen, Fristen, Kontaktdaten.",
+                 "ar": "أرسل بيانات العرض التجاري: اسم الشركة، جوهر العرض، السعر وشروط الدفع، المواعيد، بيانات التواصل.",
+                 "zh": "请发送商业提案所需信息：公司名称、提案要点、价格和付款条件、期限、联系方式。",
+                 "es": "Envía los datos para la propuesta comercial: nombre de la empresa, esencia de la oferta, precio y condiciones de pago, plazos, contactos.",
+                 "fr": "Envoie les données de l'offre commerciale : nom de l'entreprise, essence de l'offre, prix et modalités de paiement, délais, contacts."}},
     "act": {
-        "ai": "Напиши, что передаётся и по какому договору (например: акт передачи оборудования по договору №12). Укажи, если знаешь: кто передаёт, кто принимает, перечень предметов.",
-        "user": "Пришли данные для акта приёма-передачи: номер и дату основного договора, кто передаёт и кто принимает (ФИО/организация), перечень передаваемого с количеством и состоянием.",
-    },
+        "ai": {"ru": "Напиши, что передаётся и по какому договору (например: акт передачи оборудования по договору №12). Укажи, если знаешь: кто передаёт, кто принимает, перечень предметов.",
+               "en": "Write what's being handed over and under which agreement (for example: equipment handover act under contract No. 12). Specify, if known: who's handing over, who's receiving, list of items.",
+               "de": "Schreibe, was übergeben wird und aufgrund welchen Vertrags (zum Beispiel: Übergabeprotokoll für Geräte laut Vertrag Nr. 12). Gib an, falls bekannt: wer übergibt, wer empfängt, Liste der Gegenstände.",
+               "ar": "اكتب ما الذي يُسلَّم وبموجب أي عقد (مثال: محضر تسليم معدات بموجب العقد رقم 12). حدد إن كنت تعرف: من يسلّم، من يستلم، قائمة الأصناف.",
+               "zh": "请说明交接的内容及依据的合同（例如：根据12号合同的设备交接单）。如知道的话，请注明交付方、接收方、物品清单。",
+               "es": "Escribe qué se entrega y en virtud de qué contrato (por ejemplo: acta de entrega de equipo según el contrato n.º 12). Indica, si lo sabes: quién entrega, quién recibe, listado de objetos.",
+               "fr": "Écris ce qui est remis et en vertu de quel contrat (par exemple : procès-verbal de remise de matériel selon le contrat n° 12). Indique, si tu les connais : qui remet, qui reçoit, liste des objets."},
+        "user": {"ru": "Пришли данные для акта приёма-передачи: номер и дату основного договора, кто передаёт и кто принимает (ФИО/организация), перечень передаваемого с количеством и состоянием.",
+                 "en": "Send the details for the handover act: number and date of the main agreement, who's handing over and who's receiving (name/organization), list of items with quantity and condition.",
+                 "de": "Sende die Daten für das Übergabeprotokoll: Nummer und Datum des Hauptvertrags, wer übergibt und wer empfängt (Name/Organisation), Liste der übergebenen Gegenstände mit Menge und Zustand.",
+                 "ar": "أرسل بيانات محضر التسليم والاستلام: رقم وتاريخ العقد الأساسي، من يسلّم ومن يستلم (الاسم/المنظمة)، قائمة الأصناف المسلَّمة مع الكمية والحالة.",
+                 "zh": "请发送交接单所需信息：主合同编号和日期、交付方和接收方（姓名/单位）、交接物品清单（含数量和状态）。",
+                 "es": "Envía los datos para el acta de entrega-recepción: número y fecha del contrato principal, quién entrega y quién recibe (nombre/organización), listado de lo entregado con cantidad y estado.",
+                 "fr": "Envoie les données du procès-verbal de remise : numéro et date du contrat principal, qui remet et qui reçoit (nom/organisation), liste des objets remis avec quantité et état."}},
     "statement": {
-        "ai": "Напиши суть заявления и кому оно адресовано.",
-        "user": "Пришли текст заявления: кому адресовано (должность, ФИО), от кого, суть просьбы или требования, дата.",
-    },
+        "ai": {"ru": "Напиши суть заявления и кому оно адресовано.",
+               "en": "Write the essence of the statement and to whom it's addressed.",
+               "de": "Schreibe das Anliegen des Antrags und an wen er gerichtet ist.",
+               "ar": "اكتب جوهر الطلب ولمن هو موجّه.",
+               "zh": "请说明申请的内容以及收件人。",
+               "es": "Escribe el motivo de la solicitud y a quién va dirigida.",
+               "fr": "Écris l'objet de la demande et à qui elle est adressée."},
+        "user": {"ru": "Пришли текст заявления: кому адресовано (должность, ФИО), от кого, суть просьбы или требования, дата.",
+                 "en": "Send the text of the statement: who it's addressed to (position, full name), from whom, essence of the request or demand, date.",
+                 "de": "Sende den Text des Antrags: an wen gerichtet (Position, Name), von wem, Anliegen der Bitte oder Forderung, Datum.",
+                 "ar": "أرسل نص الطلب: الموجّه إليه (المنصب، الاسم الكامل)، من مقدّمه، جوهر الطلب أو المطلب، التاريخ.",
+                 "zh": "请发送申请文本：收件人（职位、姓名）、申请人、请求或要求的内容、日期。",
+                 "es": "Envía el texto de la solicitud: a quién va dirigida (cargo, nombre completo), de quién, motivo de la petición o exigencia, fecha.",
+                 "fr": "Envoie le texte de la demande : à qui elle est adressée (fonction, nom complet), de qui, objet de la demande, date."}},
     "proxy": {
-        "ai": "Напиши, на какие действия нужна доверенность. Укажи, если знаешь: ФИО и паспортные данные доверителя и представителя, срок действия.",
-        "user": "Пришли данные для доверенности: ФИО и паспортные данные доверителя и представителя, точный перечень полномочий, срок действия, дату составления.",
-    },
+        "ai": {"ru": "Напиши, на какие действия нужна доверенность. Укажи, если знаешь: ФИО и паспортные данные доверителя и представителя, срок действия.",
+               "en": "Write what actions the power of attorney is for. Specify, if known: full names and ID details of the principal and the representative, validity period.",
+               "de": "Schreibe, für welche Handlungen die Vollmacht benötigt wird. Gib an, falls bekannt: Namen und Ausweisdaten von Vollmachtgeber und Bevollmächtigtem, Gültigkeitsdauer.",
+               "ar": "اكتب لأي إجراءات تحتاج التوكيل. حدد إن كنت تعرف: الاسم الكامل وبيانات الهوية للموكِّل والوكيل، مدة الصلاحية.",
+               "zh": "请说明委托书用于哪些事项。如知道的话，请注明委托人和受托人的姓名及证件信息、有效期。",
+               "es": "Escribe para qué acciones se necesita el poder. Indica, si lo sabes: nombre completo y datos de identificación del poderdante y el apoderado, plazo de validez.",
+               "fr": "Écris pour quelles actions la procuration est nécessaire. Indique, si tu les connais : noms complets et pièces d'identité du mandant et du mandataire, durée de validité."},
+        "user": {"ru": "Пришли данные для доверенности: ФИО и паспортные данные доверителя и представителя, точный перечень полномочий, срок действия, дату составления.",
+                 "en": "Send the details for the power of attorney: full names and ID details of the principal and the representative, exact list of powers, validity period, date of drafting.",
+                 "de": "Sende die Daten für die Vollmacht: Namen und Ausweisdaten von Vollmachtgeber und Bevollmächtigtem, genaue Liste der Befugnisse, Gültigkeitsdauer, Ausstellungsdatum.",
+                 "ar": "أرسل بيانات التوكيل: الاسم الكامل وبيانات الهوية للموكِّل والوكيل، قائمة دقيقة بالصلاحيات، مدة الصلاحية، تاريخ التحرير.",
+                 "zh": "请发送委托书所需信息：委托人和受托人的姓名及证件信息、准确的权限清单、有效期、签订日期。",
+                 "es": "Envía los datos para el poder: nombre completo y datos de identificación del poderdante y el apoderado, listado exacto de facultades, plazo de validez, fecha de redacción.",
+                 "fr": "Envoie les données de la procuration : noms complets et pièces d'identité du mandant et du mandataire, liste exacte des pouvoirs, durée de validité, date de rédaction."}},
     "loan": {
-        "ai": "Напиши сумму и условия займа. Укажи, если знаешь: ФИО сторон, срок возврата, проценты.",
-        "user": "Пришли данные для расписки/договора займа: ФИО и паспортные данные заимодавца и заёмщика, сумму, срок возврата, проценты (если есть).",
-    },
+        "ai": {"ru": "Напиши сумму и условия займа. Укажи, если знаешь: ФИО сторон, срок возврата, проценты.",
+               "en": "Write the amount and terms of the loan. Specify, if known: full names of the parties, repayment term, interest.",
+               "de": "Schreibe den Betrag und die Bedingungen des Darlehens. Gib an, falls bekannt: Namen der Parteien, Rückzahlungsfrist, Zinsen.",
+               "ar": "اكتب مبلغ وشروط القرض. حدد إن كنت تعرف: الاسم الكامل للطرفين، مدة السداد، الفائدة.",
+               "zh": "请说明借款金额和条件。如知道的话，请注明双方姓名、还款期限、利息。",
+               "es": "Escribe el importe y las condiciones del préstamo. Indica, si lo sabes: nombre completo de las partes, plazo de devolución, intereses.",
+               "fr": "Écris le montant et les conditions du prêt. Indique, si tu les connais : noms complets des parties, délai de remboursement, intérêts."},
+        "user": {"ru": "Пришли данные для расписки/договора займа: ФИО и паспортные данные заимодавца и заёмщика, сумму, срок возврата, проценты (если есть).",
+                 "en": "Send the details for the promissory note/loan agreement: full names and ID details of the lender and the borrower, amount, repayment term, interest (if any).",
+                 "de": "Sende die Daten für die Schuldschein/den Darlehensvertrag: Namen und Ausweisdaten von Darlehensgeber und Darlehensnehmer, Betrag, Rückzahlungsfrist, Zinsen (falls vorhanden).",
+                 "ar": "أرسل بيانات سند الدين/عقد القرض: الاسم الكامل وبيانات الهوية للمُقرض والمقترض، المبلغ، مدة السداد، الفائدة (إن وجدت).",
+                 "zh": "请发送借条/借款合同所需信息：出借人和借款人的姓名及证件信息、金额、还款期限、利息（如有）。",
+                 "es": "Envía los datos para el pagaré/contrato de préstamo: nombre completo y datos de identificación del prestamista y el prestatario, importe, plazo de devolución, intereses (si los hay).",
+                 "fr": "Envoie les données de la reconnaissance de dette/contrat de prêt : noms complets et pièces d'identité du prêteur et de l'emprunteur, montant, délai de remboursement, intérêts (le cas échéant)."}},
     "claim": {
-        "ai": "Напиши суть претензии и к кому она адресована. Укажи, если знаешь: от кого претензия, основание (договор/факт), требование.",
-        "user": "Пришли данные для претензии: кому адресована (ФИО/организация), от кого, суть нарушения, конкретное требование, срок ответа.",
-    },
+        "ai": {"ru": "Напиши суть претензии и к кому она адресована. Укажи, если знаешь: от кого претензия, основание (договор/факт), требование.",
+               "en": "Write the essence of the claim and to whom it's addressed. Specify, if known: from whom the claim is, the basis (contract/fact), the demand.",
+               "de": "Schreibe das Anliegen der Beschwerde und an wen sie gerichtet ist. Gib an, falls bekannt: von wem die Beschwerde stammt, die Grundlage (Vertrag/Sachverhalt), die Forderung.",
+               "ar": "اكتب جوهر المطالبة ولمن هي موجّهة. حدد إن كنت تعرف: مقدّم المطالبة، الأساس (عقد/واقعة)، المطلب.",
+               "zh": "请说明索赔的内容以及收件人。如知道的话，请注明索赔方、依据（合同/事实）、诉求。",
+               "es": "Escribe el motivo de la reclamación y a quién va dirigida. Indica, si lo sabes: quién la presenta, el fundamento (contrato/hecho), la exigencia.",
+               "fr": "Écris l'objet de la réclamation et à qui elle est adressée. Indique, si tu les connais : de qui vient la réclamation, le fondement (contrat/fait), la demande."},
+        "user": {"ru": "Пришли данные для претензии: кому адресована (ФИО/организация), от кого, суть нарушения, конкретное требование, срок ответа.",
+                 "en": "Send the details for the claim: who it's addressed to (name/organization), from whom, essence of the violation, specific demand, response deadline.",
+                 "de": "Sende die Daten für die Beschwerde: an wen gerichtet (Name/Organisation), von wem, Art der Verletzung, konkrete Forderung, Antwortfrist.",
+                 "ar": "أرسل بيانات المطالبة: الموجّهة إليه (الاسم/المنظمة)، مقدّمها، جوهر المخالفة، المطلب المحدد، مهلة الرد.",
+                 "zh": "请发送索赔函所需信息：收件人（姓名/单位）、索赔方、违约内容、具体诉求、回复期限。",
+                 "es": "Envía los datos para la reclamación: a quién va dirigida (nombre/organización), de quién, motivo del incumplimiento, exigencia concreta, plazo de respuesta.",
+                 "fr": "Envoie les données de la réclamation : à qui elle est adressée (nom/organisation), de qui, nature du manquement, demande précise, délai de réponse."}},
     "consent": {
-        "ai": "Напиши, кто едет и куда (например: согласие на выезд сына в Турцию). Укажи, если знаешь: ФИО и данные родителя, ФИО и дату рождения ребёнка, с кем и куда он выезжает, срок действия согласия.",
-        "user": "Пришли данные для согласия на выезд ребёнка: ФИО родителя (доверителя), ФИО и дату рождения ребёнка, с кем именно и в какую страну выезжает ребёнок, на какой срок.",
-    },
+        "ai": {"ru": "Напиши, кто едет и куда (например: согласие на выезд сына в Турцию). Укажи, если знаешь: ФИО и данные родителя, ФИО и дату рождения ребёнка, с кем и куда он выезжает, срок действия согласия.",
+               "en": "Write who is traveling and where (for example: consent for a son's trip to Turkey). Specify, if known: parent's full name and details, child's full name and date of birth, with whom and where the child is traveling, validity period of the consent.",
+               "de": "Schreibe, wer wohin reist (zum Beispiel: Zustimmung zur Ausreise des Sohnes in die Türkei). Gib an, falls bekannt: Name und Daten des Elternteils, Name und Geburtsdatum des Kindes, mit wem und wohin es reist, Gültigkeitsdauer der Zustimmung.",
+               "ar": "اكتب من يسافر وإلى أين (مثال: موافقة على سفر الابن إلى تركيا). حدد إن كنت تعرف: اسم وبيانات ولي الأمر، اسم وتاريخ ميلاد الطفل، مع من وإلى أين يسافر، مدة صلاحية الموافقة.",
+               "zh": "请说明谁去哪里旅行（例如：同意儿子前往土耳其）。如知道的话，请注明家长姓名及信息、孩子姓名及出生日期、与谁一同前往何地、同意书有效期。",
+               "es": "Escribe quién viaja y adónde (por ejemplo: consentimiento para el viaje del hijo a Turquía). Indica, si lo sabes: nombre y datos del progenitor, nombre y fecha de nacimiento del menor, con quién y adónde viaja, plazo de validez del consentimiento.",
+               "fr": "Écris qui voyage et où (par exemple : autorisation de voyage du fils en Turquie). Indique, si tu les connais : nom et coordonnées du parent, nom et date de naissance de l'enfant, avec qui et où il voyage, durée de validité de l'autorisation."},
+        "user": {"ru": "Пришли данные для согласия на выезд ребёнка: ФИО родителя (доверителя), ФИО и дату рождения ребёнка, с кем именно и в какую страну выезжает ребёнок, на какой срок.",
+                 "en": "Send the details for the child travel consent: parent's (principal's) full name, child's full name and date of birth, with whom exactly and to which country the child is traveling, for how long.",
+                 "de": "Sende die Daten für die Zustimmung zur Ausreise des Kindes: Name des Elternteils (Vollmachtgebers), Name und Geburtsdatum des Kindes, mit wem genau und in welches Land es reist, für welchen Zeitraum.",
+                 "ar": "أرسل بيانات موافقة سفر الطفل: اسم ولي الأمر (الموكِّل)، اسم وتاريخ ميلاد الطفل، مع من بالضبط وإلى أي بلد يسافر الطفل، ولأي مدة.",
+                 "zh": "请发送儿童出境同意书所需信息：家长（委托人）姓名、孩子姓名及出生日期、具体与谁及前往哪个国家、期限多久。",
+                 "es": "Envía los datos para el consentimiento de viaje del menor: nombre completo del progenitor (otorgante), nombre y fecha de nacimiento del menor, con quién exactamente y a qué país viaja, por cuánto tiempo.",
+                 "fr": "Envoie les données de l'autorisation de voyage de l'enfant : nom complet du parent (mandant), nom et date de naissance de l'enfant, avec qui exactement et vers quel pays il voyage, pour quelle durée."}},
     "marriage_contract": {
-        "ai": "Напиши, какие имущественные вопросы супруги хотят закрепить в брачном договоре. Укажи, если знаешь: ФИО супругов, режим имущества (совместное/раздельное), конкретное имущество.",
-        "user": "Пришли данные для брачного договора: ФИО обоих супругов, реквизиты свидетельства о браке, какое имущество и на каких условиях делится.",
-    },
+        "ai": {"ru": "Напиши, какие имущественные вопросы супруги хотят закрепить в брачном договоре. Укажи, если знаешь: ФИО супругов, режим имущества (совместное/раздельное), конкретное имущество.",
+               "en": "Write which property matters the spouses want to fix in the prenuptial agreement. Specify, if known: spouses' full names, property regime (joint/separate), specific property.",
+               "de": "Schreibe, welche Vermögensfragen die Ehepartner im Ehevertrag regeln möchten. Gib an, falls bekannt: Namen der Ehepartner, Vermögensregelung (gemeinsam/getrennt), konkretes Vermögen.",
+               "ar": "اكتب المسائل المالية التي يريد الزوجان تثبيتها في عقد الزواج. حدد إن كنت تعرف: الاسم الكامل للزوجين، نظام الملكية (مشتركة/منفصلة)، الممتلكات المحددة.",
+               "zh": "请说明夫妻双方希望在婚前协议中约定的财产事项。如知道的话，请注明夫妻姓名、财产制度（共同/分别）、具体财产。",
+               "es": "Escribe qué cuestiones patrimoniales quieren fijar los cónyuges en las capitulaciones matrimoniales. Indica, si lo sabes: nombre completo de los cónyuges, régimen de bienes (conjunto/separado), bienes concretos.",
+               "fr": "Écris quelles questions patrimoniales les époux veulent fixer dans le contrat de mariage. Indique, si tu les connais : noms complets des époux, régime matrimonial (commun/séparé), biens précis."},
+        "user": {"ru": "Пришли данные для брачного договора: ФИО обоих супругов, реквизиты свидетельства о браке, какое имущество и на каких условиях делится.",
+                 "en": "Send the details for the prenuptial agreement: full names of both spouses, marriage certificate details, what property and on what terms is divided.",
+                 "de": "Sende die Daten für den Ehevertrag: Namen beider Ehepartner, Angaben zur Heiratsurkunde, welches Vermögen und unter welchen Bedingungen aufgeteilt wird.",
+                 "ar": "أرسل بيانات عقد الزواج: الاسم الكامل لكلا الزوجين، بيانات شهادة الزواج، الممتلكات وشروط تقسيمها.",
+                 "zh": "请发送婚前协议所需信息：夫妻双方姓名、结婚证信息、财产及分配条件。",
+                 "es": "Envía los datos para las capitulaciones matrimoniales: nombre completo de ambos cónyuges, datos del certificado de matrimonio, qué bienes y en qué condiciones se reparten.",
+                 "fr": "Envoie les données du contrat de mariage : noms complets des deux époux, informations de l'acte de mariage, quels biens et selon quelles conditions sont partagés."}},
     "gift": {
-        "ai": "Напиши, что и кому дарится (например: дарение квартиры сыну). Укажи, если знаешь: ФИО дарителя и одаряемого, точное описание предмета дарения.",
-        "user": "Пришли данные для договора дарения: ФИО и паспортные данные дарителя и одаряемого, точное описание предмета дарения, документы-основания (если есть).",
-    },
+        "ai": {"ru": "Напиши, что и кому дарится (например: дарение квартиры сыну). Укажи, если знаешь: ФИО дарителя и одаряемого, точное описание предмета дарения.",
+               "en": "Write what is given to whom (for example: gifting an apartment to a son). Specify, if known: full names of the donor and recipient, exact description of the gift.",
+               "de": "Schreibe, was wem geschenkt wird (zum Beispiel: Schenkung einer Wohnung an den Sohn). Gib an, falls bekannt: Namen von Schenker und Beschenktem, genaue Beschreibung des Geschenks.",
+               "ar": "اكتب ما الذي يُهدى ولمن (مثال: هبة شقة للابن). حدد إن كنت تعرف: الاسم الكامل للواهب والموهوب له، وصفاً دقيقاً للهبة.",
+               "zh": "请说明赠与的对象和内容（例如：将公寓赠与儿子）。如知道的话，请注明赠与人和受赠人姓名、赠与物的准确描述。",
+               "es": "Escribe qué se dona y a quién (por ejemplo: donación de un piso al hijo). Indica, si lo sabes: nombre completo del donante y del donatario, descripción exacta del bien donado.",
+               "fr": "Écris ce qui est donné à qui (par exemple : donation d'un appartement au fils). Indique, si tu les connais : noms complets du donateur et du donataire, description exacte du bien donné."},
+        "user": {"ru": "Пришли данные для договора дарения: ФИО и паспортные данные дарителя и одаряемого, точное описание предмета дарения, документы-основания (если есть).",
+                 "en": "Send the details for the gift agreement: full names and ID details of the donor and recipient, exact description of the gift, supporting documents (if any).",
+                 "de": "Sende die Daten für den Schenkungsvertrag: Namen und Ausweisdaten von Schenker und Beschenktem, genaue Beschreibung des Geschenks, Grundlagendokumente (falls vorhanden).",
+                 "ar": "أرسل بيانات عقد الهبة: الاسم الكامل وبيانات الهوية للواهب والموهوب له، وصفاً دقيقاً للهبة، المستندات الداعمة (إن وجدت).",
+                 "zh": "请发送赠与合同所需信息：赠与人和受赠人的姓名及证件信息、赠与物的准确描述、相关证明文件（如有）。",
+                 "es": "Envía los datos para el contrato de donación: nombre completo y datos de identificación del donante y el donatario, descripción exacta del bien donado, documentos de respaldo (si los hay).",
+                 "fr": "Envoie les données de l'acte de donation : noms complets et pièces d'identité du donateur et du donataire, description exacte du bien donné, documents justificatifs (le cas échéant)."}},
     "lawsuit": {
-        "ai": "Напиши суть спора и в какой суд обращаешься. Укажи, если знаешь: ФИО истца и ответчика, обстоятельства дела, какие требования заявляешь.",
-        "user": "Пришли данные для искового заявления: наименование суда, ФИО/данные истца и ответчика, обстоятельства дела, исковые требования, цену иска (если есть).",
-    },
+        "ai": {"ru": "Напиши суть спора и в какой суд обращаешься. Укажи, если знаешь: ФИО истца и ответчика, обстоятельства дела, какие требования заявляешь.",
+               "en": "Write the essence of the dispute and which court you're filing with. Specify, if known: full names of the plaintiff and defendant, circumstances of the case, what demands you're making.",
+               "de": "Schreibe das Wesen des Streits und bei welchem Gericht du klagst. Gib an, falls bekannt: Namen von Kläger und Beklagtem, Umstände des Falls, welche Forderungen du stellst.",
+               "ar": "اكتب جوهر النزاع والمحكمة التي تتوجه إليها. حدد إن كنت تعرف: الاسم الكامل للمدعي والمدعى عليه، ملابسات القضية، المطالب التي تقدمها.",
+               "zh": "请说明纠纷内容以及向哪个法院起诉。如知道的话，请注明原告和被告姓名、案件情况、诉讼请求。",
+               "es": "Escribe la esencia del litigio y ante qué juzgado presentas la demanda. Indica, si lo sabes: nombre completo del demandante y del demandado, circunstancias del caso, qué exigencias planteas.",
+               "fr": "Écris l'objet du litige et devant quel tribunal tu portes l'affaire. Indique, si tu les connais : noms complets du demandeur et du défendeur, circonstances de l'affaire, quelles demandes tu formules."},
+        "user": {"ru": "Пришли данные для искового заявления: наименование суда, ФИО/данные истца и ответчика, обстоятельства дела, исковые требования, цену иска (если есть).",
+                 "en": "Send the details for the statement of claim: name of the court, names/details of the plaintiff and defendant, circumstances of the case, the demands, the claim amount (if any).",
+                 "de": "Sende die Daten für die Klageschrift: Name des Gerichts, Namen/Daten von Kläger und Beklagtem, Umstände des Falls, Klageforderungen, Streitwert (falls vorhanden).",
+                 "ar": "أرسل بيانات صحيفة الدعوى: اسم المحكمة، اسم/بيانات المدعي والمدعى عليه، ملابسات القضية، طلبات الدعوى، قيمة الدعوى (إن وجدت).",
+                 "zh": "请发送起诉状所需信息：法院名称、原告/被告姓名及信息、案件情况、诉讼请求、诉讼标的额（如有）。",
+                 "es": "Envía los datos para la demanda: nombre del juzgado, nombre/datos del demandante y del demandado, circunstancias del caso, pretensiones, cuantía de la demanda (si la hay).",
+                 "fr": "Envoie les données de l'assignation : nom du tribunal, noms/coordonnées du demandeur et du défendeur, circonstances de l'affaire, demandes, montant du litige (le cas échéant)."}},
     "alimony": {
-        "ai": "Напиши, кто и на кого платит алименты, и на каких условиях (сумма, периодичность).",
-        "user": "Пришли данные для соглашения об алиментах: ФИО плательщика и получателя, ФИО и дату рождения ребёнка, размер и периодичность выплат.",
-    },
+        "ai": {"ru": "Напиши, кто и на кого платит алименты, и на каких условиях (сумма, периодичность).",
+               "en": "Write who pays child/spousal support to whom, and on what terms (amount, frequency).",
+               "de": "Schreibe, wer an wen Unterhalt zahlt und zu welchen Bedingungen (Betrag, Häufigkeit).",
+               "ar": "اكتب من يدفع النفقة ولمن، وبأي شروط (المبلغ، الدورية).",
+               "zh": "请说明抚养费的支付方和接收方，以及条件（金额、支付周期）。",
+               "es": "Escribe quién paga la pensión alimenticia y a quién, y en qué condiciones (importe, periodicidad).",
+               "fr": "Écris qui verse une pension alimentaire à qui, et selon quelles conditions (montant, périodicité)."},
+        "user": {"ru": "Пришли данные для соглашения об алиментах: ФИО плательщика и получателя, ФИО и дату рождения ребёнка, размер и периодичность выплат.",
+                 "en": "Send the details for the support agreement: full names of the payer and recipient, child's full name and date of birth, amount and frequency of payments.",
+                 "de": "Sende die Daten für die Unterhaltsvereinbarung: Namen von Zahler und Empfänger, Name und Geburtsdatum des Kindes, Höhe und Häufigkeit der Zahlungen.",
+                 "ar": "أرسل بيانات اتفاقية النفقة: الاسم الكامل للدافع والمستفيد، اسم وتاريخ ميلاد الطفل، مقدار الدفعات ودوريتها.",
+                 "zh": "请发送抚养费协议所需信息：支付方和接收方姓名、孩子姓名及出生日期、支付金额和周期。",
+                 "es": "Envía los datos para el acuerdo de alimentos: nombre completo del pagador y del beneficiario, nombre y fecha de nacimiento del menor, importe y periodicidad de los pagos.",
+                 "fr": "Envoie les données de l'accord de pension alimentaire : noms complets du payeur et du bénéficiaire, nom et date de naissance de l'enfant, montant et périodicité des versements."}},
     "services": {
-        "ai": "Напиши, какую услугу и кто оказывает. Укажи, если знаешь: заказчика и исполнителя, суть услуги, стоимость и сроки.",
-        "user": "Пришли данные для договора оказания услуг: заказчик и исполнитель, точное описание услуги, стоимость, порядок оплаты, сроки оказания.",
-    },
+        "ai": {"ru": "Напиши, какую услугу и кто оказывает. Укажи, если знаешь: заказчика и исполнителя, суть услуги, стоимость и сроки.",
+               "en": "Write what service and who provides it. Specify, if known: client and contractor, essence of the service, cost and deadlines.",
+               "de": "Schreibe, welche Dienstleistung und von wem erbracht wird. Gib an, falls bekannt: Auftraggeber und Auftragnehmer, Art der Dienstleistung, Kosten und Fristen.",
+               "ar": "اكتب ما الخدمة ومن يقدّمها. حدد إن كنت تعرف: العميل والمنفّذ، جوهر الخدمة، التكلفة والمواعيد.",
+               "zh": "请说明服务内容及提供方。如知道的话，请注明委托方和服务方、服务内容、费用和期限。",
+               "es": "Escribe qué servicio y quién lo presta. Indica, si lo sabes: cliente y prestador, esencia del servicio, coste y plazos.",
+               "fr": "Écris quel service et qui le fournit. Indique, si tu les connais : client et prestataire, nature du service, coût et délais."},
+        "user": {"ru": "Пришли данные для договора оказания услуг: заказчик и исполнитель, точное описание услуги, стоимость, порядок оплаты, сроки оказания.",
+                 "en": "Send the details for the services agreement: client and contractor, exact description of the service, cost, payment terms, deadlines.",
+                 "de": "Sende die Daten für den Dienstleistungsvertrag: Auftraggeber und Auftragnehmer, genaue Beschreibung der Dienstleistung, Kosten, Zahlungsbedingungen, Fristen.",
+                 "ar": "أرسل بيانات عقد تقديم الخدمات: العميل والمنفّذ، وصفاً دقيقاً للخدمة، التكلفة، شروط الدفع، مواعيد التنفيذ.",
+                 "zh": "请发送服务合同所需信息：委托方和服务方、服务的准确描述、费用、付款方式、服务期限。",
+                 "es": "Envía los datos para el contrato de prestación de servicios: cliente y prestador, descripción exacta del servicio, coste, forma de pago, plazos de ejecución.",
+                 "fr": "Envoie les données du contrat de prestation de services : client et prestataire, description exacte du service, coût, modalités de paiement, délais d'exécution."}},
     "employment": {
-        "ai": "Напиши должность и условия работы. Укажи, если знаешь: работодателя, работника, оклад, дату начала работы, режим работы.",
-        "user": "Пришли данные для трудового договора: работодатель и работник (ФИО, паспортные данные), должность, оклад, режим работы, дату начала работы.",
-    },
+        "ai": {"ru": "Напиши должность и условия работы. Укажи, если знаешь: работодателя, работника, оклад, дату начала работы, режим работы.",
+               "en": "Write the position and working conditions. Specify, if known: employer, employee, salary, start date, work schedule.",
+               "de": "Schreibe die Position und die Arbeitsbedingungen. Gib an, falls bekannt: Arbeitgeber, Arbeitnehmer, Gehalt, Beginn der Tätigkeit, Arbeitszeit.",
+               "ar": "اكتب المنصب وشروط العمل. حدد إن كنت تعرف: صاحب العمل، الموظف، الراتب، تاريخ بدء العمل، نظام العمل.",
+               "zh": "请说明职位和工作条件。如知道的话，请注明雇主、员工、薪资、入职日期、工作制度。",
+               "es": "Escribe el puesto y las condiciones de trabajo. Indica, si lo sabes: empleador, empleado, salario, fecha de inicio, horario de trabajo.",
+               "fr": "Écris le poste et les conditions de travail. Indique, si tu les connais : employeur, employé, salaire, date de début, horaires de travail."},
+        "user": {"ru": "Пришли данные для трудового договора: работодатель и работник (ФИО, паспортные данные), должность, оклад, режим работы, дату начала работы.",
+                 "en": "Send the details for the employment contract: employer and employee (full name, ID details), position, salary, work schedule, start date.",
+                 "de": "Sende die Daten für den Arbeitsvertrag: Arbeitgeber und Arbeitnehmer (Name, Ausweisdaten), Position, Gehalt, Arbeitszeit, Beginn der Tätigkeit.",
+                 "ar": "أرسل بيانات عقد العمل: صاحب العمل والموظف (الاسم الكامل، بيانات الهوية)، المنصب، الراتب، نظام العمل، تاريخ بدء العمل.",
+                 "zh": "请发送劳动合同所需信息：雇主和员工（姓名、证件信息）、职位、薪资、工作制度、入职日期。",
+                 "es": "Envía los datos para el contrato de trabajo: empleador y empleado (nombre completo, datos de identificación), puesto, salario, horario de trabajo, fecha de inicio.",
+                 "fr": "Envoie les données du contrat de travail : employeur et employé (nom complet, pièce d'identité), poste, salaire, horaires de travail, date de début."}},
     "work_act": {
-        "ai": "Напиши, какие работы или услуги выполнены и по какому договору. Укажи, если знаешь: заказчика и исполнителя, перечень работ, стоимость.",
-        "user": "Пришли данные для акта выполненных работ: номер и дату договора, заказчик и исполнитель, перечень выполненных работ/услуг с объёмом и стоимостью.",
-    },
+        "ai": {"ru": "Напиши, какие работы или услуги выполнены и по какому договору. Укажи, если знаешь: заказчика и исполнителя, перечень работ, стоимость.",
+               "en": "Write what work or services were performed and under which agreement. Specify, if known: client and contractor, list of works, cost.",
+               "de": "Schreibe, welche Arbeiten oder Leistungen erbracht wurden und aufgrund welchen Vertrags. Gib an, falls bekannt: Auftraggeber und Auftragnehmer, Liste der Arbeiten, Kosten.",
+               "ar": "اكتب الأعمال أو الخدمات المنجزة وبموجب أي عقد. حدد إن كنت تعرف: العميل والمنفّذ، قائمة الأعمال، التكلفة.",
+               "zh": "请说明已完成的工作或服务内容及所依据的合同。如知道的话，请注明委托方和服务方、工作清单、费用。",
+               "es": "Escribe qué trabajos o servicios se realizaron y en virtud de qué contrato. Indica, si lo sabes: cliente y prestador, listado de trabajos, coste.",
+               "fr": "Écris quels travaux ou services ont été réalisés et en vertu de quel contrat. Indique, si tu les connais : client et prestataire, liste des travaux, coût."},
+        "user": {"ru": "Пришли данные для акта выполненных работ: номер и дату договора, заказчик и исполнитель, перечень выполненных работ/услуг с объёмом и стоимостью.",
+                 "en": "Send the details for the completion act: contract number and date, client and contractor, list of completed works/services with volume and cost.",
+                 "de": "Sende die Daten für das Leistungsabnahmeprotokoll: Vertragsnummer und -datum, Auftraggeber und Auftragnehmer, Liste der erbrachten Arbeiten/Leistungen mit Umfang und Kosten.",
+                 "ar": "أرسل بيانات محضر إنجاز الأعمال: رقم وتاريخ العقد، العميل والمنفّذ، قائمة الأعمال/الخدمات المنجزة مع الحجم والتكلفة.",
+                 "zh": "请发送完工验收单所需信息：合同编号和日期、委托方和服务方、已完成工作/服务清单（含工作量和费用）。",
+                 "es": "Envía los datos para el acta de trabajos realizados: número y fecha del contrato, cliente y prestador, listado de trabajos/servicios realizados con volumen y coste.",
+                 "fr": "Envoie les données du procès-verbal de réception des travaux : numéro et date du contrat, client et prestataire, liste des travaux/services réalisés avec quantité et coût."}},
     "supply": {
-        "ai": "Напиши, какой товар поставляется и кем. Укажи, если знаешь: поставщика и покупателя, товар, количество, цену, сроки поставки.",
-        "user": "Пришли данные для договора поставки: поставщик и покупатель, наименование и количество товара, цена, сроки и порядок поставки и оплаты.",
-    },
+        "ai": {"ru": "Напиши, какой товар поставляется и кем. Укажи, если знаешь: поставщика и покупателя, товар, количество, цену, сроки поставки.",
+               "en": "Write what goods are supplied and by whom. Specify, if known: supplier and buyer, goods, quantity, price, delivery deadlines.",
+               "de": "Schreibe, welche Ware geliefert wird und von wem. Gib an, falls bekannt: Lieferant und Käufer, Ware, Menge, Preis, Lieferfristen.",
+               "ar": "اكتب ما هي البضاعة الموردة ومن يوردها. حدد إن كنت تعرف: المورد والمشتري، البضاعة، الكمية، السعر، مواعيد التوريد.",
+               "zh": "请说明供应的货物及供应方。如知道的话，请注明供应商和买方、货物、数量、价格、交货期限。",
+               "es": "Escribe qué mercancía se suministra y quién la suministra. Indica, si lo sabes: proveedor y comprador, mercancía, cantidad, precio, plazos de entrega.",
+               "fr": "Écris quelle marchandise est fournie et par qui. Indique, si tu les connais : fournisseur et acheteur, marchandise, quantité, prix, délais de livraison."},
+        "user": {"ru": "Пришли данные для договора поставки: поставщик и покупатель, наименование и количество товара, цена, сроки и порядок поставки и оплаты.",
+                 "en": "Send the details for the supply agreement: supplier and buyer, name and quantity of goods, price, delivery and payment deadlines and terms.",
+                 "de": "Sende die Daten für den Liefervertrag: Lieferant und Käufer, Bezeichnung und Menge der Ware, Preis, Liefer- und Zahlungsfristen und -bedingungen.",
+                 "ar": "أرسل بيانات عقد التوريد: المورد والمشتري، اسم وكمية البضاعة، السعر، مواعيد وشروط التوريد والدفع.",
+                 "zh": "请发送供货合同所需信息：供应商和买方、货物名称和数量、价格、供货和付款期限及方式。",
+                 "es": "Envía los datos para el contrato de suministro: proveedor y comprador, denominación y cantidad de la mercancía, precio, plazos y condiciones de entrega y pago.",
+                 "fr": "Envoie les données du contrat de fourniture : fournisseur et acheteur, désignation et quantité de la marchandise, prix, délais et modalités de livraison et de paiement."}},
     "agency": {
-        "ai": "Напиши, какие действия агент совершает в интересах принципала. Укажи, если знаешь: стороны, суть поручения, вознаграждение агента.",
-        "user": "Пришли данные для агентского договора: принципал и агент, точное описание поручаемых действий, размер и порядок выплаты вознаграждения.",
-    },
+        "ai": {"ru": "Напиши, какие действия агент совершает в интересах принципала. Укажи, если знаешь: стороны, суть поручения, вознаграждение агента.",
+               "en": "Write what actions the agent performs on behalf of the principal. Specify, if known: parties, essence of the assignment, agent's fee.",
+               "de": "Schreibe, welche Handlungen der Agent im Interesse des Prinzipals ausführt. Gib an, falls bekannt: Parteien, Kern des Auftrags, Vergütung des Agenten.",
+               "ar": "اكتب الإجراءات التي ينفذها الوكيل لصالح الموكِّل. حدد إن كنت تعرف: الطرفين، جوهر التكليف، أجر الوكيل.",
+               "zh": "请说明代理人代表委托人执行的行为。如知道的话，请注明双方、委托事项内容、代理费。",
+               "es": "Escribe qué acciones realiza el agente en interés del principal. Indica, si lo sabes: las partes, esencia del encargo, remuneración del agente.",
+               "fr": "Écris quelles actions l'agent réalise dans l'intérêt du mandant. Indique, si tu les connais : les parties, nature du mandat, rémunération de l'agent."},
+        "user": {"ru": "Пришли данные для агентского договора: принципал и агент, точное описание поручаемых действий, размер и порядок выплаты вознаграждения.",
+                 "en": "Send the details for the agency agreement: principal and agent, exact description of the assigned actions, amount and payment terms of the fee.",
+                 "de": "Sende die Daten für den Agenturvertrag: Prinzipal und Agent, genaue Beschreibung der beauftragten Handlungen, Höhe und Zahlungsweise der Vergütung.",
+                 "ar": "أرسل بيانات عقد الوكالة: الموكِّل والوكيل، وصفاً دقيقاً للإجراءات المكلَّف بها، مقدار الأجر وطريقة دفعه.",
+                 "zh": "请发送代理合同所需信息：委托人和代理人、委托事项的准确描述、代理费金额和支付方式。",
+                 "es": "Envía los datos para el contrato de agencia: principal y agente, descripción exacta de las acciones encomendadas, importe y forma de pago de la remuneración.",
+                 "fr": "Envoie les données du contrat d'agence : mandant et agent, description exacte des actions confiées, montant et modalités de versement de la rémunération."}},
     "joint_activity": {
-        "ai": "Напиши цель совместной деятельности и вклад каждой стороны.",
-        "user": "Пришли данные для договора о совместной деятельности: стороны, цель, вклад каждого участника, порядок распределения прибыли и расходов.",
-    },
+        "ai": {"ru": "Напиши цель совместной деятельности и вклад каждой стороны.",
+               "en": "Write the purpose of the joint activity and each party's contribution.",
+               "de": "Schreibe das Ziel der gemeinsamen Tätigkeit und den Beitrag jeder Partei.",
+               "ar": "اكتب هدف النشاط المشترك ومساهمة كل طرف.",
+               "zh": "请说明共同经营的目的以及各方的出资。",
+               "es": "Escribe el objetivo de la actividad conjunta y la aportación de cada parte.",
+               "fr": "Écris l'objectif de l'activité commune et l'apport de chaque partie."},
+        "user": {"ru": "Пришли данные для договора о совместной деятельности: стороны, цель, вклад каждого участника, порядок распределения прибыли и расходов.",
+                 "en": "Send the details for the joint activity agreement: parties, purpose, each participant's contribution, profit and expense distribution terms.",
+                 "de": "Sende die Daten für den Vertrag über gemeinsame Tätigkeit: Parteien, Ziel, Beitrag jedes Teilnehmers, Aufteilung von Gewinn und Kosten.",
+                 "ar": "أرسل بيانات عقد النشاط المشترك: الأطراف، الهدف، مساهمة كل مشارك، طريقة توزيع الأرباح والمصاريف.",
+                 "zh": "请发送共同经营合同所需信息：各方、目的、各参与方的出资、利润和费用分配方式。",
+                 "es": "Envía los datos para el contrato de actividad conjunta: partes, objetivo, aportación de cada participante, forma de reparto de beneficios y gastos.",
+                 "fr": "Envoie les données du contrat d'activité commune : parties, objectif, apport de chaque participant, modalités de répartition des bénéfices et des dépenses."}},
     "nonresidential_rent": {
-        "ai": "Напиши, какое нежилое помещение сдаётся в аренду. Укажи, если знаешь: стороны, адрес и площадь, срок аренды, сумму.",
-        "user": "Пришли данные для аренды нежилого помещения: арендодатель и арендатор, точный адрес и площадь, срок аренды, размер и порядок оплаты.",
-    },
+        "ai": {"ru": "Напиши, какое нежилое помещение сдаётся в аренду. Укажи, если знаешь: стороны, адрес и площадь, срок аренды, сумму.",
+               "en": "Write what non-residential premises are being leased. Specify, if known: parties, address and area, lease term, amount.",
+               "de": "Schreibe, welche Gewerberäume vermietet werden. Gib an, falls bekannt: Parteien, Adresse und Fläche, Mietdauer, Betrag.",
+               "ar": "اكتب أي عقار غير سكني يُؤجَّر. حدد إن كنت تعرف: الطرفين، العنوان والمساحة، مدة الإيجار، المبلغ.",
+               "zh": "请说明出租的非居住用房产。如知道的话，请注明双方、地址和面积、租期、金额。",
+               "es": "Escribe qué local no residencial se alquila. Indica, si lo sabes: partes, dirección y superficie, plazo del alquiler, importe.",
+               "fr": "Écris quel local à usage non résidentiel est loué. Indique, si tu les connais : parties, adresse et surface, durée du bail, montant."},
+        "user": {"ru": "Пришли данные для аренды нежилого помещения: арендодатель и арендатор, точный адрес и площадь, срок аренды, размер и порядок оплаты.",
+                 "en": "Send the details for the non-residential lease: lessor and lessee, exact address and area, lease term, amount and payment terms.",
+                 "de": "Sende die Daten für die Gewerbemiete: Vermieter und Mieter, genaue Adresse und Fläche, Mietdauer, Höhe und Zahlungsweise.",
+                 "ar": "أرسل بيانات إيجار العقار غير السكني: المؤجر والمستأجر، العنوان الدقيق والمساحة، مدة الإيجار، المبلغ وطريقة الدفع.",
+                 "zh": "请发送非居住用房产租赁所需信息：出租方和承租方、准确地址和面积、租期、金额和付款方式。",
+                 "es": "Envía los datos para el alquiler del local no residencial: arrendador y arrendatario, dirección exacta y superficie, plazo del alquiler, importe y forma de pago.",
+                 "fr": "Envoie les données de la location du local non résidentiel : bailleur et locataire, adresse exacte et surface, durée du bail, montant et modalités de paiement."}},
     "cession": {
-        "ai": "Напиши, какое право требования и по какому обязательству уступается.",
-        "user": "Пришли данные для договора цессии: цедент и цессионарий, реквизиты первоначального обязательства, сумма и объём уступаемого права, цена уступки.",
-    },
+        "ai": {"ru": "Напиши, какое право требования и по какому обязательству уступается.",
+               "en": "Write what claim right and under which obligation is being assigned.",
+               "de": "Schreibe, welcher Forderungsanspruch und aufgrund welcher Verpflichtung abgetreten wird.",
+               "ar": "اكتب أي حق مطالبة وبموجب أي التزام يُحال.",
+               "zh": "请说明转让的债权及其所依据的义务。",
+               "es": "Escribe qué derecho de crédito y en virtud de qué obligación se cede.",
+               "fr": "Écris quel droit de créance et en vertu de quelle obligation est cédé."},
+        "user": {"ru": "Пришли данные для договора цессии: цедент и цессионарий, реквизиты первоначального обязательства, сумма и объём уступаемого права, цена уступки.",
+                 "en": "Send the details for the assignment agreement: assignor and assignee, details of the original obligation, amount and scope of the assigned right, assignment price.",
+                 "de": "Sende die Daten für den Abtretungsvertrag: Zedent und Zessionar, Angaben zur ursprünglichen Verpflichtung, Höhe und Umfang des abgetretenen Rechts, Abtretungspreis.",
+                 "ar": "أرسل بيانات عقد الحوالة: المُحيل والمُحال إليه، بيانات الالتزام الأصلي، مبلغ ونطاق الحق المُحال، سعر الحوالة.",
+                 "zh": "请发送债权转让合同所需信息：转让方和受让方、原债务信息、转让权利的金额和范围、转让价格。",
+                 "es": "Envía los datos para el contrato de cesión: cedente y cesionario, datos de la obligación original, importe y alcance del derecho cedido, precio de la cesión.",
+                 "fr": "Envoie les données du contrat de cession : cédant et cessionnaire, informations sur l'obligation d'origine, montant et étendue du droit cédé, prix de la cession."}},
     "nda": {
-        "ai": "Напиши, какую конфиденциальную информацию нужно защитить и между кем.",
-        "user": "Пришли данные для соглашения о неразглашении: стороны, что считается конфиденциальной информацией, срок действия обязательств, ответственность за разглашение.",
-    },
+        "ai": {"ru": "Напиши, какую конфиденциальную информацию нужно защитить и между кем.",
+               "en": "Write what confidential information needs protecting and between whom.",
+               "de": "Schreibe, welche vertraulichen Informationen geschützt werden müssen und zwischen wem.",
+               "ar": "اكتب أي معلومات سرية يجب حمايتها وبين من.",
+               "zh": "请说明需要保护的机密信息以及涉及双方。",
+               "es": "Escribe qué información confidencial hay que proteger y entre quiénes.",
+               "fr": "Écris quelle information confidentielle doit être protégée et entre qui."},
+        "user": {"ru": "Пришли данные для соглашения о неразглашении: стороны, что считается конфиденциальной информацией, срок действия обязательств, ответственность за разглашение.",
+                 "en": "Send the details for the NDA: parties, what's considered confidential information, duration of obligations, liability for disclosure.",
+                 "de": "Sende die Daten für die Vertraulichkeitsvereinbarung: Parteien, was als vertrauliche Information gilt, Dauer der Verpflichtungen, Haftung bei Offenlegung.",
+                 "ar": "أرسل بيانات اتفاقية عدم الإفشاء: الطرفين، ما يُعتبر معلومات سرية، مدة الالتزامات، المسؤولية عن الإفشاء.",
+                 "zh": "请发送保密协议所需信息：各方、机密信息的界定、义务期限、泄露责任。",
+                 "es": "Envía los datos para el acuerdo de confidencialidad: partes, qué se considera información confidencial, duración de las obligaciones, responsabilidad por divulgación.",
+                 "fr": "Envoie les données de l'accord de confidentialité : parties, ce qui est considéré comme information confidentielle, durée des obligations, responsabilité en cas de divulgation."}},
     "self_employed": {
-        "ai": "Напиши, какую работу выполняет самозанятый и для кого.",
-        "user": "Пришли данные для договора с самозанятым: заказчик и исполнитель (ФИО, ИНН самозанятого), суть работ, стоимость, сроки, порядок оплаты.",
-    },
+        "ai": {"ru": "Напиши, какую работу выполняет самозанятый и для кого.",
+               "en": "Write what work the self-employed person performs and for whom.",
+               "de": "Schreibe, welche Arbeit der Selbstständige ausführt und für wen.",
+               "ar": "اكتب أي عمل ينفذه العامل المستقل ولمن.",
+               "zh": "请说明自由职业者从事的工作及服务对象。",
+               "es": "Escribe qué trabajo realiza el autónomo y para quién.",
+               "fr": "Écris quel travail réalise le travailleur indépendant et pour qui."},
+        "user": {"ru": "Пришли данные для договора с самозанятым: заказчик и исполнитель (ФИО, ИНН самозанятого), суть работ, стоимость, сроки, порядок оплаты.",
+                 "en": "Send the details for the self-employed contract: client and contractor (full name, tax ID of the self-employed person), essence of the work, cost, deadlines, payment terms.",
+                 "de": "Sende die Daten für den Vertrag mit dem Selbstständigen: Auftraggeber und Auftragnehmer (Name, Steuernummer des Selbstständigen), Art der Arbeiten, Kosten, Fristen, Zahlungsweise.",
+                 "ar": "أرسل بيانات عقد العامل المستقل: العميل والمنفّذ (الاسم الكامل، الرقم الضريبي للعامل المستقل)، جوهر العمل، التكلفة، المواعيد، طريقة الدفع.",
+                 "zh": "请发送与自由职业者签订合同所需信息：委托方和服务方（姓名、自由职业者税号）、工作内容、费用、期限、付款方式。",
+                 "es": "Envía los datos para el contrato con el autónomo: cliente y prestador (nombre completo, NIF del autónomo), esencia de los trabajos, coste, plazos, forma de pago.",
+                 "fr": "Envoie les données du contrat avec le travailleur indépendant : client et prestataire (nom complet, numéro fiscal de l'indépendant), nature des travaux, coût, délais, modalités de paiement."}},
     "warranty_letter": {
-        "ai": "Напиши, что именно гарантируется и кому адресовано письмо.",
-        "user": "Пришли данные для гарантийного письма: кому адресовано, кто гарантирует, суть гарантии, срок исполнения.",
-    },
+        "ai": {"ru": "Напиши, что именно гарантируется и кому адресовано письмо.",
+               "en": "Write exactly what's guaranteed and to whom the letter is addressed.",
+               "de": "Schreibe, was genau garantiert wird und an wen der Brief gerichtet ist.",
+               "ar": "اكتب ما الذي يُضمن بالضبط ولمن موجّهة الرسالة.",
+               "zh": "请说明具体保证的内容以及信函的收件人。",
+               "es": "Escribe qué se garantiza exactamente y a quién va dirigida la carta.",
+               "fr": "Écris ce qui est exactement garanti et à qui la lettre est adressée."},
+        "user": {"ru": "Пришли данные для гарантийного письма: кому адресовано, кто гарантирует, суть гарантии, срок исполнения.",
+                 "en": "Send the details for the letter of guarantee: who it's addressed to, who's guaranteeing, essence of the guarantee, fulfillment deadline.",
+                 "de": "Sende die Daten für das Garantieschreiben: an wen gerichtet, wer garantiert, Inhalt der Garantie, Erfüllungsfrist.",
+                 "ar": "أرسل بيانات خطاب الضمان: الموجّه إليه، الضامن، جوهر الضمان، مهلة التنفيذ.",
+                 "zh": "请发送保证函所需信息：收件人、担保方、保证内容、履行期限。",
+                 "es": "Envía los datos para la carta de garantía: a quién va dirigida, quién garantiza, contenido de la garantía, plazo de cumplimiento.",
+                 "fr": "Envoie les données de la lettre de garantie : à qui elle est adressée, qui garantit, nature de la garantie, délai d'exécution."}},
 }
 
+WORD_KIND_HINTS = {k: {"ai": v["ai"]["ru"], "user": v["user"]["ru"]} for k, v in WORD_KIND_HINTS_I18N.items()}  # обратная совместимость
 
-def word_hint(kind: str, mode: str) -> str:
-    return WORD_KIND_HINTS.get(kind, WORD_KIND_HINTS["doc"])[mode]
+
+def word_hint(kind: str, mode: str, lang: str = "ru") -> str:
+    variants = WORD_KIND_HINTS_I18N.get(kind, WORD_KIND_HINTS_I18N["doc"])[mode]
+    return variants.get(lang) or variants["ru"]
 
 
 @dp.message(Form.waiting_word_mode, F.text.in_(ALL_BTN_AI_GENERATE_LABELS))
 async def word_mode_ai(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     await state.update_data(mode="ai", user_text="")
+    await m.answer(tr("msg_content_lang_prompt", lang), reply_markup=content_lang_kb(lang))
+    await state.set_state(Form.waiting_word_content_lang)
+
+
+@dp.message(Form.waiting_word_content_lang)
+async def word_content_lang(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    code = resolve_content_lang((m.text or "").strip(), lang)
+    if not code:
+        await m.answer(tr("msg_pick_content_lang", lang), reply_markup=content_lang_kb(lang))
+        return
+    await state.update_data(content_lang=code)
     data = await state.get_data()
-    await m.answer(word_hint(data.get("word_kind", "doc"), "ai"), reply_markup=cancel_kb(lang))
+    await m.answer(word_hint(data.get("word_kind", "doc"), "ai", lang), reply_markup=cancel_kb(lang))
     await state.set_state(Form.waiting_word_topic)
 
 
@@ -3544,7 +4096,7 @@ async def word_mode_user(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     await state.update_data(mode="user")
     data = await state.get_data()
-    await m.answer(word_hint(data.get("word_kind", "doc"), "user"), reply_markup=cancel_kb(lang))
+    await m.answer(word_hint(data.get("word_kind", "doc"), "user", lang), reply_markup=cancel_kb(lang))
     await state.set_state(Form.waiting_word_text)
 
 
@@ -3577,10 +4129,18 @@ async def word_mode_template(m: Message, state: FSMContext):
             pass
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — шаблон: {KIND_LABELS.get(kind, kind)}")
-        await m.answer(tr("msg_ready", lang), reply_markup=main_kb(lang))
+        await m.answer(tr("msg_ready", lang) + "\n\n" + await signature_line(lang), reply_markup=main_kb(lang))
         await state.clear()
     finally:
         finish_job(uid)
+
+
+@dp.message(Form.waiting_word_mode)
+async def waiting_word_mode_fallback(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    data = await state.get_data()
+    show_template = data.get("word_kind", "doc") not in STUDY_KINDS
+    await m.answer(tr("msg_didnt_understand", lang), reply_markup=mode_kb(show_template, lang=lang))
 
 
 # Выбор объёма (короткий/средний/подробный) имеет смысл только там, где объём реально
@@ -3635,7 +4195,7 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
     size_map = {"short": "поверхностное раскрытие темы — только суть и ключевые моменты, без глубокого разбора деталей и подпунктов, но по-настоящему содержательно, объём определяй по теме, не режь искусственно", "long": "полное раскрытие темы — подробно, с деталями, подпунктами и глубоким разбором, объём определяй по теме"}
     kind = data.get("word_kind", "doc")
     kind_name = WORD_KIND_DESC.get(kind, "документ")
-    lang_instr = grok_lang_instruction(lang)
+    lang_instr = grok_lang_instruction(content_gen_lang(data, lang) or "ru")
     prompt = f"""Собери черновик-план (не полный текст): {kind_name}.
 Тема/данные: {data.get('topic')}
 Текст пользователя: {data.get('user_text')}
@@ -3701,7 +4261,7 @@ async def word_extra(m: Message, state: FSMContext):
     extra = ((data.get("extra") or "") + "\n" + text).strip()
     await state.update_data(extra=extra, extra_used=data.get("extra_used", 0) + 1)
     await m.answer(tr("msg_updating_draft", lang))
-    lang_instr = grok_lang_instruction(lang)
+    lang_instr = grok_lang_instruction(content_gen_lang(data, lang) or "ru")
     sample = await ask_grok(
         f"Обнови черновик документа.\nТема: {data.get('topic')}\nТекст: {data.get('user_text')}\nДоп: {extra}\nКороткий план. Без JSON.{lang_instr}"
     )
@@ -3730,7 +4290,7 @@ async def word_build(m: Message, state: FSMContext):
     await m.answer(tr("msg_building_word", lang))
     kind = data.get("word_kind", "doc")
     size = data.get("word_size", "short")
-    lang_instr = grok_json_lang_instruction(lang)
+    lang_instr = grok_json_lang_instruction(content_gen_lang(data, lang) or "ru")
     size_map = {"short": "поверхностное раскрытие темы — только суть и ключевые моменты, без глубокого разбора деталей и подпунктов, но по-настоящему содержательно, объём определяй по теме, не режь искусственно", "long": "полное раскрытие темы — подробно, с деталями, подпунктами и глубоким разбором, объём определяй по теме"}
     kind_name = WORD_KIND_DESC.get(kind, "документ")
     # Схема мета-полей своя под каждый тип документа (модульный словарь META_SCHEMAS,
@@ -3937,6 +4497,7 @@ async def word_build(m: Message, state: FSMContext):
         final_msg = tr("msg_doc_ready", lang)
         if kind not in STUDY_KINDS:
             final_msg += tr("msg_check_gaps", lang)
+        final_msg += "\n\n" + await signature_line(lang)
         await m.answer(final_msg, reply_markup=main_kb(lang))
         await state.clear()
     finally:
