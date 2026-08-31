@@ -2111,6 +2111,39 @@ def _xl_title(ws, title, colors, n_cols):
     ws.row_dimensions[1].height = 28
 
 
+def _xl_inject_cached_values(path, cache):
+    """openpyxl пишет в ячейку с формулой только сам текст формулы ("=SUM(...)"),
+    без результата - настоящий Excel/Numbers/Google Таблицы пересчитывают всё сами
+    при открытии, но быстрый просмотр файла (например Quick Look на iPhone) формулы
+    не считает и показывает пустую ячейку или 0. Чтобы число было видно в любом
+    просмотрщике, а не только в "настоящем" Excel, здесь вручную дописывается
+    закешированный результат прямо в XML уже сохранённого файла - формула остаётся
+    рабочей и редактируемой, просто рядом с ней лежит готовое число на первый показ.
+    cache: {"E8": 4500, "B13": 59900.0, ...} - адрес ячейки -> посчитанное код."""
+    import zipfile
+    import shutil
+
+    sheet_path = "xl/worksheets/sheet1.xml"
+    tmp_path = path + ".tmp"
+    with zipfile.ZipFile(path, "r") as zin:
+        data = {n: zin.read(n) for n in zin.namelist()}
+    xml = data[sheet_path].decode("utf-8")
+    for ref, val in cache.items():
+        if val is None:
+            continue
+        # openpyxl уже пишет пустой <v></v> (или самозакрывающийся <v/>) сразу после
+        # </f> - подставляем число внутрь него, а не добавляем новый тег.
+        pattern = re.compile(r'(<c r="%s"[^>]*>(?:(?!</c>).)*?</f>)<v\s*/?>(?:</v>)?(</c>)' % re.escape(ref), re.DOTALL)
+        xml, n = pattern.subn(lambda m: f"{m.group(1)}<v>{val}</v>{m.group(2)}", xml, count=1)
+        if not n:
+            print(f"_xl_inject_cached_values: не нашёл ячейку {ref} с формулой (не критично)")
+    data[sheet_path] = xml.encode("utf-8")
+    with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for n, content in data.items():
+            zout.writestr(n, content)
+    shutil.move(tmp_path, path)
+
+
 # Фиксированные схемы колонок под каждый вид - модель (или сам пользователь) поставляет
 # только содержимое строк (rows), формулы и оформление всегда собираются кодом, а не ИИ,
 # чтобы суммы/проценты/итоги были настоящими формулами Excel, а не текстом.
@@ -2129,6 +2162,7 @@ def build_excel_items(path, title, kind, colors, rows):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Таблица"
+    cache = {}  # адрес ячейки -> посчитанное код значение, для _xl_inject_cached_values
 
     if kind == "expense_estimate":
         headers = ["№", "Статья расходов", "Кол-во", "Цена, ₽", "Сумма, ₽"]
@@ -2136,11 +2170,17 @@ def build_excel_items(path, title, kind, colors, rows):
         _xl_title(ws, title, colors, len(headers))
         _xl_header_row(ws, 3, headers, colors)
         r = 4
+        total = 0.0
         for i, row in enumerate(rows, 1):
-            _xl_body_row(ws, r, [i, row.get("name", ""), _xl_num(row.get("qty"), 1), _xl_num(row.get("price")), f"=C{r}*D{r}"],
+            qty, price = _xl_num(row.get("qty"), 1), _xl_num(row.get("price"))
+            line_sum = qty * price
+            total += line_sum
+            _xl_body_row(ws, r, [i, row.get("name", ""), qty, price, f"=C{r}*D{r}"],
                          colors, number_cols={3}, money_cols={4, 5})
+            cache[f"E{r}"] = line_sum
             r += 1
         _xl_total_row(ws, r, "ИТОГО", [None, None, None, f"=SUM(E4:E{r - 1})"], colors, len(headers), money_cols={5})
+        cache[f"E{r}"] = total
 
     elif kind in ("family_budget", "project_budget"):
         headers = ["№", "Статья", "Тип", "Сумма, ₽"]
@@ -2149,23 +2189,32 @@ def build_excel_items(path, title, kind, colors, rows):
         _xl_header_row(ws, 3, headers, colors)
         income_label, expense_label = "Доход", "Расход"
         r = 4
+        total_inc, total_exp = 0.0, 0.0
         for i, row in enumerate(rows, 1):
             # Нормализуем "Тип" в самом коде, а не полагаемся на то, что модель/пользователь
             # напишет ровно "доход"/"расход" - иначе SUMIF ниже просто не найдёт совпадение
             # (он сравнивает строки целиком, а не по смыслу) и итог молча окажется нулевым.
             raw_type = (row.get("type") or "").strip().lower()
             norm_type = expense_label if "расход" in raw_type else income_label
-            _xl_body_row(ws, r, [i, row.get("name", ""), norm_type, _xl_num(row.get("amount"))],
+            amount = _xl_num(row.get("amount"))
+            if norm_type == income_label:
+                total_inc += amount
+            else:
+                total_exp += amount
+            _xl_body_row(ws, r, [i, row.get("name", ""), norm_type, amount],
                          colors, money_cols={4})
             r += 1
         last = r - 1
         r_inc, r_exp = r, r + 1
         ws.cell(row=r_inc, column=1, value="").border = Border()
         _xl_total_row(ws, r_inc, "Итого доходы", [None, None, f'=SUMIF(C4:C{last},"{income_label}",D4:D{last})'], colors, len(headers), money_cols={4})
+        cache[f"D{r_inc}"] = total_inc
         _xl_total_row(ws, r_exp, "Итого расходы", [None, None, f'=SUMIF(C4:C{last},"{expense_label}",D4:D{last})'], colors, len(headers), money_cols={4})
+        cache[f"D{r_exp}"] = total_exp
         r_res = r_exp + 1
         res_label = "Остаток" if kind == "family_budget" else "Прибыль"
         _xl_total_row(ws, r_res, res_label, [None, None, f"=D{r_inc}-D{r_exp}"], colors, len(headers), money_cols={4})
+        cache[f"D{r_res}"] = total_inc - total_exp
 
     elif kind == "price_list":
         headers = ["№", "Наименование", "Ед.", "Кол-во", "Цена, ₽", "Скидка, %", "Сумма, ₽"]
@@ -2173,13 +2222,20 @@ def build_excel_items(path, title, kind, colors, rows):
         _xl_title(ws, title, colors, len(headers))
         _xl_header_row(ws, 3, headers, colors)
         r = 4
+        total = 0.0
         for i, row in enumerate(rows, 1):
             disc = _xl_num(row.get("discount"))
-            _xl_body_row(ws, r, [i, row.get("name", ""), row.get("unit", "шт"), _xl_num(row.get("qty"), 1),
-                                  _xl_num(row.get("price")), disc / 100 if disc else 0, f"=D{r}*E{r}*(1-F{r})"],
+            qty, price = _xl_num(row.get("qty"), 1), _xl_num(row.get("price"))
+            disc_frac = disc / 100 if disc else 0
+            line_sum = qty * price * (1 - disc_frac)
+            total += line_sum
+            _xl_body_row(ws, r, [i, row.get("name", ""), row.get("unit", "шт"), qty,
+                                  price, disc_frac, f"=D{r}*E{r}*(1-F{r})"],
                          colors, number_cols={4}, money_cols={5, 7}, percent_cols={6})
+            cache[f"G{r}"] = line_sum
             r += 1
         _xl_total_row(ws, r, "ИТОГО", [None, None, None, None, None, f"=SUM(G4:G{r - 1})"], colors, len(headers), money_cols={7})
+        cache[f"G{r}"] = total
 
     elif kind == "calc_table":
         headers = ["№", "Показатель", "Значение", "Доля, %"]
@@ -2188,19 +2244,28 @@ def build_excel_items(path, title, kind, colors, rows):
         _xl_header_row(ws, 3, headers, colors)
         r = 4
         first_r = r
+        values = []
         for i, row in enumerate(rows, 1):
-            _xl_body_row(ws, r, [i, row.get("name", ""), _xl_num(row.get("value")), None], colors, number_cols={3}, percent_cols={4})
+            v = _xl_num(row.get("value"))
+            values.append(v)
+            _xl_body_row(ws, r, [i, row.get("name", ""), v, None], colors, number_cols={3}, percent_cols={4})
             r += 1
         last_r = r - 1
+        total_value = sum(values)
         # IFERROR - если все значения окажутся нулевыми (или их сумма равна нулю), формула
         # деления вернёт #DIV/0! в каждой строке; выводим 0% вместо ошибки на весь лист.
-        for rr in range(first_r, r):
+        for rr, v in zip(range(first_r, r), values):
             ws.cell(row=rr, column=4, value=f"=IFERROR(C{rr}/SUM($C${first_r}:$C${last_r}),0)")
             ws.cell(row=rr, column=4).number_format = '0.0%'
+            cache[f"D{rr}"] = (v / total_value) if total_value else 0.0
         total_pct_formula = f"=IFERROR(SUM(C{first_r}:C{last_r})/SUM(C{first_r}:C{last_r}),0)"
         _xl_total_row(ws, r, "ИТОГО", [None, f"=SUM(C{first_r}:C{last_r})", total_pct_formula], colors, len(headers), percent_cols={4})
+        cache[f"C{r}"] = total_value
+        cache[f"D{r}"] = 1.0 if total_value else 0.0
 
     wb.save(path)
+    if cache:
+        _xl_inject_cached_values(path, cache)
 
 
 def build_excel_startup(path, title, colors, data):
@@ -2221,6 +2286,7 @@ def build_excel_startup(path, title, colors, data):
     n_cols = 5
     _xl_style_sheet(ws, colors, n_cols)
     _xl_title(ws, title, colors, n_cols)
+    cache = {}  # адрес ячейки -> посчитанное код значение, для _xl_inject_cached_values
 
     ws.cell(row=2, column=1, value=f"Стартовые вложения: {investment:,.0f} ₽".replace(",", " ")).font = XlFont(italic=True, size=10)
 
@@ -2230,6 +2296,7 @@ def build_excel_startup(path, title, colors, data):
     ws.cell(row=r, column=1, value="Ежемесячные расходы").font = XlFont(bold=True)
     r += 1
     exp_first = r
+    total_exp_value = sum((e.get("amount") or 0) for e in expenses)
     for e in expenses:
         _xl_body_row(ws, r, [None, e.get("name", ""), None, None, e.get("amount", 0)], colors, money_cols={5})
         r += 1
@@ -2240,6 +2307,7 @@ def build_excel_startup(path, title, colors, data):
         r += 1
     total_exp_row = r
     _xl_total_row(ws, total_exp_row, "Итого расходов в месяц", [None, None, None, f"=SUM(E{exp_first}:E{exp_last})"], colors, n_cols, money_cols={5})
+    cache[f"E{total_exp_row}"] = total_exp_value
     r = total_exp_row + 1
 
     fx_note = data.get("_fx_note")
@@ -2256,6 +2324,17 @@ def build_excel_startup(path, title, colors, data):
     _xl_header_row(ws, r, headers, colors)
     table_start = r + 1
     r = table_start
+
+    # cum_values считаем заранее (не только для "срока окупаемости", но и чтобы
+    # сразу знать, какое число закешировать в каждую ячейку E - формула та же математика)
+    rev_value = price * monthly_sales
+    profit_value = rev_value - total_exp_value
+    cum_values = []
+    running = -investment
+    for month in range(1, horizon + 1):
+        running += profit_value
+        cum_values.append(running)
+
     for month in range(1, horizon + 1):
         rev_formula = f"={price}*{monthly_sales}"
         exp_formula = f"=E{total_exp_row}"
@@ -2265,6 +2344,10 @@ def build_excel_startup(path, title, colors, data):
         else:
             cum_formula = f"=D{r}+E{r - 1}"
         _xl_body_row(ws, r, [f"Месяц {month}", rev_formula, exp_formula, profit_formula, cum_formula], colors, money_cols={2, 3, 4, 5})
+        cache[f"B{r}"] = rev_value
+        cache[f"C{r}"] = total_exp_value
+        cache[f"D{r}"] = profit_value
+        cache[f"E{r}"] = cum_values[month - 1]
         r += 1
     table_end = r - 1
 
@@ -2272,11 +2355,6 @@ def build_excel_startup(path, title, colors, data):
     # считается по-настоящему из реальных чисел пользователя (это математика, а не выдумка),
     # но записывается как обычная сводная ячейка, а не как сложная формула поиска,
     # чтобы не зависеть от array-формул, которые по-разному ведут себя в разных версиях Excel.
-    cum_values = []
-    running = -investment
-    for month in range(1, horizon + 1):
-        running += price * monthly_sales - sum(e.get("amount", 0) or 0 for e in expenses)
-        cum_values.append(running)
     payback = next((i + 1 for i, v in enumerate(cum_values) if v >= 0), None)
 
     r += 1
@@ -2287,12 +2365,15 @@ def build_excel_startup(path, title, colors, data):
     be_cell = ws.cell(row=r, column=2, value=f"=ROUNDUP(E{total_exp_row}/{price},0)" if price else "—")
     if price:
         be_cell.number_format = '#,##0 "шт."'
+        import math
+        cache[f"B{r}"] = math.ceil(total_exp_value / price)
 
     for i in range(1, n_cols + 1):
         ws.column_dimensions[get_column_letter(i)].width = 20
     ws.column_dimensions["A"].width = 34
 
     wb.save(path)
+    _xl_inject_cached_values(path, cache)
 
 
 EXCEL_KIND_DESC = {
