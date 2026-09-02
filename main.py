@@ -27,8 +27,12 @@ from pptx.enum.shapes import MSO_SHAPE
 from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
 import openpyxl
-from openpyxl.styles import Font as XlFont, PatternFill, Border, Side, Alignment
-from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font as XlFont, PatternFill, Border, Side, Alignment, Protection
+from openpyxl.utils import get_column_letter, column_index_from_string
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.formatting.rule import ColorScaleRule
+from openpyxl.chart import BarChart, PieChart, LineChart, Reference
+from openpyxl.chart.label import DataLabelList
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
@@ -78,17 +82,34 @@ def safe_filename(title: str, fallback: str = "Документ", author: str = 
 
 def wrap_lines(text, font, size, max_width):
     """Переносит текст по словам, а не по количеству символов,
-    чтобы слова не рвались посередине."""
-    words = text.split()
+    чтобы слова не рвались посередине. Слишком длинное слово
+    без пробелов режется по ширине, иначе оно вылезет за край PDF."""
+    words = (text or "").split()
     lines, cur = [], ""
+
+    def _split_long(word):
+        chunks, buf = [], ""
+        for ch in word:
+            trial = buf + ch
+            if pdfmetrics.stringWidth(trial, font, size) <= max_width or not buf:
+                buf = trial
+            else:
+                chunks.append(buf)
+                buf = ch
+        if buf:
+            chunks.append(buf)
+        return chunks or [word]
+
     for word in words:
-        test = f"{cur} {word}".strip()
-        if pdfmetrics.stringWidth(test, font, size) <= max_width:
-            cur = test
-        else:
-            if cur:
-                lines.append(cur)
-            cur = word
+        parts = _split_long(word) if pdfmetrics.stringWidth(word, font, size) > max_width else [word]
+        for part in parts:
+            test = f"{cur} {part}".strip()
+            if pdfmetrics.stringWidth(test, font, size) <= max_width:
+                cur = test
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = part
     if cur:
         lines.append(cur)
     return lines
@@ -99,12 +120,21 @@ def register_pdf_fonts():
     Сначала пробует шрифт, который лежит рядом со скриптом (папка fonts/),
     затем — типичные системные пути. Если ничего не нашлось, возвращает
     базовые Helvetica-шрифты и печатает предупреждение, чтобы не было
-    тихой поломки кириллицы в PDF."""
+    тихой поломки кириллицы в PDF.
+    Повторный вызов безопасен и дешёв: функция сама проверяет, зарегистрирован ли
+    шрифт, и не пытается зарегистрировать его повторно (на некоторых версиях
+    reportlab повторная регистрация того же имени могла вести себя не предсказуемо -
+    проверка ничего не стоит, поэтому оставлена как подстраховка на будущее)."""
+    registered = set(pdfmetrics.getRegisteredFontNames())
+    if "CyrRegular" in registered and "CyrBold" in registered:
+        return "CyrRegular", "CyrBold"
     for regular, bold in FONT_CANDIDATES:
         if os.path.exists(regular) and os.path.exists(bold):
             try:
-                pdfmetrics.registerFont(TTFont("CyrRegular", regular))
-                pdfmetrics.registerFont(TTFont("CyrBold", bold))
+                if "CyrRegular" not in registered:
+                    pdfmetrics.registerFont(TTFont("CyrRegular", regular))
+                if "CyrBold" not in registered:
+                    pdfmetrics.registerFont(TTFont("CyrBold", bold))
                 return "CyrRegular", "CyrBold"
             except Exception as e:
                 print("Не удалось зарегистрировать шрифт", regular, ":", e)
@@ -128,8 +158,92 @@ if not REPLICATE_API_TOKEN:
 client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-users_db = {}
+USERS_FILE = os.path.join(BASE_DIR, "users.json")
 PLAN_LIMITS = {"premium": 15}
+
+
+def load_users():
+    """Читает users.json после рестарта, чтобы не обнулялись язык, тариф и история."""
+    try:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        out = {}
+        for k, v in raw.items():
+            try:
+                uid = int(k)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(v, dict):
+                continue
+            v["busy"] = False
+            v["_counted"] = False
+            out[uid] = v
+        return out
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        print("Не удалось прочитать users.json:", e)
+        return {}
+
+
+def _build_users_payload():
+    """Собирает снимок устойчивых полей всех пользователей - быстрая синхронная операция
+    без обращения к диску, безопасно вызывать прямо из event loop."""
+    payload = {}
+    for uid, u in users_db.items():
+        payload[str(uid)] = {
+            "name": u.get("name", ""),
+            "plan": u.get("plan", "premium"),
+            "generations": int(u.get("generations") or 0),
+            "history": list(u.get("history") or [])[-30:],
+            "lang": u.get("lang") or "ru",
+            "lang_chosen": bool(u.get("lang_chosen")),
+        }
+    return payload
+
+
+def _write_users_payload(payload):
+    """Блокирующая часть - реальная запись на диск (atomic replace). Вызывается только
+    в отдельном потоке через asyncio.to_thread, никогда напрямую из event loop."""
+    try:
+        tmp = USERS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=0)
+        os.replace(tmp, USERS_FILE)
+    except Exception as e:
+        print("Не удалось сохранить users.json:", e)
+
+
+_save_users_lock = asyncio.Lock()
+
+
+async def _save_users_async():
+    # Снимок данных берётся сразу (до ожидания лока), чтобы каждая запись несла
+    # самые свежие на момент своего вызова данные. Сам asyncio.Lock не столько
+    # защищает от гонки (payload уже неизменяемый снимок), сколько гарантирует,
+    # что параллельные вызовы допишутся на диск строго в том порядке, в котором
+    # были запланированы - иначе поздний, но более свежий снимок мог бы попасть
+    # на диск РАНЬШЕ, а следом его молча затёр бы более старый снимок.
+    payload = _build_users_payload()
+    async with _save_users_lock:
+        await asyncio.to_thread(_write_users_payload, payload)
+
+
+def save_users():
+    """Планирует сохранение в фоновом потоке, не блокируя event loop бота -
+    раньше запись всего словаря пользователей выполнялась синхронно прямо в
+    обработчике сообщения и тормозила ВСЕХ пользователей бота на время записи,
+    а не только того, чьи данные сохраняются. Вызывается только из async-кода
+    (все места использования - хендлеры aiogram), поэтому запущенный event loop
+    должен быть всегда; RuntimeError - подстраховка на случай вызова вне него,
+    чтобы данные в любом случае не потерялись."""
+    try:
+        asyncio.create_task(_save_users_async())
+    except RuntimeError:
+        _write_users_payload(_build_users_payload())
+
+
+users_db = load_users()
 
 _bot_username_cache = {"value": None}
 
@@ -783,6 +897,7 @@ def get_user(uid):
     if uid not in users_db:
         users_db[uid] = {"name": "", "plan": "premium", "generations": 0, "history": [], "busy": False,
                           "lang": "ru", "lang_chosen": False}
+        save_users()
     return users_db[uid]
 
 
@@ -808,6 +923,7 @@ def can_generate(uid):
 #      предупредит владельца, чтобы среагировать вручную до того, как
 #      выгорит баланс на xAI.
 RATE_LIMIT_SECONDS = 30
+FAIL_COOLDOWN_SECONDS = 5  # короткая пауза даже при неудачной генерации - см. start_job()
 MAX_CONCURRENT_GENERATIONS = 20
 HOURLY_ALERT_THRESHOLD = 50
 ALERT_COOLDOWN_SECONDS = 900  # не чаще раза в 15 минут, чтобы не заспамить одним и тем же
@@ -878,7 +994,13 @@ def start_job(uid):
 
     u["busy"] = True
     u["_counted"] = True
-    _last_request_time[uid] = now
+    # Полный 30-секундный лимит взводится только при УСПЕХЕ (note_success ниже
+    # перезапишет его временем реального завершения) - но чтобы неудачные попытки
+    # не превращались в лазейку для накрутки запросов к платному xAI API без всякой
+    # паузы (упавшая генерация мгновенно освобождает busy и разрешает повтор),
+    # здесь сразу взводится короткая пауза FAIL_COOLDOWN_SECONDS. Если сборка
+    # успеет завершиться успешно раньше - note_success её перезапишет на полную.
+    _last_request_time[uid] = now - (RATE_LIMIT_SECONDS - FAIL_COOLDOWN_SECONDS)
     _active_generations += 1
     _generation_timestamps.append(now)
     _check_hourly_load()
@@ -896,6 +1018,12 @@ def finish_job(uid):
         _active_generations = max(0, _active_generations - 1)
         u["_counted"] = False
     u["busy"] = False
+
+
+def note_success(uid):
+    """Фиксирует успешную выдачу файла: лимит 30 сек и запись на диск."""
+    _last_request_time[uid] = time.monotonic()
+    save_users()
 
 
 # Telegram режет любое сообщение длиннее 4096 символов и просто не отправляет его
@@ -1812,7 +1940,10 @@ STYLE_BY_LABEL = {label: k for k, variants in THEME_LABELS_I18N.items() for labe
 @dp.message(Command("start"))
 async def cmd_start(m: Message, state: FSMContext):
     u = get_user(m.from_user.id)
-    u["name"] = m.from_user.first_name or ""
+    new_name = m.from_user.first_name or ""
+    if u.get("name") != new_name:
+        u["name"] = new_name
+        save_users()
     await state.clear()
     if u.get("lang_chosen"):
         lang = user_lang(m.from_user.id)
@@ -1832,6 +1963,7 @@ async def set_language(m: Message, state: FSMContext):
     u = get_user(m.from_user.id)
     u["lang"] = code
     u["lang_chosen"] = True
+    save_users()
     await state.clear()
     await m.answer(tr("msg_welcome", code, name=u.get("name") or "🙂"), reply_markup=main_kb(code))
 
@@ -2544,6 +2676,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         await m.answer_document(FSInputFile(pdf_path, filename=f"{pres_fname}.pdf"), caption=tr("msg_pptx_pdf_caption", lang))
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
+        note_success(uid)
         for p in (cover_src, cover_own, cover_img, cover_panel_img, pptx_path, pdf_path, *raw_sources, *user_photo_originals, *[f for pair in images if pair for f in pair]):
             try:
                 if p and os.path.exists(p):
@@ -3114,6 +3247,13 @@ def _xl_hex(color_tuple):
     return "%02X%02X%02X" % color_tuple
 
 
+def _xl_tint(color_tuple, factor=0.9):
+    """Осветляет цвет темы к белому (factor 0..1, чем больше - тем светлее).
+    Используется для полос "зебры" в таблицах - лёгкий цветной акцент, а не серый по умолчанию."""
+    r, g, b = color_tuple
+    return (int(r + (255 - r) * factor), int(g + (255 - g) * factor), int(b + (255 - b) * factor))
+
+
 def _xl_num(v, default=0.0):
     # Модель/пользователь должны прислать чистое число, но это не гарантировано -
     # иногда проскакивает "500 000", "500 000 ₽" или "12 месяцев" вместо 500000/12.
@@ -3142,18 +3282,43 @@ def _xl_fx_rate(currency):
     return FX_TO_RUB.get((currency or "RUB").strip().upper(), 1.0)
 
 
-def _xl_style_sheet(ws, colors, n_cols):
+def _xl_style_sheet(ws, colors, n_cols, col_widths=None):
     """Базовое оформление листа под тему презентаций/документов: акцентная шапка,
     тонкие границы у таблицы, читаемая ширина колонок, альбомная печать по ширине
-    (чтобы при печати/экспорте в PDF таблица не резалась на колонки по границе листа)."""
+    (чтобы при печати/экспорте в PDF таблица не резалась на колонки по границе листа).
+    col_widths - необязательный список ширин по колонкам (1-индексация по смыслу, но
+    список 0-индексирован), подбирается под реальное содержимое конкретной таблицы -
+    иначе везде была одна и та же ширина 22/16, из-за которой длинные названия обрезались,
+    а короткие цифровые колонки занимали лишнее место."""
     ws.sheet_view.showGridLines = False
     for i in range(1, n_cols + 1):
-        ws.column_dimensions[get_column_letter(i)].width = 22 if i == 1 else 16
+        if col_widths and i - 1 < len(col_widths):
+            width = col_widths[i - 1]
+        else:
+            width = 22 if i == 1 else 16
+        ws.column_dimensions[get_column_letter(i)].width = width
     ws.page_setup.orientation = "landscape"
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
     ws.print_options.horizontalCentered = False
+    ws.sheet_properties.tabColor = _xl_hex(colors["line"])
+
+
+def _xl_name_col_width(rows, key="name", min_w=18, max_w=44, pad=4):
+    """Подбирает ширину текстовой колонки под самое длинное реальное значение в данных,
+    а не держит её фиксированной - иначе длинные названия статей обрезались визуально."""
+    longest = max((len(str(r.get(key, ""))) for r in rows), default=min_w)
+    return max(min_w, min(max_w, longest + pad))
+
+
+def _xl_finalize_table(ws, colors, header_row, first_data_row, last_data_row, n_cols):
+    """Общие штрихи для готовой таблицы: заморозка шапки при прокрутке, автофильтр
+    по шапке (быстро сортировать/фильтровать позиции без формул), автовысота шапки."""
+    ws.freeze_panes = f"A{first_data_row}"
+    last_col_letter = get_column_letter(n_cols)
+    ws.auto_filter.ref = f"A{header_row}:{last_col_letter}{last_data_row}"
+    ws.row_dimensions[header_row].height = 26
 
 
 def _xl_header_row(ws, row_idx, headers, colors):
@@ -3168,18 +3333,28 @@ def _xl_header_row(ws, row_idx, headers, colors):
         c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
 
-def _xl_body_row(ws, row_idx, values, colors, number_cols=None, money_cols=None, percent_cols=None):
+def _xl_body_row(ws, row_idx, values, colors, number_cols=None, money_cols=None, percent_cols=None, zebra=False):
     thin = Side(style="thin", color=_xl_hex(colors["mute"]))
+    zebra_fill = None
+    if zebra:
+        zebra_fill = PatternFill(start_color=_xl_hex(_xl_tint(colors["line"], 0.9)),
+                                  end_color=_xl_hex(_xl_tint(colors["line"], 0.9)), fill_type="solid")
     for i, v in enumerate(values, 1):
         c = ws.cell(row=row_idx, column=i, value=v)
         c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
         c.alignment = Alignment(horizontal="left" if i == 1 else "center", vertical="center")
+        if zebra_fill:
+            c.fill = zebra_fill
+        # Формулы (вычисляемые колонки вроде "Сумма") остаются защищёнными при
+        # включённой защите листа, а введённые вручную/моделью значения - редактируемые.
+        c.protection = Protection(locked=isinstance(v, str) and v.startswith("="))
         if money_cols and i in money_cols:
             c.number_format = '#,##0.00 ₽'
         elif percent_cols and i in percent_cols:
             c.number_format = '0.0%'
         elif number_cols and i in number_cols:
             c.number_format = '#,##0.##'
+    ws.row_dimensions[row_idx].height = 20
 
 
 def _xl_total_row(ws, row_idx, label, values, colors, n_cols, money_cols=None, percent_cols=None):
@@ -3204,6 +3379,137 @@ def _xl_title(ws, title, colors, n_cols):
     c = ws.cell(row=1, column=1, value=title)
     c.font = XlFont(bold=True, size=14, color=_xl_hex(colors["ink"] if sum(colors["bg"]) > 400 else (30, 30, 30)))
     ws.row_dimensions[1].height = 28
+
+
+def _xl_subtitle(ws, text, colors, n_cols, row=2):
+    """Раньше строка 2 всегда пустовала (просто визуальный отступ перед шапкой) - теперь
+    несёт дату создания файла, чтобы было видно, насколько таблица свежая."""
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n_cols)
+    c = ws.cell(row=row, column=1, value=text)
+    c.font = XlFont(italic=True, size=9, color=_xl_hex(colors["mute"]))
+
+
+def _xl_category_list(rows):
+    """Список уникальных категорий в порядке первого появления, или None, если ни у одной
+    строки не заполнено поле category (тогда доп. колонка и блок итогов по категориям не нужны)."""
+    seen = []
+    for row in rows:
+        cat = (row.get("category") or "").strip()
+        if cat and cat not in seen:
+            seen.append(cat)
+    return seen or None
+
+
+def _xl_category_summary(ws, colors, start_row, cats, money_col_letter, cat_col_letter,
+                          first_item_row, last_item_row, sums_by_cat, n_cols):
+    """Небольшой блок 'Итоги по категориям' под основной таблицей - реальная формула SUMIF
+    по вспомогательной колонке с категорией, а не текст. cats - список категорий по порядку
+    появления, sums_by_cat - {категория: посчитанная кодом сумма} для кеша значений формул.
+    Подпись категории кладём в колонку "Статья"/"Наименование" (она достаточно широкая под
+    длинные названия), а сумму - прямо под колонкой "Сумма" основной таблицы, чтобы визуально
+    совпадало с ней по вертикали."""
+    cache = {}
+    money_col_idx = column_index_from_string(money_col_letter)
+    r = start_row
+    ws.cell(row=r, column=1, value="Итоги по категориям").font = XlFont(bold=True, size=11)
+    r += 1
+    for cat in cats:
+        label_c = ws.cell(row=r, column=2, value=cat)
+        label_c.font = XlFont(italic=True)
+        formula = (f'=SUMIF({cat_col_letter}{first_item_row}:{cat_col_letter}{last_item_row},"{cat}",'
+                   f'{money_col_letter}{first_item_row}:{money_col_letter}{last_item_row})')
+        val_c = ws.cell(row=r, column=money_col_idx, value=formula)
+        val_c.font = XlFont(italic=True, bold=True)
+        val_c.number_format = '#,##0.00 ₽'
+        cache[f"{money_col_letter}{r}"] = sums_by_cat.get(cat, 0.0)
+        r += 1
+    return r, cache
+
+
+def _xl_add_type_dropdown(ws, col_letter, first_row, last_row, options):
+    """Выпадающий список вместо свободного текста в колонке 'Тип' - чтобы при редактировании
+    пользователь не сломал формулу SUMIF опечаткой ("доходы" вместо "доход")."""
+    if last_row < first_row:
+        return
+    dv = DataValidation(type="list", formula1='"' + ",".join(options) + '"', allow_blank=True)
+    ws.add_data_validation(dv)
+    dv.add(f"{col_letter}{first_row}:{col_letter}{last_row}")
+
+
+def _xl_color_scale(ws, col_letter, first_row, last_row):
+    """Цветовая шкала на денежной/числовой колонке - крупные суммы визуально заметнее
+    без необходимости вчитываться в цифры."""
+    if last_row < first_row:
+        return
+    rule = ColorScaleRule(
+        start_type="min", start_color="FFFFE9CC",
+        mid_type="percentile", mid_value=50, mid_color="FFFFB25C",
+        end_type="max", end_color="FFCC5200",
+    )
+    ws.conditional_formatting.add(f"{col_letter}{first_row}:{col_letter}{last_row}", rule)
+
+
+def _xl_add_bar_chart(ws, n_cols, cat_col_idx, val_col_idx, header_row, first_row, last_row,
+                       anchor_row=None, y_title="Сумма, ₽"):
+    """Столбчатая диаграмма по данным, которые уже лежат в таблице (никаких лишних вычислений -
+    просто ссылка на диапазон). header_row нужен, чтобы подписью серии стал заголовок колонки."""
+    if last_row < first_row:
+        return
+    chart = BarChart()
+    chart.type = "col"
+    chart.style = 10
+    chart.y_axis.title = y_title
+    chart.x_axis.title = None
+    chart.legend = None
+    data_ref = Reference(ws, min_col=val_col_idx, min_row=header_row, max_row=last_row)
+    cats_ref = Reference(ws, min_col=cat_col_idx, min_row=first_row, max_row=last_row)
+    chart.add_data(data_ref, titles_from_data=True)
+    chart.set_categories(cats_ref)
+    chart.height = 9
+    chart.width = 17
+    anchor = f"{get_column_letter(n_cols + 2)}{anchor_row or header_row}"
+    ws.add_chart(chart, anchor)
+
+
+def _xl_add_pie_chart(ws, n_cols, cat_col_idx, val_col_idx, header_row, first_row, last_row, anchor_row=None):
+    """Круговая диаграмма долей - для показателей/значений, где важна доля от целого,
+    а не сравнение абсолютных величин. Подписи - только процент (без дублирования названия
+    и значения на каждом секторе), полное название категории и так видно в легенде."""
+    if last_row < first_row:
+        return
+    chart = PieChart()
+    chart.style = 10
+    data_ref = Reference(ws, min_col=val_col_idx, min_row=header_row, max_row=last_row)
+    cats_ref = Reference(ws, min_col=cat_col_idx, min_row=first_row, max_row=last_row)
+    chart.add_data(data_ref, titles_from_data=True)
+    chart.set_categories(cats_ref)
+    chart.height = 9
+    chart.width = 19
+    dl = DataLabelList()
+    dl.showCatName = False
+    dl.showLegendKey = False
+    dl.showSerName = False
+    dl.showVal = False
+    dl.showPercent = True
+    dl.showBubbleSize = False
+    chart.dataLabels = dl
+    anchor = f"{get_column_letter(n_cols + 2)}{anchor_row or header_row}"
+    ws.add_chart(chart, anchor)
+
+
+def _xl_protect_sheet(ws):
+    """Защищает формулы/шапку/итоги от случайной правки (нельзя затереть формулу опечаткой),
+    но оставляет редактируемыми ячейки с реальными данными - их пользователь мог бы захотеть
+    подправить руками. Без пароля - это мягкая защита от опечаток, а не секьюрити: снимается
+    в один клик через Рецензирование → Снять защиту листа, если понадобится."""
+    ws.protection.sheet = True
+    ws.protection.formatCells = False
+    ws.protection.formatColumns = False
+    ws.protection.formatRows = False
+    ws.protection.sort = False
+    ws.protection.autoFilter = False
+    ws.protection.selectLockedCells = False
+    ws.protection.selectUnlockedCells = False
 
 
 def _xl_inject_cached_values(path, cache):
@@ -3243,48 +3549,87 @@ def _xl_inject_cached_values(path, cache):
 # только содержимое строк (rows), формулы и оформление всегда собираются кодом, а не ИИ,
 # чтобы суммы/проценты/итоги были настоящими формулами Excel, а не текстом.
 EXCEL_ROW_SCHEMA = {
-    "expense_estimate": {"fields": ["name", "qty", "price"], "example": '{"name":"...", "qty": 1, "price": 1000}'},
-    "family_budget": {"fields": ["name", "type", "amount"], "example": '{"name":"...", "type": "доход"|"расход", "amount": 1000}'},
-    "project_budget": {"fields": ["name", "type", "amount"], "example": '{"name":"...", "type": "доход"|"расход", "amount": 1000}'},
-    "price_list": {"fields": ["name", "unit", "qty", "price", "discount"], "example": '{"name":"...", "unit":"шт", "qty": 1, "price": 1000, "discount": 0}'},
+    "expense_estimate": {"fields": ["name", "qty", "price", "category"], "example": '{"name":"...", "qty": 1, "price": 1000, "category": "..."}'},
+    "family_budget": {"fields": ["name", "type", "amount", "category"], "example": '{"name":"...", "type": "доход"|"расход", "amount": 1000, "category": "..."}'},
+    "project_budget": {"fields": ["name", "type", "amount", "category"], "example": '{"name":"...", "type": "доход"|"расход", "amount": 1000, "category": "..."}'},
+    "price_list": {"fields": ["name", "unit", "qty", "price", "discount", "category"], "example": '{"name":"...", "unit":"шт", "qty": 1, "price": 1000, "discount": 0, "category": "..."}'},
     "calc_table": {"fields": ["name", "value"], "example": '{"name":"...", "value": 100}'},
 }
 
+# Минимум строк для режима "сгенерировать самому" (ai) - раньше промпт просил всего
+# 5-8 строк, из-за чего таблицы выглядели пустыми/скудными. Для family_budget/project_budget
+# минимум относится к каждой категории (доход/расход) по отдельности, а не к общему числу строк,
+# иначе модель могла просто выдать 10 расходов и 0 доходов.
+EXCEL_MIN_ROWS_AI = {
+    "expense_estimate": 12,
+    "family_budget": 12,
+    "project_budget": 12,
+    "price_list": 14,
+    "calc_table": 10,
+}
 
-def build_excel_items(path, title, kind, colors, rows):
+
+def build_excel_items(path, title, kind, colors, rows, subtitle=None):
     """Собирает смету/бюджет/прайс/расчётную таблицу с реальными формулами Excel.
-    rows - список dict по схеме EXCEL_ROW_SCHEMA[kind]."""
+    rows - список dict по схеме EXCEL_ROW_SCHEMA[kind]. Если хотя бы у одной строки заполнено
+    поле category - добавляется колонка "Категория" и блок промежуточных итогов по ней (реальные
+    формулы SUMIF, не текст). В конце - диаграмма по данным таблицы и мягкая защита формул."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Таблица"
     cache = {}  # адрес ячейки -> посчитанное код значение, для _xl_inject_cached_values
+    cats = _xl_category_list(rows) if kind != "calc_table" else None
+    has_cat = cats is not None
 
     if kind == "expense_estimate":
-        headers = ["№", "Статья расходов", "Кол-во", "Цена, ₽", "Сумма, ₽"]
-        _xl_style_sheet(ws, colors, len(headers))
-        _xl_title(ws, title, colors, len(headers))
+        headers = ["№", "Статья расходов", "Кол-во", "Цена, ₽", "Сумма, ₽"] + (["Категория"] if has_cat else [])
+        n_cols = len(headers)
+        col_widths = [6, _xl_name_col_width(rows), 10, 14, 15] + ([18] if has_cat else [])
+        _xl_style_sheet(ws, colors, n_cols, col_widths=col_widths)
+        _xl_title(ws, title, colors, n_cols)
+        if subtitle:
+            _xl_subtitle(ws, subtitle, colors, n_cols)
         _xl_header_row(ws, 3, headers, colors)
         r = 4
         total = 0.0
+        sums_by_cat = {}
         for i, row in enumerate(rows, 1):
             qty, price = _xl_num(row.get("qty"), 1), _xl_num(row.get("price"))
             line_sum = qty * price
             total += line_sum
-            _xl_body_row(ws, r, [i, row.get("name", ""), qty, price, f"=C{r}*D{r}"],
-                         colors, number_cols={3}, money_cols={4, 5})
+            cat = (row.get("category") or "").strip()
+            values = [i, row.get("name", ""), qty, price, f"=C{r}*D{r}"]
+            if has_cat:
+                values.append(cat or "Прочее")
+                sums_by_cat[cat or "Прочее"] = sums_by_cat.get(cat or "Прочее", 0.0) + line_sum
+            _xl_body_row(ws, r, values, colors, number_cols={3}, money_cols={4, 5}, zebra=(i % 2 == 0))
             cache[f"E{r}"] = line_sum
             r += 1
-        _xl_total_row(ws, r, "ИТОГО", [None, None, None, f"=SUM(E4:E{r - 1})"], colors, len(headers), money_cols={5})
+        last_item_row = r - 1
+        total_values = [None, None, None, f"=SUM(E4:E{last_item_row})"] + ([None] if has_cat else [])
+        _xl_total_row(ws, r, "ИТОГО", total_values, colors, n_cols, money_cols={5})
         cache[f"E{r}"] = total
+        _xl_finalize_table(ws, colors, 3, 4, last_item_row, n_cols)
+        _xl_color_scale(ws, "E", 4, last_item_row)
+        _xl_add_bar_chart(ws, n_cols, cat_col_idx=2, val_col_idx=5, header_row=3, first_row=4, last_row=last_item_row)
+        if has_cat:
+            summary_row, summary_cache = _xl_category_summary(
+                ws, colors, r + 2, cats, "E", get_column_letter(n_cols), 4, last_item_row, sums_by_cat, n_cols)
+            cache.update(summary_cache)
 
     elif kind in ("family_budget", "project_budget"):
-        headers = ["№", "Статья", "Тип", "Сумма, ₽"]
-        _xl_style_sheet(ws, colors, len(headers))
-        _xl_title(ws, title, colors, len(headers))
+        headers = ["№", "Статья", "Тип", "Сумма, ₽"] + (["Категория"] if has_cat else [])
+        n_cols = len(headers)
+        col_widths = [6, _xl_name_col_width(rows), 12, 15] + ([18] if has_cat else [])
+        _xl_style_sheet(ws, colors, n_cols, col_widths=col_widths)
+        _xl_title(ws, title, colors, n_cols)
+        if subtitle:
+            _xl_subtitle(ws, subtitle, colors, n_cols)
         _xl_header_row(ws, 3, headers, colors)
         income_label, expense_label = "Доход", "Расход"
         r = 4
         total_inc, total_exp = 0.0, 0.0
+        sums_by_cat = {}
         for i, row in enumerate(rows, 1):
             # Нормализуем "Тип" в самом коде, а не полагаемся на то, что модель/пользователь
             # напишет ровно "доход"/"расход" - иначе SUMIF ниже просто не найдёт совпадение
@@ -3296,46 +3641,102 @@ def build_excel_items(path, title, kind, colors, rows):
                 total_inc += amount
             else:
                 total_exp += amount
-            _xl_body_row(ws, r, [i, row.get("name", ""), norm_type, amount],
-                         colors, money_cols={4})
+            cat = (row.get("category") or "").strip()
+            values = [i, row.get("name", ""), norm_type, amount]
+            if has_cat:
+                values.append(cat or "Прочее")
+                key = cat or "Прочее"
+                # Кешируем сумму ТАК ЖЕ, как её посчитает настоящая формула SUMIF в Excel
+                # (она суммирует "Сумма, ₽" как есть, без учёта знака дохода/расхода) -
+                # иначе быстрый просмотр показывал бы одно число, а пересчёт в Excel - другое.
+                sums_by_cat[key] = sums_by_cat.get(key, 0.0) + amount
+            _xl_body_row(ws, r, values, colors, money_cols={4}, zebra=(i % 2 == 0))
             r += 1
         last = r - 1
+        _xl_finalize_table(ws, colors, 3, 4, last, n_cols)
+        _xl_color_scale(ws, "D", 4, last)
+        _xl_add_type_dropdown(ws, "C", 4, last, [income_label, expense_label])
         r_inc, r_exp = r, r + 1
         ws.cell(row=r_inc, column=1, value="").border = Border()
-        _xl_total_row(ws, r_inc, "Итого доходы", [None, None, f'=SUMIF(C4:C{last},"{income_label}",D4:D{last})'], colors, len(headers), money_cols={4})
+        inc_values = [None, None, f'=SUMIF(C4:C{last},"{income_label}",D4:D{last})'] + ([None] if has_cat else [])
+        exp_values = [None, None, f'=SUMIF(C4:C{last},"{expense_label}",D4:D{last})'] + ([None] if has_cat else [])
+        _xl_total_row(ws, r_inc, "Итого доходы", inc_values, colors, n_cols, money_cols={4})
         cache[f"D{r_inc}"] = total_inc
-        _xl_total_row(ws, r_exp, "Итого расходы", [None, None, f'=SUMIF(C4:C{last},"{expense_label}",D4:D{last})'], colors, len(headers), money_cols={4})
+        _xl_total_row(ws, r_exp, "Итого расходы", exp_values, colors, n_cols, money_cols={4})
         cache[f"D{r_exp}"] = total_exp
         r_res = r_exp + 1
         res_label = "Остаток" if kind == "family_budget" else "Прибыль"
-        _xl_total_row(ws, r_res, res_label, [None, None, f"=D{r_inc}-D{r_exp}"], colors, len(headers), money_cols={4})
-        cache[f"D{r_res}"] = total_inc - total_exp
+        res_values = [None, None, f"=D{r_inc}-D{r_exp}"] + ([None] if has_cat else [])
+        _xl_total_row(ws, r_res, res_label, res_values, colors, n_cols, money_cols={4})
+        result_val = total_inc - total_exp
+        cache[f"D{r_res}"] = result_val
+        # Цветовой акцент итога - зелёный, если остаток/прибыль положительные, красный,
+        # если ушли в минус: так сразу видно результат, не читая формулу.
+        res_cell = ws.cell(row=r_res, column=4)
+        res_cell.font = XlFont(bold=True, color=_xl_hex((30, 140, 70) if result_val >= 0 else (190, 40, 40)))
+        chart = BarChart()
+        chart.type = "col"
+        chart.style = 10
+        chart.legend = None
+        chart.y_axis.title = "₽"
+        data_ref = Reference(ws, min_col=4, min_row=r_inc, max_row=r_exp)
+        cats_ref = Reference(ws, min_col=1, min_row=r_inc, max_row=r_exp)
+        chart.add_data(data_ref, titles_from_data=False)
+        chart.set_categories(cats_ref)
+        chart.title = "Доходы и расходы"
+        chart.height = 9
+        chart.width = 17
+        ws.add_chart(chart, f"{get_column_letter(n_cols + 2)}3")
+        if has_cat:
+            summary_row, summary_cache = _xl_category_summary(
+                ws, colors, r_res + 2, cats, "D", get_column_letter(n_cols), 4, last, sums_by_cat, n_cols)
+            cache.update(summary_cache)
 
     elif kind == "price_list":
-        headers = ["№", "Наименование", "Ед.", "Кол-во", "Цена, ₽", "Скидка, %", "Сумма, ₽"]
-        _xl_style_sheet(ws, colors, len(headers))
-        _xl_title(ws, title, colors, len(headers))
+        headers = ["№", "Наименование", "Ед.", "Кол-во", "Цена, ₽", "Скидка, %", "Сумма, ₽"] + (["Категория"] if has_cat else [])
+        n_cols = len(headers)
+        col_widths = [6, _xl_name_col_width(rows), 8, 10, 14, 12, 15] + ([18] if has_cat else [])
+        _xl_style_sheet(ws, colors, n_cols, col_widths=col_widths)
+        _xl_title(ws, title, colors, n_cols)
+        if subtitle:
+            _xl_subtitle(ws, subtitle, colors, n_cols)
         _xl_header_row(ws, 3, headers, colors)
         r = 4
         total = 0.0
+        sums_by_cat = {}
         for i, row in enumerate(rows, 1):
             disc = _xl_num(row.get("discount"))
             qty, price = _xl_num(row.get("qty"), 1), _xl_num(row.get("price"))
             disc_frac = disc / 100 if disc else 0
             line_sum = qty * price * (1 - disc_frac)
             total += line_sum
-            _xl_body_row(ws, r, [i, row.get("name", ""), row.get("unit", "шт"), qty,
-                                  price, disc_frac, f"=D{r}*E{r}*(1-F{r})"],
-                         colors, number_cols={4}, money_cols={5, 7}, percent_cols={6})
+            cat = (row.get("category") or "").strip()
+            values = [i, row.get("name", ""), row.get("unit", "шт"), qty, price, disc_frac, f"=D{r}*E{r}*(1-F{r})"]
+            if has_cat:
+                values.append(cat or "Прочее")
+                sums_by_cat[cat or "Прочее"] = sums_by_cat.get(cat or "Прочее", 0.0) + line_sum
+            _xl_body_row(ws, r, values, colors, number_cols={4}, money_cols={5, 7}, percent_cols={6}, zebra=(i % 2 == 0))
             cache[f"G{r}"] = line_sum
             r += 1
-        _xl_total_row(ws, r, "ИТОГО", [None, None, None, None, None, f"=SUM(G4:G{r - 1})"], colors, len(headers), money_cols={7})
+        last_item_row = r - 1
+        total_values = [None, None, None, None, None, f"=SUM(G4:G{last_item_row})"] + ([None] if has_cat else [])
+        _xl_total_row(ws, r, "ИТОГО", total_values, colors, n_cols, money_cols={7})
         cache[f"G{r}"] = total
+        _xl_finalize_table(ws, colors, 3, 4, last_item_row, n_cols)
+        _xl_color_scale(ws, "G", 4, last_item_row)
+        _xl_add_bar_chart(ws, n_cols, cat_col_idx=2, val_col_idx=7, header_row=3, first_row=4, last_row=last_item_row)
+        if has_cat:
+            summary_row, summary_cache = _xl_category_summary(
+                ws, colors, r + 2, cats, "G", get_column_letter(n_cols), 4, last_item_row, sums_by_cat, n_cols)
+            cache.update(summary_cache)
 
     elif kind == "calc_table":
         headers = ["№", "Показатель", "Значение", "Доля, %"]
-        _xl_style_sheet(ws, colors, len(headers))
-        _xl_title(ws, title, colors, len(headers))
+        n_cols = len(headers)
+        _xl_style_sheet(ws, colors, n_cols, col_widths=[6, _xl_name_col_width(rows), 13, 12])
+        _xl_title(ws, title, colors, n_cols)
+        if subtitle:
+            _xl_subtitle(ws, subtitle, colors, n_cols)
         _xl_header_row(ws, 3, headers, colors)
         r = 4
         first_r = r
@@ -3343,21 +3744,25 @@ def build_excel_items(path, title, kind, colors, rows):
         for i, row in enumerate(rows, 1):
             v = _xl_num(row.get("value"))
             values.append(v)
-            _xl_body_row(ws, r, [i, row.get("name", ""), v, None], colors, number_cols={3}, percent_cols={4})
+            _xl_body_row(ws, r, [i, row.get("name", ""), v, None], colors, number_cols={3}, percent_cols={4}, zebra=(i % 2 == 0))
             r += 1
         last_r = r - 1
+        _xl_finalize_table(ws, colors, 3, first_r, last_r, n_cols)
+        _xl_add_pie_chart(ws, n_cols, cat_col_idx=2, val_col_idx=3, header_row=3, first_row=first_r, last_row=last_r)
         total_value = sum(values)
         # IFERROR - если все значения окажутся нулевыми (или их сумма равна нулю), формула
         # деления вернёт #DIV/0! в каждой строке; выводим 0% вместо ошибки на весь лист.
         for rr, v in zip(range(first_r, r), values):
             ws.cell(row=rr, column=4, value=f"=IFERROR(C{rr}/SUM($C${first_r}:$C${last_r}),0)")
             ws.cell(row=rr, column=4).number_format = '0.0%'
+            ws.cell(row=rr, column=4).protection = Protection(locked=True)
             cache[f"D{rr}"] = (v / total_value) if total_value else 0.0
         total_pct_formula = f"=IFERROR(SUM(C{first_r}:C{last_r})/SUM(C{first_r}:C{last_r}),0)"
-        _xl_total_row(ws, r, "ИТОГО", [None, f"=SUM(C{first_r}:C{last_r})", total_pct_formula], colors, len(headers), percent_cols={4})
+        _xl_total_row(ws, r, "ИТОГО", [None, f"=SUM(C{first_r}:C{last_r})", total_pct_formula], colors, n_cols, percent_cols={4})
         cache[f"C{r}"] = total_value
         cache[f"D{r}"] = 1.0 if total_value else 0.0
 
+    _xl_protect_sheet(ws)
     wb.save(path)
     if cache:
         _xl_inject_cached_values(path, cache)
@@ -3383,7 +3788,7 @@ def build_excel_startup(path, title, colors, data):
     _xl_title(ws, title, colors, n_cols)
     cache = {}  # адрес ячейки -> посчитанное код значение, для _xl_inject_cached_values
 
-    ws.cell(row=2, column=1, value=f"Стартовые вложения: {investment:,.0f} ₽".replace(",", " ")).font = XlFont(italic=True, size=10)
+    ws.cell(row=2, column=1, value=f"Стартовые вложения: {investment:,.0f} ₽ · Сформировано: {datetime.now().strftime('%d.%m.%Y')}".replace(",", " ")).font = XlFont(italic=True, size=10)
 
     # блок постоянных ежемесячных расходов - отдельной таблицей, чтобы сумма расходов
     # в помесячном расчёте тоже была формулой (SUM), а не готовым числом
@@ -3392,8 +3797,8 @@ def build_excel_startup(path, title, colors, data):
     r += 1
     exp_first = r
     total_exp_value = sum((e.get("amount") or 0) for e in expenses)
-    for e in expenses:
-        _xl_body_row(ws, r, [None, e.get("name", ""), None, None, e.get("amount", 0)], colors, money_cols={5})
+    for i, e in enumerate(expenses, 1):
+        _xl_body_row(ws, r, [None, e.get("name", ""), None, None, e.get("amount", 0)], colors, money_cols={5}, zebra=(i % 2 == 0))
         r += 1
     exp_last = r - 1 if expenses else exp_first
     if not expenses:
@@ -3438,13 +3843,14 @@ def build_excel_startup(path, title, colors, data):
             cum_formula = f"=D{r}-{investment}"
         else:
             cum_formula = f"=D{r}+E{r - 1}"
-        _xl_body_row(ws, r, [f"Месяц {month}", rev_formula, exp_formula, profit_formula, cum_formula], colors, money_cols={2, 3, 4, 5})
+        _xl_body_row(ws, r, [f"Месяц {month}", rev_formula, exp_formula, profit_formula, cum_formula], colors, money_cols={2, 3, 4, 5}, zebra=(month % 2 == 0))
         cache[f"B{r}"] = rev_value
         cache[f"C{r}"] = total_exp_value
         cache[f"D{r}"] = profit_value
         cache[f"E{r}"] = cum_values[month - 1]
         r += 1
     table_end = r - 1
+    _xl_finalize_table(ws, colors, table_start - 1, table_start, table_end, n_cols)
 
     # срок окупаемости - первый месяц, где накопительный итог формулой стал неотрицательным;
     # считается по-настоящему из реальных чисел пользователя (это математика, а не выдумка),
@@ -3465,8 +3871,23 @@ def build_excel_startup(path, title, colors, data):
 
     for i in range(1, n_cols + 1):
         ws.column_dimensions[get_column_letter(i)].width = 20
-    ws.column_dimensions["A"].width = 34
+    ws.column_dimensions["A"].width = 40
 
+    # Линейный график прибыли и накопительного итога по месяцам - сразу видно момент
+    # выхода в плюс (пересечение накопительной линии с нулём), а не только число в ячейке.
+    chart = LineChart()
+    chart.style = 12
+    chart.y_axis.title = "₽"
+    chart.x_axis.title = "Месяц"
+    data_ref = Reference(ws, min_col=4, max_col=5, min_row=table_start - 1, max_row=table_end)
+    cats_ref = Reference(ws, min_col=1, min_row=table_start, max_row=table_end)
+    chart.add_data(data_ref, titles_from_data=True)
+    chart.set_categories(cats_ref)
+    chart.height = 9
+    chart.width = 19
+    ws.add_chart(chart, f"{get_column_letter(n_cols + 2)}{table_start - 1}")
+
+    _xl_protect_sheet(ws)
     wb.save(path)
     _xl_inject_cached_values(path, cache)
 
@@ -3659,8 +4080,13 @@ async def excel_build(m: Message, state: FSMContext):
             # Только извлечение реальных чисел, которые пользователь уже прислал -
             # модель не имеет права ничего досочинять или менять числа.
             raw = await ask_grok(f"""Извлеки структурированные данные для финансовой модели стартапа
-из сообщения пользователя. НИЧЕГО не выдумывай и не досчитывай за пользователя - если какого-то
-числа нет в тексте, ставь 0 (кроме horizon_months - если не указано, ставь 12).
+из сообщения пользователя. Числа НИЧЕГО не выдумывай и не досчитывай за пользователя - если какой-то
+суммы нет в тексте, ставь 0 (кроме horizon_months - если не указано, ставь 12).
+В список expenses включи не только статьи, явно названные пользователем, но и типичные для такого
+проекта категории расходов (аренда, зарплаты, маркетинг/реклама, оборудование/техника, хостинг/ИТ,
+налоги и обязательные платежи, прочее - выбери те, что подходят по смыслу проекта), даже если сумма
+по ним не упомянута - в таком случае ставь amount=0. Это делает список ПОЛНЕЕ, а не выдуманнее: суммы
+остаются честными, добавляются только названия недостающих статей. Не меньше 6 строк в expenses.
 Для КАЖДОЙ суммы (стартовые вложения, каждая статья расходов, цена за единицу) отдельно определи,
 в какой валюте её назвал пользователь - по явному указанию ("долларов", "$", "евро", "€") или по
 контексту. Если валюта явно не указана - ставь "RUB". НИКОГДА не конвертируй суммы сам и не пересчитывай
@@ -3706,16 +4132,37 @@ async def excel_build(m: Message, state: FSMContext):
             title_for_name = parsed.get("title") or "Финмодель"
         else:
             schema = EXCEL_ROW_SCHEMA[kind]
-            if data.get("excel_mode") == "user":
+            min_rows = EXCEL_MIN_ROWS_AI.get(kind, 10)
+            ai_mode = data.get("excel_mode") != "user"
+            has_category_field = "category" in schema["fields"]
+            category_line = ""
+            if has_category_field:
+                category_line = (
+                    " Если для темы естественно разбить позиции на смысловые категории (обычно 3-6 штук, "
+                    "например 'Материалы'/'Работа'/'Техника' для сметы или 'Жильё'/'Еда'/'Транспорт' для "
+                    "бюджета) - заполни поле category одинаковым коротким названием категории у всех строк, "
+                    "которые к ней относятся. Если разбивка на категории неуместна для темы - оставь "
+                    "category пустой строкой у всех строк, ничего не выдумывая для галочки."
+                )
+            if not ai_mode:
                 task_line = (
                     "Ниже данные прислал сам пользователь - структурируй их в JSON СТРОГО как есть, "
-                    "ничего не досочиняя и не меняя числа. Если каких-то полей не хватает - оставь "
-                    "разумные значения по умолчанию (0 или пустая строка), но не выдумывай новые позиции."
+                    "ничего не досочиняя и не меняя числа. Извлеки КАЖДУЮ отдельную позицию, которую "
+                    "упомянул пользователь, включая мелкие и не сгруппированные - не объединяй и не "
+                    "сокращай список для краткости, даже если позиций получится много. Если каких-то "
+                    "полей не хватает - оставь разумные значения по умолчанию (0 или пустая строка), "
+                    "но не выдумывай новые позиции, которых не было в сообщении."
+                    + category_line
                 )
             else:
                 task_line = (
-                    "Пользователь не прислал реальные данные - подбери сам правдоподобные иллюстративные "
-                    "данные по теме (как в примерах для учебных работ), 5-8 строк, разумные по масштабу цифры."
+                    f"Пользователь не прислал реальные данные - подбери сам подробные и разнообразные "
+                    f"иллюстративные данные по теме (как в примерах для учебных работ). Верни МИНИМУМ "
+                    f"{min_rows} строк (в family_budget/project_budget - минимум {min_rows} доходных И "
+                    f"минимум {min_rows} расходных строк раздельно, если применимо к теме), реальные "
+                    f"по масштабу цифры. Не дублируй формулировки и не используй общие заглушки вроде "
+                    f"\"Позиция 1\" - каждая строка должна называть конкретную, отличную от других статью."
+                    + category_line
                 )
             raw = await ask_grok(f"""Собери содержимое для Excel-таблицы: {EXCEL_KIND_DESC.get(kind)}.
 {task_line}
@@ -3726,16 +4173,41 @@ async def excel_build(m: Message, state: FSMContext):
 {{"title":"короткое название таблицы по теме","rows":[{schema['example']}]}}{lang_instr}""")
             parsed = extract_json(raw)
             rows = parsed.get("rows") or []
+
+            # Если модель всё равно поскупилась на строки в режиме "сгенерировать самому" -
+            # переспрашиваем ещё раз с явным указанием, сколько строк получилось и что нужно больше.
+            # В режиме "мои данные" ничего не дозапрашиваем - короткая таблица там может быть
+            # честным отражением того, что реально прислал пользователь.
+            if ai_mode and len(rows) < min_rows:
+                raw2 = await ask_grok(f"""Собери содержимое для Excel-таблицы: {EXCEL_KIND_DESC.get(kind)}.
+{task_line}
+В прошлый раз получилось только {len(rows)} строк - это слишком мало, нужно строго не меньше {min_rows}
+строк, разверни тему подробнее, добавь больше конкретных статей/позиций.
+Тема/данные: {topic}
+Доп: {extra}
+Каждая строка - объект с полями {schema['fields']}, например {schema['example']}.
+Только JSON:
+{{"title":"короткое название таблицы по теме","rows":[{schema['example']}]}}{lang_instr}""")
+                parsed2 = extract_json(raw2)
+                rows2 = parsed2.get("rows") or []
+                if len(rows2) > len(rows):
+                    parsed, rows = parsed2, rows2
+
             if not rows:
                 raise ValueError("Модель не вернула строки таблицы")
             xlsx_path = f"/tmp/xl_{uid}.xlsx"
-            build_excel_items(xlsx_path, parsed.get("title") or EXCEL_KIND_DESC.get(kind, "Таблица"), kind, colors, rows)
+            xl_subtitle = f"Сформировано: {datetime.now().strftime('%d.%m.%Y')}"
+            if topic and data.get("excel_mode") != "user":
+                topic_short = topic if len(topic) <= 60 else topic[:57] + "..."
+                xl_subtitle += f" · Тема: {topic_short}"
+            build_excel_items(xlsx_path, parsed.get("title") or EXCEL_KIND_DESC.get(kind, "Таблица"), kind, colors, rows, subtitle=xl_subtitle)
             title_for_name = parsed.get("title") or EXCEL_KIND_DESC.get(kind)
 
         fname = safe_filename(title_for_name, fallback=EXCEL_KIND_DESC.get(kind, "Таблица"))
         await m.answer_document(FSInputFile(xlsx_path, filename=f"{fname}.xlsx"), caption=tr("msg_excel_caption", lang))
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {title_for_name}")
+        note_success(uid)
         try:
             os.remove(xlsx_path)
         except Exception:
@@ -4338,6 +4810,7 @@ async def word_mode_template(m: Message, state: FSMContext):
             pass
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — шаблон: {KIND_LABELS.get(kind, kind)}")
+        note_success(uid)
         await m.answer(tr("msg_ready", lang) + "\n\n" + await signature_line(lang), reply_markup=main_kb(lang))
         await state.clear()
     finally:
@@ -4698,6 +5171,7 @@ async def word_build(m: Message, state: FSMContext):
         await m.answer_document(FSInputFile(pdf_path, filename=f"{fname}.pdf"), caption=tr("msg_pdf_caption", lang))
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
+        note_success(uid)
         for p in (docx_path, pdf_path):
             try:
                 os.remove(p)
@@ -4746,6 +5220,7 @@ async def grant(m: Message):
         u = get_user(uid)
         u["plan"] = "premium"
         u["generations"] = 0
+        save_users()
         await m.answer(f"Доступ выдан пользователю {uid}, счётчик генераций сброшен")
     except (IndexError, ValueError):
         await m.answer("Формат: /grant user_id")
