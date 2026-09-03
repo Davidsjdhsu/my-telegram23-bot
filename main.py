@@ -814,34 +814,39 @@ def resolve_content_lang(text: str, interface_lang: str):
 
 
 THEMES = {
+    # heading_font - шрифт ЗАГОЛОВКОВ слайдов, свой под характер темы (тело текста везде
+    # остаётся Calibri - оно должно быть одинаково читаемым во всех 7 языках интерфейса,
+    # включая арабский и китайский, где декоративные латинские шрифты всё равно не
+    # применяются рендерером). Для строгих/деловых тем (business, minimal) и универсальной
+    # (default) шрифт заголовка намеренно не меняем - там уместна одна типографика без игры.
     "nature": {"bg": (248, 246, 241), "ink": (22, 22, 24), "mid": (70, 70, 74), "mute": (130, 128, 124), "line": (22, 22, 24),
-               "photo": "photorealistic nature photography, cinematic sunlight, no text, no watermark"},
+               "photo": "photorealistic nature photography, cinematic sunlight, no text, no watermark", "heading_font": "Georgia"},
     "business": {"bg": (16, 16, 18), "ink": (245, 245, 247), "mid": (196, 196, 200), "mute": (120, 120, 126), "line": (212, 175, 90),
-                 "photo": "premium business photography, architecture, cinematic, no text, no watermark"},
+                 "photo": "premium business photography, architecture, cinematic, no text, no watermark", "heading_font": "Calibri"},
     "tech": {"bg": (8, 16, 28), "ink": (240, 246, 255), "mid": (176, 196, 220), "mute": (110, 130, 155), "line": (90, 170, 230),
-             "photo": "futuristic technology photography, cinematic, no text, no watermark"},
+             "photo": "futuristic technology photography, cinematic, no text, no watermark", "heading_font": "Trebuchet MS"},
     "school": {"bg": (250, 249, 246), "ink": (28, 32, 40), "mid": (60, 64, 72), "mute": (120, 124, 132), "line": (40, 90, 180),
-               "photo": "clear educational photo, bright, no text, no watermark"},
+               "photo": "clear educational photo, bright, no text, no watermark", "heading_font": "Trebuchet MS"},
     "fashion": {"bg": (252, 250, 247), "ink": (18, 18, 18), "mid": (70, 66, 62), "mute": (140, 134, 128), "line": (18, 18, 18),
-                "photo": "editorial fashion photography, magazine look, no text, no watermark"},
+                "photo": "editorial fashion photography, magazine look, no text, no watermark", "heading_font": "Georgia"},
     "history": {"bg": (245, 237, 224), "ink": (48, 32, 20), "mid": (90, 70, 50), "mute": (140, 120, 95), "line": (140, 90, 40),
-                "photo": "historical documentary photography, museums, archives, cinematic, no text"},
+                "photo": "historical documentary photography, museums, archives, cinematic, no text", "heading_font": "Georgia"},
     "science": {"bg": (244, 248, 252), "ink": (16, 32, 56), "mid": (50, 70, 95), "mute": (110, 130, 150), "line": (20, 90, 160),
-                "photo": "scientific photography, labs, space, macro details, cinematic, no text"},
+                "photo": "scientific photography, labs, space, macro details, cinematic, no text", "heading_font": "Trebuchet MS"},
     "sport": {"bg": (18, 18, 20), "ink": (250, 250, 252), "mid": (210, 210, 214), "mute": (140, 140, 146), "line": (230, 70, 40),
-              "photo": "dynamic sports photography, motion, stadium light, cinematic, no text"},
+              "photo": "dynamic sports photography, motion, stadium light, cinematic, no text", "heading_font": "Trebuchet MS"},
     "travel": {"bg": (247, 243, 236), "ink": (32, 28, 24), "mid": (80, 70, 60), "mute": (130, 120, 110), "line": (180, 120, 60),
-               "photo": "travel photography, cities and landscapes, golden hour, cinematic, no text"},
+               "photo": "travel photography, cities and landscapes, golden hour, cinematic, no text", "heading_font": "Georgia"},
     "food": {"bg": (252, 248, 242), "ink": (40, 24, 16), "mid": (90, 60, 40), "mute": (140, 110, 90), "line": (180, 80, 40),
-             "photo": "food photography, editorial restaurant style, no text, no watermark"},
+             "photo": "food photography, editorial restaurant style, no text, no watermark", "heading_font": "Georgia"},
     "art": {"bg": (20, 18, 22), "ink": (248, 244, 238), "mid": (200, 190, 180), "mute": (140, 130, 125), "line": (220, 180, 120),
-            "photo": "art gallery photography, paintings, sculpture, cinematic, no text"},
+            "photo": "art gallery photography, paintings, sculpture, cinematic, no text", "heading_font": "Georgia"},
     "eco": {"bg": (236, 244, 236), "ink": (20, 40, 24), "mid": (50, 80, 55), "mute": (100, 125, 105), "line": (40, 110, 60),
-            "photo": "ecology photography, forests, clean energy, cinematic, no text"},
+            "photo": "ecology photography, forests, clean energy, cinematic, no text", "heading_font": "Trebuchet MS"},
     "minimal": {"bg": (250, 250, 250), "ink": (18, 18, 18), "mid": (70, 70, 70), "mute": (140, 140, 140), "line": (18, 18, 18),
-                "photo": "minimalist photography, clean composition, negative space, no text"},
+                "photo": "minimalist photography, clean composition, negative space, no text", "heading_font": "Calibri"},
     "default": {"bg": (248, 246, 241), "ink": (22, 22, 24), "mid": (70, 70, 74), "mute": (130, 128, 124), "line": (22, 22, 24),
-                "photo": "cinematic photorealistic photo, no text, no watermark"}
+                "photo": "cinematic photorealistic photo, no text, no watermark", "heading_font": "Calibri"}
 }
 
 THEME_LABELS_I18N = {
@@ -1401,6 +1406,37 @@ def cover(src, dest, w, h):
     im.resize((w, h), Image.LANCZOS).save(dest, "PNG")
 
 
+def _pptx_tint(color_tuple, factor=0.9):
+    """Осветляет RGB-цвет темы к белому (0..1) - для мягкой заливки карточек в раскладке
+    'cards', аналог _xl_tint для Excel."""
+    r, g, b = color_tuple
+    return (int(r + (255 - r) * factor), int(g + (255 - g) * factor), int(b + (255 - b) * factor))
+
+
+def slide_background(slide, colors):
+    """Фон слайда - мягкий диагональный градиент в сторону акцентного цвета темы, а не
+    плоская сплошная заливка (раньше каждый слайд был одним и тем же прямоугольником цвета -
+    визуально скучно и все презентации выглядели "плоско"). Разница между стоп-цветами
+    держится небольшой (12%), чтобы не спорить по контрасту с текстом поверх фона."""
+    bg = colors["bg"]
+    accent = colors["line"]
+    blend = 0.12
+    bg2 = tuple(int(bg[i] + (accent[i] - bg[i]) * blend) for i in range(3))
+    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(7.5))
+    shape.line.fill.background()
+    shape.fill.gradient()
+    stops = shape.fill.gradient_stops
+    stops[0].color.rgb = RGBColor(*bg)
+    stops[0].position = 0.0
+    stops[-1].color.rgb = RGBColor(*bg2)
+    stops[-1].position = 1.0
+    try:
+        shape.fill.gradient_angle = 45
+    except Exception:
+        pass
+    return shape
+
+
 def rect(slide, l, t, w, h, color):
     s = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(l), Inches(t), Inches(w), Inches(h))
     s.fill.solid()
@@ -1408,7 +1444,7 @@ def rect(slide, l, t, w, h, color):
     s.line.fill.background()
 
 
-def txt(slide, l, t, w, h, text, size, color, bold=False):
+def txt(slide, l, t, w, h, text, size, color, bold=False, font_name="Calibri"):
     box = slide.shapes.add_textbox(Inches(l), Inches(t), Inches(w), Inches(h))
     tf = box.text_frame
     tf.word_wrap = True
@@ -1417,7 +1453,7 @@ def txt(slide, l, t, w, h, text, size, color, bold=False):
     p.font.size = Pt(size)
     p.font.bold = bold
     p.font.color.rgb = RGBColor(*color)
-    p.font.name = "Calibri"
+    p.font.name = font_name
     return box
 
 
@@ -2349,14 +2385,17 @@ async def _build_presentation(m: Message, state: FSMContext):
     - Никаких общих фраз без содержания ("это важная тема", "мир меняется") - только конкретика: цифры, имена,
       примеры, детали, если они есть в материале или логично следуют из темы.
     - Фото: описание живого кадра (реальная сцена, человек, объект, место), не стоковый шаблон и не абстракция.
-    - График (ключ "chart", НЕОБЯЗАТЕЛЬНЫЙ): добавляй его ТОЛЬКО если тема или конкретный слайд подразумевает
-      цифры, статистику, доли, сравнение или динамику по времени - и не больше 1-2 слайдов с графиком на всю
-      презентацию. Если тема не про цифры (например: питомцы, отношения, психология, искусство, литература,
-      рецепты, путешествия как впечатление) - НЕ добавляй chart вообще, у слайда остаётся только фото.
+    - График (ключ "chart", НЕОБЯЗАТЕЛЬНЫЙ): добавляй его ТОЛЬКО если в тексте пользователя
+      реально ЕСТЬ конкретные цифры, статистика, доли или динамика по времени, которые можно
+      честно визуализировать - НИКОГДА не придумывай цифры от себя ради красивой картинки.
+      Если в присланном тексте нет настоящих числовых данных - не добавляй chart вообще, у слайда
+      остаётся только фото. Не больше 1-2 слайдов с графиком на всю презентацию, и только там, где
+      график реально помогает понять данные быстрее, чем абзац текста.
       Формат: "chart": {{"chart_type": "bar" | "line" | "pie", "title": "короткий заголовок графика",
-      "categories": ["...", "..."], "series": [{{"name": "...", "values": [12, 34, ...]}}]}} - придумай
-      правдоподобные цифры по теме. У слайда с графиком image_prompt всё равно укажи (на случай, если график
-      не соберётся), но использоваться будет либо график, либо фото, не оба сразу."""
+      "categories": ["...", "..."], "series": [{{"name": "...", "values": [12, 34, ...]}}]}} -
+      цифры бери СТРОГО из текста пользователя, ничего не домысливая и не округляя "для красоты".
+      У слайда с графиком image_prompt всё равно укажи (на случай, если график не соберётся), но
+      использоваться будет либо график, либо фото, не оба сразу."""
             raw = await ask_grok(f"""Собери уникальную презентацию из текста пользователя.
     Исправь ошибки, сохрани смысл и все факты из текста.
     Текст:
@@ -2367,7 +2406,8 @@ async def _build_presentation(m: Message, state: FSMContext):
     Угол: {angle}
     Стиль: {theme_name}
     {common_rules}
-    Только JSON (ключ "chart" добавляй лишь на 1-2 слайдах и только если тема того требует, иначе не пиши его вовсе):
+    Только JSON (ключ "chart" добавляй лишь на 1-2 слайдах и только если в тексте пользователя
+    есть настоящие числа для него, иначе не пиши его вовсе):
     {{"title":"...","slides":[{{"title":"...","content":"абзац1\n\nабзац2","image_prompt":"unique cinematic scene","chart":null}}]}}{grok_json_lang_instruction(cgl or "ru")}""")
         else:
             common_rules = """
@@ -2380,14 +2420,9 @@ async def _build_presentation(m: Message, state: FSMContext):
     - Никаких общих фраз без содержания ("это важная тема", "мир меняется") - только конкретика: цифры, имена,
       примеры, детали, логично следующие из темы.
     - Фото: описание живого кадра (реальная сцена, человек, объект, место), не стоковый шаблон и не абстракция.
-    - График (ключ "chart", НЕОБЯЗАТЕЛЬНЫЙ): добавляй его ТОЛЬКО если тема или конкретный слайд подразумевает
-      цифры, статистику, доли, сравнение или динамику по времени - и не больше 1-2 слайдов с графиком на всю
-      презентацию. Если тема не про цифры (например: питомцы, отношения, психология, искусство, литература,
-      рецепты, путешествия как впечатление) - НЕ добавляй chart вообще, у слайда остаётся только фото.
-      Формат: "chart": {{"chart_type": "bar" | "line" | "pie", "title": "короткий заголовок графика",
-      "categories": ["...", "..."], "series": [{{"name": "...", "values": [12, 34, ...]}}]}} - придумай
-      правдоподобные цифры по теме. У слайда с графиком image_prompt всё равно укажи (на случай, если график
-      не соберётся), но использоваться будет либо график, либо фото, не оба сразу."""
+    - Графики (диаграммы) в этом режиме НЕ используем: тема задана вами без исходного текста, а значит любые
+      цифры для графика пришлось бы выдумать - это выглядело бы как настоящие данные, но ими не являлось бы.
+      Ключ "chart" всегда оставляй null."""
             raw = await ask_grok(f"""Собери уникальную презентацию уровня лучшего журнала на эту тему,
     найди неочевидный и интересный угол, избегай банальностей.
     Тема: {data.get('topic')}
@@ -2396,7 +2431,7 @@ async def _build_presentation(m: Message, state: FSMContext):
     Угол: {angle}
     Стиль: {theme_name}
     {common_rules}
-    Только JSON (ключ "chart" добавляй лишь на 1-2 слайдах и только если тема того требует, иначе не пиши его вовсе):
+    Только JSON (ключ "chart" всегда null в этом режиме):
     {{"title":"...","slides":[{{"title":"...","content":"абзац1\n\nабзац2","image_prompt":"unique cinematic scene","chart":null}}]}}{grok_json_lang_instruction(cgl or "ru")}""")
 
         try:
@@ -2415,16 +2450,23 @@ async def _build_presentation(m: Message, state: FSMContext):
         slides_data = content.get("slides", [])
         n = len(slides_data)
 
-        # 6 раскладок (3 базовых + 3 зеркальных: фото слева/справа, сверху/снизу, крупно/мелко) -
-        # выбираются случайно без повтора одной и той же раскладки два слайда подряд, чтобы
-        # презентация не выглядела как один и тот же шаблон, повторённый N раз, и чтобы разные
-        # презентации не были визуально неотличимы друг от друга.
-        LAYOUT_COUNT = 6
+        # 7 раскладок (3 базовых + 3 зеркальных фото слева/справа/сверху/снизу/крупно/мелко,
+        # плюс "карточки" - две текстовые плашки рядом без фото, для слайдов с двумя явными
+        # смысловыми блоками в content) - выбираются случайно без повтора одной и той же
+        # раскладки два слайда подряд, чтобы презентация не выглядела как один и тот же шаблон,
+        # повторённый N раз, и чтобы разные презентации не были визуально неотличимы друг от друга.
+        LAYOUT_COUNT = 7
         layout_sequence = []
         prev_layout = None
-        for _ in range(n):
-            choice_pool = [l for l in range(LAYOUT_COUNT) if l != prev_layout]
-            next_layout = random.choice(choice_pool)
+        for i in range(n):
+            pool = [l for l in range(LAYOUT_COUNT) if l != prev_layout]
+            content_blocks_i = [x.strip() for x in (slides_data[i].get("content") or "").split("\n\n") if x.strip()]
+            if len(content_blocks_i) < 2:
+                # "Карточкам" нужно ровно 2 смысловых блока - если модель не разбила
+                # content на два абзаца, одна из карточек останется пустой и будет выглядеть
+                # криво, поэтому для таких слайдов этот вариант просто не предлагаем.
+                pool = [l for l in pool if l != 6]
+            next_layout = random.choice(pool)
             layout_sequence.append(next_layout)
             prev_layout = next_layout
 
@@ -2482,7 +2524,10 @@ async def _build_presentation(m: Message, state: FSMContext):
         images = []
         raw_sources = []
         for i, s in enumerate(slides_data):
-            if charts[i]:
+            if charts[i] or layout_sequence[i] == 6:
+                # Раскладке "карточки" фото не нужно вовсе - не тратим на неё ни платную
+                # генерацию через ИИ, ни личное фото пользователя (пусть достанется слайду,
+                # который реально его покажет).
                 images.append(None)
                 continue
             own = user_photos.pop(0) if user_photos else None
@@ -2503,25 +2548,25 @@ async def _build_presentation(m: Message, state: FSMContext):
                 images.append(None)
 
         slide = prs.slides.add_slide(prs.slide_layouts[6])
-        rect(slide, 0, 0, 13.333, 7.5, colors["bg"])
+        slide_background(slide, colors)
         if cover_panel_img:
             photo_x = 0 if cover_split_side == "left" else 6.933
             panel_x = 6.933 if cover_split_side == "left" else 0
             slide.shapes.add_picture(cover_panel_img, Inches(photo_x), Inches(0), width=Inches(6.4), height=Inches(7.5))
             rect(slide, panel_x, 0, 6.4, 7.5, colors["bg"])
-            txt(slide, panel_x + 0.5, 2.9, 5.4, 2.0, content.get("title", "Презентация"), 32, colors["ink"], True)
+            txt(slide, panel_x + 0.5, 2.9, 5.4, 2.0, content.get("title", "Презентация"), 32, colors["ink"], True, font_name=colors["heading_font"])
             rect(slide, panel_x + 0.5, 4.9, 0.85, 0.05, colors["line"])
             txt(slide, panel_x + 0.5, 6.6, 5.4, 0.4, "01  /  введение", 13, colors["mute"])
         else:
             if cover_img:
                 slide.shapes.add_picture(cover_img, Inches(0), Inches(0), width=Inches(13.333), height=Inches(7.5))
                 rect(slide, 0, 4.7, 13.333, 2.8, colors["bg"])
-            txt(slide, 0.7, 5.0, 12, 1.5, content.get("title", "Презентация"), 40, colors["ink"], True)
+            txt(slide, 0.7, 5.0, 12, 1.5, content.get("title", "Презентация"), 40, colors["ink"], True, font_name=colors["heading_font"])
             txt(slide, 0.7, 6.6, 12, 0.4, "01  /  введение", 13, colors["mute"])
 
         for idx, s in enumerate(slides_data):
             slide = prs.slides.add_slide(prs.slide_layouts[6])
-            rect(slide, 0, 0, 13.333, 7.5, colors["bg"])
+            slide_background(slide, colors)
             layout = layout_sequence[idx]
             img = images[idx] if idx < len(images) else None
             chart_data = charts[idx] if idx < len(charts) else None
@@ -2530,7 +2575,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                     add_chart(slide, 0.5, 0.6, 5.4, 6.3, chart_data, colors)
                 elif img:
                     slide.shapes.add_picture(img[1], Inches(0), Inches(0), width=Inches(6.4), height=Inches(7.5))
-                txt(slide, 7.05, 1.5, 5.5, 1.6, s.get("title", ""), 30, colors["ink"], True)
+                txt(slide, 7.05, 1.5, 5.5, 1.6, s.get("title", ""), 30, colors["ink"], True, font_name=colors["heading_font"])
                 rect(slide, 7.05, 3.25, 0.85, 0.05, colors["line"])
                 box = slide.shapes.add_textbox(Inches(7.05), Inches(3.5), Inches(5.5), Inches(3.2))
                 tf = box.text_frame
@@ -2549,7 +2594,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                     add_chart(slide, 0.7, 0.35, 11.9, 4.0, chart_data, colors)
                 elif img:
                     slide.shapes.add_picture(img[0], Inches(0), Inches(0), width=Inches(13.333), height=Inches(4.55))
-                txt(slide, 0.7, 4.85, 12, 1.0, s.get("title", ""), 28, colors["ink"], True)
+                txt(slide, 0.7, 4.85, 12, 1.0, s.get("title", ""), 28, colors["ink"], True, font_name=colors["heading_font"])
                 box = slide.shapes.add_textbox(Inches(0.7), Inches(5.85), Inches(12), Inches(1.2))
                 tf = box.text_frame
                 tf.word_wrap = True
@@ -2559,7 +2604,10 @@ async def _build_presentation(m: Message, state: FSMContext):
                 p.font.color.rgb = RGBColor(*colors["mid"])
                 p.font.name = "Calibri"
             elif layout == 2:
-                txt(slide, 0.7, 1.3, 8.2, 2.2, s.get("title", ""), 36, colors["ink"], True)
+                # Заголовок уже НЕ должен доходить до x=8.7 (где начинается фото/график
+                # справа) - раньше ширина плашки (8.2") залезала на 0.2" в зону картинки,
+                # и длинные заголовки визуально обрезались, т.к. фото рисуется поверх текста.
+                txt(slide, 0.7, 1.3, 7.6, 2.2, s.get("title", ""), 36, colors["ink"], True, font_name=colors["heading_font"])
                 rect(slide, 0.7, 3.6, 1.1, 0.06, colors["line"])
                 box = slide.shapes.add_textbox(Inches(0.7), Inches(3.9), Inches(7.4), Inches(2.6))
                 tf = box.text_frame
@@ -2580,7 +2628,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                     add_chart(slide, 0.7, 0.6, 5.4, 6.3, chart_data, colors)
                 elif img:
                     slide.shapes.add_picture(img[1], Inches(6.933), Inches(0), width=Inches(6.4), height=Inches(7.5))
-                txt(slide, 0.7, 1.5, 5.5, 1.6, s.get("title", ""), 30, colors["ink"], True)
+                txt(slide, 0.7, 1.5, 5.5, 1.6, s.get("title", ""), 30, colors["ink"], True, font_name=colors["heading_font"])
                 rect(slide, 0.7, 3.25, 0.85, 0.05, colors["line"])
                 box = slide.shapes.add_textbox(Inches(0.7), Inches(3.5), Inches(5.5), Inches(3.2))
                 tf = box.text_frame
@@ -2596,7 +2644,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                 txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
             elif layout == 4:
                 # Зеркало layout 1: фото - нижняя полоса кадра, текст - сверху.
-                txt(slide, 0.7, 0.4, 12, 1.0, s.get("title", ""), 28, colors["ink"], True)
+                txt(slide, 0.7, 0.4, 12, 1.0, s.get("title", ""), 28, colors["ink"], True, font_name=colors["heading_font"])
                 box = slide.shapes.add_textbox(Inches(0.7), Inches(1.4), Inches(12), Inches(1.2))
                 tf = box.text_frame
                 tf.word_wrap = True
@@ -2609,9 +2657,9 @@ async def _build_presentation(m: Message, state: FSMContext):
                     add_chart(slide, 0.7, 3.15, 11.9, 4.0, chart_data, colors)
                 elif img:
                     slide.shapes.add_picture(img[0], Inches(0), Inches(2.95), width=Inches(13.333), height=Inches(4.55))
-            else:
+            elif layout == 5:
                 # Зеркало layout 2: фото - слева мелко, текст - справа.
-                txt(slide, 5.2, 1.3, 7.4, 2.2, s.get("title", ""), 36, colors["ink"], True)
+                txt(slide, 5.2, 1.3, 7.4, 2.2, s.get("title", ""), 36, colors["ink"], True, font_name=colors["heading_font"])
                 rect(slide, 5.2, 3.6, 1.1, 0.06, colors["line"])
                 box = slide.shapes.add_textbox(Inches(5.2), Inches(3.9), Inches(7.4), Inches(2.6))
                 tf = box.text_frame
@@ -2626,6 +2674,29 @@ async def _build_presentation(m: Message, state: FSMContext):
                 elif img:
                     slide.shapes.add_picture(img[1], Inches(0.7), Inches(1.3), width=Inches(3.9), height=Inches(4.7))
                 txt(slide, 5.2, 6.95, 7.4, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
+            else:
+                # Раскладка "карточки" (layout 6) - без фото: заголовок сверху, ниже -
+                # две текстовые плашки рядом с мягкой заливкой под тему. Используется только
+                # для слайдов, где content уже разбит на 2 абзаца (см. фильтр при выборе
+                # раскладки выше) - каждый абзац идёт в свою карточку.
+                txt(slide, 0.7, 0.5, 11.9, 1.0, s.get("title", ""), 32, colors["ink"], True, font_name=colors["heading_font"])
+                rect(slide, 0.7, 1.55, 1.1, 0.06, colors["line"])
+                blocks = [x.strip() for x in (s.get("content") or "").split("\n\n") if x.strip()][:2]
+                card_w, gap, card_top, card_h = 5.85, 0.3, 2.0, 4.65
+                card_fill = _pptx_tint(colors["line"], 0.9)
+                for i, block in enumerate(blocks):
+                    card_l = 0.7 + i * (card_w + gap)
+                    rect(slide, card_l, card_top, card_w, card_h, card_fill)
+                    box = slide.shapes.add_textbox(Inches(card_l + 0.35), Inches(card_top + 0.3),
+                                                    Inches(card_w - 0.7), Inches(card_h - 0.6))
+                    tf = box.text_frame
+                    tf.word_wrap = True
+                    p = tf.paragraphs[0]
+                    p.text = block
+                    p.font.size = Pt(16)
+                    p.font.color.rgb = RGBColor(*colors["mid"])
+                    p.font.name = "Calibri"
+                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
 
         pptx_path = f"/tmp/pres_{uid}.pptx"
         prs.save(pptx_path)
