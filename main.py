@@ -2540,10 +2540,18 @@ async def _build_presentation(m: Message, state: FSMContext):
                 ok = await generate_image(prompt, src)
             if ok:
                 raw_sources.append(src)
-                wide, tall = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}_w.png", f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}_t.png"
+                wide = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}_w.png"
+                tall = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}_t.png"
+                # Отдельный вариант обрезки под панорамную полосу (layout 1 и 4, фото сверху/снизу
+                # на всю ширину, высота всего 4.55" при ширине 13.333" - пропорции 2.93:1, а НЕ 16:9).
+                # Раньше туда вставлялось wide-фото (16:9, готовилось под 1920x1080), и PowerPoint
+                # просто растягивал его под чужие пропорции - искажение доходило до ~39%, лица и
+                # предметы визуально "расплющивало". Теперь готовим кадр сразу под нужное соотношение.
+                banner = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}_b.png"
                 cover(src, wide, 1920, 1080)
                 cover(src, tall, 1260, 1500)
-                images.append((wide, tall))
+                cover(src, banner, 1920, 655)
+                images.append((wide, tall, banner))
             else:
                 images.append(None)
 
@@ -2593,7 +2601,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                 if chart_data:
                     add_chart(slide, 0.7, 0.35, 11.9, 4.0, chart_data, colors)
                 elif img:
-                    slide.shapes.add_picture(img[0], Inches(0), Inches(0), width=Inches(13.333), height=Inches(4.55))
+                    slide.shapes.add_picture(img[2], Inches(0), Inches(0), width=Inches(13.333), height=Inches(4.55))
                 txt(slide, 0.7, 4.85, 12, 1.0, s.get("title", ""), 28, colors["ink"], True, font_name=colors["heading_font"])
                 box = slide.shapes.add_textbox(Inches(0.7), Inches(5.85), Inches(12), Inches(1.2))
                 tf = box.text_frame
@@ -2656,7 +2664,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                 if chart_data:
                     add_chart(slide, 0.7, 3.15, 11.9, 4.0, chart_data, colors)
                 elif img:
-                    slide.shapes.add_picture(img[0], Inches(0), Inches(2.95), width=Inches(13.333), height=Inches(4.55))
+                    slide.shapes.add_picture(img[2], Inches(0), Inches(2.95), width=Inches(13.333), height=Inches(4.55))
             elif layout == 5:
                 # Зеркало layout 2: фото - слева мелко, текст - справа.
                 txt(slide, 5.2, 1.3, 7.4, 2.2, s.get("title", ""), 36, colors["ink"], True, font_name=colors["heading_font"])
