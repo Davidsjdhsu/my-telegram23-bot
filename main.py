@@ -7,7 +7,7 @@ import time
 import colorsys
 from collections import deque
 from datetime import datetime
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.filters import Command
 from aiogram.types import Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
@@ -146,6 +146,7 @@ def register_pdf_fonts():
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ADMIN_IDS = [909828109]
 
 if not BOT_TOKEN:
@@ -154,8 +155,14 @@ if not XAI_API_KEY:
     raise RuntimeError("XAI_API_KEY не задан в переменных окружения")
 if not REPLICATE_API_TOKEN:
     print("ВНИМАНИЕ: REPLICATE_API_TOKEN не задан — генерация изображений будет недоступна")
+if not OPENAI_API_KEY:
+    print("ВНИМАНИЕ: OPENAI_API_KEY не задан — распознавание голосовых сообщений будет недоступно")
 
 client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
+# Отдельный клиент на настоящий OpenAI (не xAI) - только для распознавания речи (Whisper),
+# у Grok такой возможности нет. None, если ключ не настроен - тогда голосовые просто не
+# будут распознаваться, остальной бот при этом продолжает работать как обычно.
+whisper_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 USERS_FILE = os.path.join(BASE_DIR, "users.json")
@@ -198,6 +205,8 @@ def _build_users_payload():
             "history": list(u.get("history") or [])[-30:],
             "lang": u.get("lang") or "ru",
             "lang_chosen": bool(u.get("lang_chosen")),
+            "control_mode": u.get("control_mode") or "buttons",
+            "control_mode_chosen": bool(u.get("control_mode_chosen")),
         }
     return payload
 
@@ -295,6 +304,8 @@ class Form(StatesGroup):
     waiting_pres_content_lang = State()
     waiting_word_content_lang = State()
     waiting_excel_content_lang = State()
+    waiting_control_mode = State()
+    waiting_collab_message = State()
 
 
 # ==================== ЯЗЫКИ / i18n ====================
@@ -325,6 +336,14 @@ TR = {
                     "ar": "📁 سجلي", "zh": "📁 我的历史", "es": "📁 Mi historial", "fr": "📁 Mon historique"},
     "btn_plan": {"ru": "ℹ️ Мой тариф", "en": "ℹ️ My plan", "de": "ℹ️ Mein Tarif",
                  "ar": "ℹ️ خطتي", "zh": "ℹ️ 我的套餐", "es": "ℹ️ Mi plan", "fr": "ℹ️ Mon forfait"},
+    "btn_help": {"ru": "❓ Помощь", "en": "❓ Help", "de": "❓ Hilfe",
+                 "ar": "❓ المساعدة", "zh": "❓ 帮助", "es": "❓ Ayuda", "fr": "❓ Aide"},
+    "btn_collab": {"ru": "🤝 Сотрудничество", "en": "🤝 Partnership", "de": "🤝 Zusammenarbeit",
+                   "ar": "🤝 الشراكة", "zh": "🤝 合作", "es": "🤝 Colaboración", "fr": "🤝 Partenariat"},
+    "btn_control_buttons": {"ru": "👆 Кнопками", "en": "👆 With buttons", "de": "👆 Mit Tasten",
+                             "ar": "👆 بالأزرار", "zh": "👆 用按钮", "es": "👆 Con botones", "fr": "👆 Avec des boutons"},
+    "btn_control_voice": {"ru": "🎙 Голосом", "en": "🎙 With voice", "de": "🎙 Mit Sprache",
+                           "ar": "🎙 بالصوت", "zh": "🎙 用语音", "es": "🎙 Con voz", "fr": "🎙 Avec la voix"},
     "btn_language": {"ru": "🌐 Язык", "en": "🌐 Language", "de": "🌐 Sprache",
                      "ar": "🌐 اللغة", "zh": "🌐 语言", "es": "🌐 Idioma", "fr": "🌐 Langue"},
     "btn_same_as_interface": {"ru": "Как в интерфейсе ({iface_lang})", "en": "Same as interface ({iface_lang})", "de": "Wie die Oberfläche ({iface_lang})",
@@ -390,6 +409,68 @@ TR = {
     },
     "msg_main_menu": {"ru": "Главное меню 👇", "en": "Main menu 👇", "de": "Hauptmenü 👇", "ar": "القائمة الرئيسية 👇",
                       "zh": "主菜单 👇", "es": "Menú principal 👇", "fr": "Menu principal 👇"},
+    "msg_choose_control": {
+        "ru": "Как вам удобнее управлять ботом?",
+        "en": "How would you prefer to control the bot?",
+        "de": "Wie möchtest du den Bot am liebsten steuern?",
+        "ar": "كيف تفضل التحكم في البوت؟",
+        "zh": "你希望怎样操作这个机器人？",
+        "es": "¿Cómo prefieres controlar el bot?",
+        "fr": "Comment préférez-vous contrôler le bot ?",
+    },
+    "msg_control_set_buttons": {
+        "ru": "Отлично, дальше всё через кнопки 👇", "en": "Great, buttons it is 👇", "de": "Alles klar, dann per Tasten 👇",
+        "ar": "رائع، سنستخدم الأزرار 👇", "zh": "好的，接下来用按钮操作 👇", "es": "Perfecto, será con botones 👇", "fr": "Parfait, ce sera avec les boutons 👇",
+    },
+    "msg_control_set_voice": {
+        "ru": "Отлично, теперь можно присылать голосовые вместо печати — расшифрую и обработаю как текст. Кнопки тоже никуда не делись, можно пользоваться и ими 👇",
+        "en": "Great, you can now send voice messages instead of typing — I'll transcribe and handle them like text. Buttons are still there too 👇",
+        "de": "Super, du kannst jetzt Sprachnachrichten statt Text senden — ich transkribiere sie und behandle sie wie Text. Die Tasten bleiben ebenfalls verfügbar 👇",
+        "ar": "رائع، يمكنك الآن إرسال رسائل صوتية بدلاً من الكتابة - سأحوّلها إلى نص وأتعامل معها كذلك. الأزرار متاحة أيضاً 👇",
+        "zh": "好的，现在你可以发送语音消息代替打字——我会转成文字并像处理文本一样处理。按钮依然可用 👇",
+        "es": "Perfecto, ahora puedes enviar mensajes de voz en vez de escribir — los transcribiré y los trataré como texto. Los botones también siguen disponibles 👇",
+        "fr": "Parfait, vous pouvez maintenant envoyer des messages vocaux au lieu de taper — je les transcrirai et les traiterai comme du texte. Les boutons restent aussi disponibles 👇",
+    },
+    "msg_voice_transcribing": {
+        "ru": "🎙 Слушаю...", "en": "🎙 Listening...", "de": "🎙 Höre zu...", "ar": "🎙 أستمع...",
+        "zh": "🎙 正在识别...", "es": "🎙 Escuchando...", "fr": "🎙 J'écoute...",
+    },
+    "msg_voice_failed": {
+        "ru": "Не смог распознать голосовое 🙁 Попробуй ещё раз или напиши текстом.",
+        "en": "Couldn't recognize the voice message 🙁 Try again or type it instead.",
+        "de": "Konnte die Sprachnachricht nicht erkennen 🙁 Versuch es erneut oder tippe den Text.",
+        "ar": "لم أتمكن من التعرف على الرسالة الصوتية 🙁 حاول مرة أخرى أو اكتب نصاً.",
+        "zh": "无法识别语音消息 🙁 请重试或改用文字输入。",
+        "es": "No pude reconocer el mensaje de voz 🙁 Inténtalo de nuevo o escríbelo.",
+        "fr": "Impossible de reconnaître le message vocal 🙁 Réessayez ou tapez le texte.",
+    },
+    "msg_help": {
+        "ru": "❓ <b>Помощь</b>\n\nЯ делаю презентации, документы Word и таблицы Excel по вашей теме или данным.\n\n1. Выберите раздел в меню\n2. Опишите тему своими словами (текстом или голосом)\n3. Получите готовый файл через 1-2 минуты\n\nЕсли что-то пошло не так — напишите сюда своими словами, что случилось, разберёмся.",
+        "en": "❓ <b>Help</b>\n\nI create presentations, Word documents and Excel tables from your topic or data.\n\n1. Pick a section from the menu\n2. Describe the topic in your own words (text or voice)\n3. Get the finished file in 1-2 minutes\n\nIf something went wrong, just describe it here and we'll sort it out.",
+        "de": "❓ <b>Hilfe</b>\n\nIch erstelle Präsentationen, Word-Dokumente und Excel-Tabellen zu deinem Thema oder deinen Daten.\n\n1. Wähle einen Bereich im Menü\n2. Beschreibe das Thema mit eigenen Worten (Text oder Sprache)\n3. Erhalte die fertige Datei in 1-2 Minuten\n\nWenn etwas nicht funktioniert hat, beschreibe es hier kurz, wir kümmern uns darum.",
+        "ar": "❓ <b>المساعدة</b>\n\nأقوم بإنشاء عروض تقديمية ومستندات Word وجداول Excel بناءً على موضوعك أو بياناتك.\n\n1. اختر قسماً من القائمة\n2. صف الموضوع بكلماتك (نصاً أو صوتاً)\n3. احصل على الملف الجاهز خلال 1-2 دقيقة\n\nإذا حدث خطأ ما، صفه هنا وسنحله.",
+        "zh": "❓ <b>帮助</b>\n\n我可以根据你的主题或数据制作演示文稿、Word文档和Excel表格。\n\n1. 在菜单中选择一个板块\n2. 用你自己的话描述主题（文字或语音）\n3. 1-2分钟后获得成品文件\n\n如果出了问题，把情况描述给我，我们一起解决。",
+        "es": "❓ <b>Ayuda</b>\n\nCreo presentaciones, documentos Word y tablas Excel a partir de tu tema o datos.\n\n1. Elige una sección del menú\n2. Describe el tema con tus palabras (texto o voz)\n3. Recibe el archivo listo en 1-2 minutos\n\nSi algo salió mal, descríbelo aquí y lo resolveremos.",
+        "fr": "❓ <b>Aide</b>\n\nJe crée des présentations, des documents Word et des tableaux Excel à partir de votre sujet ou de vos données.\n\n1. Choisissez une section dans le menu\n2. Décrivez le sujet avec vos mots (texte ou voix)\n3. Recevez le fichier prêt en 1-2 minutes\n\nSi quelque chose s'est mal passé, décrivez-le ici et on s'en occupera.",
+    },
+    "msg_collab": {
+        "ru": "🤝 <b>Сотрудничество</b>\n\nПредложения по партнёрству, интеграциям и оптовым тарифам — пишите прямо сюда, опишите своими словами, что вас интересует. Читаю все сообщения лично.",
+        "en": "🤝 <b>Partnership</b>\n\nFor partnership, integration or bulk-pricing proposals — just write here and describe what you have in mind. I read every message personally.",
+        "de": "🤝 <b>Zusammenarbeit</b>\n\nVorschläge zu Partnerschaften, Integrationen oder Großkundentarifen — schreib einfach hier, was dich interessiert. Ich lese jede Nachricht persönlich.",
+        "ar": "🤝 <b>الشراكة</b>\n\nلاقتراحات الشراكة أو التكامل أو الأسعار بالجملة - اكتب هنا ما يهمك. أقرأ كل رسالة بنفسي.",
+        "zh": "🤝 <b>合作</b>\n\n关于合作、集成或批量定价的建议——请直接在这里写下你的想法，我会亲自阅读每条消息。",
+        "es": "🤝 <b>Colaboración</b>\n\nPara propuestas de asociación, integraciones o tarifas por volumen, escribe aquí lo que te interesa. Leo todos los mensajes personalmente.",
+        "fr": "🤝 <b>Partenariat</b>\n\nPour toute proposition de partenariat, d'intégration ou de tarif de gros, écrivez ici ce qui vous intéresse. Je lis chaque message personnellement.",
+    },
+    "msg_collab_sent": {
+        "ru": "Спасибо, сообщение отправлено — отвечу вам напрямую в этот чат.",
+        "en": "Thanks, your message has been sent — I'll reply directly in this chat.",
+        "de": "Danke, deine Nachricht wurde gesendet — ich antworte dir direkt in diesem Chat.",
+        "ar": "شكراً، تم إرسال رسالتك - سأرد عليك مباشرة في هذه المحادثة.",
+        "zh": "谢谢，你的消息已发送——我会直接在此对话中回复你。",
+        "es": "Gracias, tu mensaje fue enviado — te responderé directamente en este chat.",
+        "fr": "Merci, votre message a été envoyé — je vous répondrai directement dans ce chat.",
+    },
     "msg_cancelled": {"ru": "Отменил текущее действие. Начнём заново 👇", "en": "Cancelled the current action. Let's start over 👇",
                       "de": "Aktuelle Aktion abgebrochen. Fangen wir neu an 👇", "ar": "تم إلغاء الإجراء الحالي. لنبدأ من جديد 👇",
                       "zh": "已取消当前操作。重新开始吧 👇", "es": "Acción actual cancelada. Empecemos de nuevo 👇", "fr": "Action en cours annulée. Recommençons 👇"},
@@ -764,6 +845,10 @@ ALL_BTN_WORD_LABELS = set(TR["btn_word"].values())
 ALL_BTN_EXCEL_LABELS = set(TR["btn_excel"].values())
 ALL_BTN_HISTORY_LABELS = set(TR["btn_history"].values())
 ALL_BTN_PLAN_LABELS = set(TR["btn_plan"].values())
+ALL_BTN_HELP_LABELS = set(TR["btn_help"].values())
+ALL_BTN_COLLAB_LABELS = set(TR["btn_collab"].values())
+ALL_BTN_CONTROL_BUTTONS_LABELS = set(TR["btn_control_buttons"].values())
+ALL_BTN_CONTROL_VOICE_LABELS = set(TR["btn_control_voice"].values())
 ALL_BTN_AI_GENERATE_LABELS = set(TR["btn_ai_generate"].values())
 ALL_BTN_OWN_TEXT_LABELS = set(TR["btn_own_text"].values())
 ALL_BTN_OWN_DATA_LABELS = set(TR["btn_own_data"].values())
@@ -787,6 +872,16 @@ def lang_kb():
         pair = codes[i:i + 2]
         rows.append([KeyboardButton(text=f"{LANGS[c]['flag']} {LANGS[c]['name']}") for c in pair])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def control_kb(lang="ru"):
+    """Клавиатура выбора режима управления (после выбора языка, один раз при первом
+    знакомстве) - кнопками или голосом. Голос не отменяет кнопки, это просто добавляет
+    возможность присылать голосовые вместо печати, кнопки остаются доступны всегда."""
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text=tr("btn_control_buttons", lang))],
+        [KeyboardButton(text=tr("btn_control_voice", lang))],
+    ], resize_keyboard=True)
 
 
 LANG_LABEL_TO_CODE = {f"{v['flag']} {v['name']}": k for k, v in LANGS.items()}
@@ -901,13 +996,67 @@ def pick_theme(topic: str):
 def get_user(uid):
     if uid not in users_db:
         users_db[uid] = {"name": "", "plan": "premium", "generations": 0, "history": [], "busy": False,
-                          "lang": "ru", "lang_chosen": False}
+                          "lang": "ru", "lang_chosen": False, "control_mode": "buttons", "control_mode_chosen": False}
         save_users()
     return users_db[uid]
 
 
 def user_lang(uid):
     return get_user(uid).get("lang", "ru")
+
+
+async def transcribe_voice(voice, uid) -> str | None:
+    """Скачивает голосовое сообщение Telegram и распознаёт речь через OpenAI Whisper API.
+    Возвращает распознанный текст или None, если распознавание недоступно/не удалось -
+    в обоих случаях (ключ не настроен, сеть упала, файл повреждён) вызывающий код должен
+    аккуратно откатиться на "текст не получен", а не падать с исключением."""
+    if not whisper_client or not voice:
+        return None
+    local_path = f"/tmp/voice_{uid}_{random.randint(1000, 9999)}.ogg"
+    try:
+        file_info = await bot.get_file(voice.file_id)
+        await bot.download_file(file_info.file_path, local_path)
+        with open(local_path, "rb") as f:
+            resp = await whisper_client.audio.transcriptions.create(model="whisper-1", file=f)
+        text = (getattr(resp, "text", "") or "").strip()
+        return text or None
+    except Exception as e:
+        print("Ошибка распознавания голоса:", e)
+        return None
+    finally:
+        try:
+            if os.path.exists(local_path):
+                os.remove(local_path)
+        except Exception:
+            pass
+
+
+class VoiceToTextMiddleware(BaseMiddleware):
+    """Если пользователь прислал голосовое сообщение там, где обработчик ждёт текст -
+    расшифровывает через Whisper и подменяет message.text расшифровкой ДО того, как
+    сообщение попадёт в конкретный хендлер. Благодаря этому ни один из существующих
+    хендлеров (тема презентации, свои данные для Excel, сообщение для сотрудничества и
+    т.д.) не пришлось переписывать под голос отдельно - они как читали m.text, так и
+    продолжают читать, просто теперь это может быть текст из голосового сообщения."""
+
+    async def __call__(self, handler, event, data):
+        if isinstance(event, Message) and event.voice and not event.text:
+            uid = event.from_user.id
+            lang = user_lang(uid)
+            listening_msg = await event.answer(tr("msg_voice_transcribing", lang))
+            transcript = await transcribe_voice(event.voice, uid)
+            try:
+                await listening_msg.delete()
+            except Exception:
+                pass
+            if not transcript:
+                await event.answer(tr("msg_voice_failed", lang))
+                return
+            event = event.model_copy(update={"text": transcript})
+        return await handler(event, data)
+
+
+dp.message.middleware(VoiceToTextMiddleware())
 
 
 def can_generate(uid):
@@ -1561,6 +1710,7 @@ def main_kb(lang="ru"):
         [KeyboardButton(text=tr("btn_word", lang))],
         [KeyboardButton(text=tr("btn_excel", lang))],
         [KeyboardButton(text=tr("btn_history", lang)), KeyboardButton(text=tr("btn_plan", lang))],
+        [KeyboardButton(text=tr("btn_help", lang)), KeyboardButton(text=tr("btn_collab", lang))],
         [KeyboardButton(text=tr("btn_language", lang))]
     ], resize_keyboard=True)
 
@@ -1973,6 +2123,15 @@ def style_kb(include_keep=False, lang="ru"):
 STYLE_BY_LABEL = {label: k for k, variants in THEME_LABELS_I18N.items() for label in variants.values()}
 
 
+async def send_welcome(m: Message, u: dict, lang: str):
+    """Приветствие с именем и остатком лимита - используется и при /start у уже знакомых
+    пользователей, и сразу после выбора языка/режима управления в первый раз."""
+    limit = PLAN_LIMITS.get(u["plan"], 15)
+    text = tr("msg_welcome", lang, name=u.get("name") or "🙂")
+    text += "\n\n" + tr("msg_plan_info", lang, used=u["generations"], limit=limit, left=max(0, limit - u["generations"]))
+    await m.answer(text, reply_markup=main_kb(lang))
+
+
 @dp.message(Command("start"))
 async def cmd_start(m: Message, state: FSMContext):
     u = get_user(m.from_user.id)
@@ -1981,13 +2140,17 @@ async def cmd_start(m: Message, state: FSMContext):
         u["name"] = new_name
         save_users()
     await state.clear()
-    if u.get("lang_chosen"):
-        lang = user_lang(m.from_user.id)
-        await m.answer(tr("msg_welcome", lang, name=u["name"] or "🙂"), reply_markup=main_kb(lang))
+    if not u.get("lang_chosen"):
+        await state.set_state(Form.waiting_language)
+        intro = " / ".join(TR["msg_choose_lang"][c] for c in ("ru", "en", "ar", "zh"))
+        await m.answer(intro, reply_markup=lang_kb())
         return
-    await state.set_state(Form.waiting_language)
-    intro = " / ".join(TR["msg_choose_lang"][c] for c in ("ru", "en", "ar", "zh"))
-    await m.answer(intro, reply_markup=lang_kb())
+    lang = user_lang(m.from_user.id)
+    if not u.get("control_mode_chosen"):
+        await state.set_state(Form.waiting_control_mode)
+        await m.answer(tr("msg_choose_control", lang), reply_markup=control_kb(lang))
+        return
+    await send_welcome(m, u, lang)
 
 
 @dp.message(Form.waiting_language)
@@ -2000,8 +2163,31 @@ async def set_language(m: Message, state: FSMContext):
     u["lang"] = code
     u["lang_chosen"] = True
     save_users()
+    if not u.get("control_mode_chosen"):
+        await state.set_state(Form.waiting_control_mode)
+        await m.answer(tr("msg_choose_control", code), reply_markup=control_kb(code))
+        return
     await state.clear()
-    await m.answer(tr("msg_welcome", code, name=u.get("name") or "🙂"), reply_markup=main_kb(code))
+    await send_welcome(m, u, code)
+
+
+@dp.message(Form.waiting_control_mode, F.text.in_(ALL_BTN_CONTROL_BUTTONS_LABELS | ALL_BTN_CONTROL_VOICE_LABELS))
+async def set_control_mode(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    u = get_user(m.from_user.id)
+    is_voice = (m.text or "").strip() in ALL_BTN_CONTROL_VOICE_LABELS
+    u["control_mode"] = "voice" if is_voice else "buttons"
+    u["control_mode_chosen"] = True
+    save_users()
+    await state.clear()
+    await m.answer(tr("msg_control_set_voice" if is_voice else "msg_control_set_buttons", lang))
+    await send_welcome(m, u, lang)
+
+
+@dp.message(Form.waiting_control_mode)
+async def control_mode_fallback(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    await m.answer(tr("msg_choose_control", lang), reply_markup=control_kb(lang))
 
 
 @dp.message(F.text.in_(TR["btn_language"].values()))
@@ -5288,6 +5474,48 @@ async def my_plan(m: Message):
     u = get_user(m.from_user.id)
     limit = PLAN_LIMITS.get(u["plan"], 15)
     await m.answer(tr("msg_plan_info", lang, used=u['generations'], limit=limit, left=max(0, limit - u['generations'])))
+
+
+@dp.message(F.text.in_(ALL_BTN_HELP_LABELS))
+async def show_help(m: Message):
+    lang = user_lang(m.from_user.id)
+    await m.answer(tr("msg_help", lang), parse_mode="HTML")
+
+
+@dp.message(F.text.in_(ALL_BTN_COLLAB_LABELS))
+async def start_collab(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    await m.answer(tr("msg_collab", lang), parse_mode="HTML", reply_markup=cancel_kb(lang))
+    await state.set_state(Form.waiting_collab_message)
+
+
+@dp.message(Form.waiting_collab_message, F.text.in_(ALL_MAIN_MENU_LABELS))
+async def collab_cancel(m: Message, state: FSMContext):
+    # Возврат в меню уже обработан общим хендлером to_main_menu (он зарегистрирован раньше
+    # и перехватит этот текст первым) - этот хендлер сюда практически никогда не дойдёт,
+    # оставлен только как явная страховка на случай будущих изменений порядка регистрации.
+    lang = user_lang(m.from_user.id)
+    await state.clear()
+    await m.answer(tr("msg_main_menu", lang), reply_markup=main_kb(lang))
+
+
+@dp.message(Form.waiting_collab_message)
+async def collab_message(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    u = get_user(m.from_user.id)
+    text = (m.text or "").strip()
+    if not text:
+        await m.answer(tr("msg_collab", lang), parse_mode="HTML", reply_markup=cancel_kb(lang))
+        return
+    uname = f"@{m.from_user.username}" if m.from_user.username else str(m.from_user.id)
+    forward_text = f"🤝 Сотрудничество от {u.get('name') or uname} ({uname}, id={m.from_user.id}):\n\n{text}"
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, forward_text)
+        except Exception as e:
+            print("Не удалось переслать сообщение о сотрудничестве админу:", admin_id, e)
+    await state.clear()
+    await m.answer(tr("msg_collab_sent", lang), reply_markup=main_kb(lang))
 
 
 @dp.message(Command("grant"))
