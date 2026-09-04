@@ -2,6 +2,8 @@ import os
 import asyncio
 import json
 import random
+import html
+from urllib.parse import urlencode
 import re
 import time
 import colorsys
@@ -9,7 +11,7 @@ from collections import deque
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.filters import Command
-from aiogram.types import Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, WebAppInfo
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -147,6 +149,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# URL статической странички Mini App (например, GitHub Pages) - должен быть https.
+# Если не задан, кнопка "Открыть меню" просто не показывается - остальной бот
+# работает как обычно на текстовых кнопках, ничего не ломается.
+MINIAPP_URL = os.getenv("MINIAPP_URL", "").strip()
 ADMIN_IDS = [909828109]
 
 if not BOT_TOKEN:
@@ -157,6 +163,12 @@ if not REPLICATE_API_TOKEN:
     print("ВНИМАНИЕ: REPLICATE_API_TOKEN не задан — генерация изображений будет недоступна")
 if not OPENAI_API_KEY:
     print("ВНИМАНИЕ: OPENAI_API_KEY не задан — распознавание голосовых сообщений будет недоступно")
+if not MINIAPP_URL:
+    print("ВНИМАНИЕ: MINIAPP_URL не задан — кнопка \"Открыть меню\" (Mini App) не будет показываться")
+elif not MINIAPP_URL.startswith("https://"):
+    print("ВНИМАНИЕ: MINIAPP_URL должен начинаться с https:// (у Telegram Mini App это обязательное "
+          "требование) — сейчас задан не по HTTPS, кнопка не будет показываться")
+    MINIAPP_URL = ""
 
 client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
 # Отдельный клиент на настоящий OpenAI (не xAI) - только для распознавания речи (Whisper),
@@ -346,6 +358,8 @@ TR = {
                            "ar": "🎙 بالصوت", "zh": "🎙 用语音", "es": "🎙 Con voz", "fr": "🎙 Avec la voix"},
     "btn_language": {"ru": "🌐 Язык", "en": "🌐 Language", "de": "🌐 Sprache",
                      "ar": "🌐 اللغة", "zh": "🌐 语言", "es": "🌐 Idioma", "fr": "🌐 Langue"},
+    "btn_open_miniapp": {"ru": "✨ Открыть меню", "en": "✨ Open menu", "de": "✨ Menü öffnen",
+                         "ar": "✨ فتح القائمة", "zh": "✨ 打开菜单", "es": "✨ Abrir menú", "fr": "✨ Ouvrir le menu"},
     "btn_same_as_interface": {"ru": "Как в интерфейсе ({iface_lang})", "en": "Same as interface ({iface_lang})", "de": "Wie die Oberfläche ({iface_lang})",
                               "ar": "نفس لغة الواجهة ({iface_lang})", "zh": "与界面语言相同（{iface_lang}）", "es": "Igual que la interfaz ({iface_lang})", "fr": "Comme l'interface ({iface_lang})"},
     "btn_main_menu": {"ru": "🏠 Главное меню", "en": "🏠 Main menu", "de": "🏠 Hauptmenü",
@@ -398,7 +412,7 @@ TR = {
                      "de": "Fertig! Ab jetzt sind Oberfläche und Dokumente in dieser Sprache. 👇", "ar": "تم! من الآن ستكون الواجهة والمستندات بهذه اللغة. 👇",
                      "zh": "完成！从现在起界面和文档都将使用该语言。👇", "es": "¡Listo! A partir de ahora la interfaz y los documentos estarán en este idioma. 👇",
                      "fr": "C'est fait ! Désormais l'interface et les documents seront dans cette langue. 👇"},
-    "msg_welcome": {
+    "msg_welcome_intro": {
         "ru": "Привет, {name} 👋\n\nЯ собираю красивые презентации, документы Word и таблицы Excel: текст, стиль и оформление — по твоей теме или из твоих данных.\n\nНажми кнопку ниже и начнём.",
         "en": "Hi, {name} 👋\n\nI put together polished presentations, Word documents and Excel tables: text, style and layout — from your topic or your own data.\n\nTap a button below to start.",
         "de": "Hallo, {name} 👋\n\nIch erstelle ansprechende Präsentationen, Word-Dokumente und Excel-Tabellen: Text, Stil und Layout — zu deinem Thema oder aus deinen Daten.\n\nTippe unten auf einen Button, um zu starten.",
@@ -406,6 +420,24 @@ TR = {
         "zh": "你好，{name} 👋\n\n我可以帮你制作精美的演示文稿、Word文档和Excel表格：根据你的主题或数据生成文本、风格和排版。\n\n点击下方按钮开始吧。",
         "es": "Hola, {name} 👋\n\nCreo presentaciones, documentos Word y tablas Excel cuidados: texto, estilo y diseño, a partir de tu tema o tus propios datos.\n\nToca un botón abajo para empezar.",
         "fr": "Bonjour {name} 👋\n\nJe crée des présentations, des documents Word et des tableaux Excel soignés : texte, style et mise en page — à partir de votre sujet ou de vos propres données.\n\nAppuyez sur un bouton ci-dessous pour commencer.",
+    },
+    "msg_welcome": {
+        "ru": "Здравствуйте, <b>{name}</b> 👋\n\nЧто будем делать сегодня?",
+        "en": "Hello, <b>{name}</b> 👋\n\nWhat shall we do today?",
+        "de": "Hallo, <b>{name}</b> 👋\n\nWas machen wir heute?",
+        "ar": "مرحباً <b>{name}</b> 👋\n\nما الذي سنفعله اليوم؟",
+        "zh": "您好，<b>{name}</b> 👋\n\n今天我们做点什么？",
+        "es": "Hola, <b>{name}</b> 👋\n\n¿Qué hacemos hoy?",
+        "fr": "Bonjour <b>{name}</b> 👋\n\nQue fait-on aujourd'hui ?",
+    },
+    "msg_welcome_plan_line": {
+        "ru": "👑 {plan} · использовано {used} из {limit}",
+        "en": "👑 {plan} · used {used} of {limit}",
+        "de": "👑 {plan} · verwendet {used} von {limit}",
+        "ar": "👑 {plan} · تم استخدام {used} من {limit}",
+        "zh": "👑 {plan} · 已使用 {used}/{limit}",
+        "es": "👑 {plan} · usado {used} de {limit}",
+        "fr": "👑 {plan} · utilisé {used} sur {limit}",
     },
     "msg_main_menu": {"ru": "Главное меню 👇", "en": "Main menu 👇", "de": "Hauptmenü 👇", "ar": "القائمة الرئيسية 👇",
                       "zh": "主菜单 👇", "es": "Menú principal 👇", "fr": "Menu principal 👇"},
@@ -1704,15 +1736,39 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
 
 
 
-def main_kb(lang="ru"):
-    return ReplyKeyboardMarkup(keyboard=[
+def build_miniapp_url(u):
+    """Персональная ссылка на Mini App с текущими данными пользователя в query-параметрах -
+    у статической странички нет своего сервера и доступа к базе бота, поэтому актуальные
+    имя/тариф/остаток лимита подставляются сюда в момент постройки клавиатуры."""
+    if not MINIAPP_URL:
+        return None
+    limit = PLAN_LIMITS.get(u.get("plan", "premium"), 15)
+    params = urlencode({
+        "name": u.get("name") or "",
+        "used": u.get("generations", 0),
+        "limit": limit,
+        "plan": u.get("plan", "premium").capitalize(),
+        "mode": u.get("control_mode", "buttons"),
+    })
+    sep = "&" if "?" in MINIAPP_URL else "?"
+    return f"{MINIAPP_URL}{sep}{params}"
+
+
+def main_kb(lang="ru", uid=None):
+    rows = []
+    if uid is not None:
+        miniapp_url = build_miniapp_url(get_user(uid))
+        if miniapp_url:
+            rows.append([KeyboardButton(text=tr("btn_open_miniapp", lang), web_app=WebAppInfo(url=miniapp_url))])
+    rows += [
         [KeyboardButton(text=tr("btn_pres", lang))],
         [KeyboardButton(text=tr("btn_word", lang))],
         [KeyboardButton(text=tr("btn_excel", lang))],
         [KeyboardButton(text=tr("btn_history", lang)), KeyboardButton(text=tr("btn_plan", lang))],
         [KeyboardButton(text=tr("btn_help", lang)), KeyboardButton(text=tr("btn_collab", lang))],
-        [KeyboardButton(text=tr("btn_language", lang))]
-    ], resize_keyboard=True)
+        [KeyboardButton(text=tr("btn_language", lang))],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def cancel_kb(lang="ru"):
@@ -2123,13 +2179,27 @@ def style_kb(include_keep=False, lang="ru"):
 STYLE_BY_LABEL = {label: k for k, variants in THEME_LABELS_I18N.items() for label in variants.values()}
 
 
-async def send_welcome(m: Message, u: dict, lang: str):
-    """Приветствие с именем и остатком лимита - используется и при /start у уже знакомых
-    пользователей, и сразу после выбора языка/режима управления в первый раз."""
+def _usage_bar(used, limit, width=12):
+    """Текстовый прогресс-бар из юникод-блоков - Telegram не умеет графические
+    прогресс-бары в обычных сообщениях, это ближайший реалистичный аналог."""
+    limit = max(int(limit), 1)
+    filled = max(0, min(width, round(width * used / limit)))
+    return "▓" * filled + "░" * (width - filled)
+
+
+async def send_welcome(m: Message, u: dict, lang: str, first_time: bool = False):
+    """Приветствие с именем, тарифом и прогресс-баром лимита - используется и при /start
+    у уже знакомых пользователей (короткая форма), и сразу после выбора языка/режима
+    управления в самый первый раз (first_time=True - разворачивается в объяснение,
+    что вообще умеет бот, раз человек видит его впервые)."""
     limit = PLAN_LIMITS.get(u["plan"], 15)
-    text = tr("msg_welcome", lang, name=u.get("name") or "🙂")
-    text += "\n\n" + tr("msg_plan_info", lang, used=u["generations"], limit=limit, left=max(0, limit - u["generations"]))
-    await m.answer(text, reply_markup=main_kb(lang))
+    used = u["generations"]
+    name_safe = html.escape(u.get("name") or "🙂")
+    intro_key = "msg_welcome_intro" if first_time else "msg_welcome"
+    text = tr(intro_key, lang, name=name_safe)
+    text += "\n\n" + tr("msg_welcome_plan_line", lang, plan=u.get("plan", "premium").capitalize(), used=used, limit=limit)
+    text += "\n" + _usage_bar(used, limit)
+    await m.answer(text, parse_mode="HTML", reply_markup=main_kb(lang, uid=m.from_user.id))
 
 
 @dp.message(Command("start"))
@@ -2181,7 +2251,7 @@ async def set_control_mode(m: Message, state: FSMContext):
     save_users()
     await state.clear()
     await m.answer(tr("msg_control_set_voice" if is_voice else "msg_control_set_buttons", lang))
-    await send_welcome(m, u, lang)
+    await send_welcome(m, u, lang, first_time=True)
 
 
 @dp.message(Form.waiting_control_mode)
@@ -2201,7 +2271,7 @@ async def cmd_cancel(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     await state.clear()
     finish_job(m.from_user.id)
-    await m.answer(tr("msg_cancelled", lang), reply_markup=main_kb(lang))
+    await m.answer(tr("msg_cancelled", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
 
 
 @dp.message(Command("menu"))
@@ -2215,7 +2285,7 @@ async def to_main_menu(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     await state.clear()
     finish_job(m.from_user.id)
-    await m.answer(tr("msg_main_menu", lang), reply_markup=main_kb(lang))
+    await m.answer(tr("msg_main_menu", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
 
 
 @dp.message(F.text.in_(ALL_BTN_PRES_LABELS))
@@ -2626,7 +2696,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                 raise ValueError("В ответе модели нет слайдов")
         except Exception as e:
             print("Presentation JSON parse error:", e)
-            await m.answer(tr("msg_no_text", lang, btn=tr("msg_start_pres_again", lang)), reply_markup=main_kb(lang))
+            await m.answer(tr("msg_no_text", lang, btn=tr("msg_start_pres_again", lang)), reply_markup=main_kb(lang, uid=m.from_user.id))
             await state.clear()
             return
 
@@ -2950,7 +3020,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                 pass
         await m.answer(
             tr("msg_pptx_ready", lang) + "\n\n" + await signature_line(lang),
-            reply_markup=main_kb(lang)
+            reply_markup=main_kb(lang, uid=m.from_user.id)
         )
         await state.clear()
     finally:
@@ -4483,11 +4553,11 @@ async def excel_build(m: Message, state: FSMContext):
             if parsed.get("_fx_note"):
                 note += f"\n\n💱 {parsed['_fx_note']}"
         note += "\n\n" + await signature_line(lang)
-        await m.answer(note, reply_markup=main_kb(lang))
+        await m.answer(note, reply_markup=main_kb(lang, uid=m.from_user.id))
         await state.clear()
     except Exception as e:
         print("Excel build error:", e)
-        await m.answer(tr("msg_build_error_table", lang), reply_markup=main_kb(lang))
+        await m.answer(tr("msg_build_error_table", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
         await state.clear()
     finally:
         finish_job(uid)
@@ -5076,7 +5146,7 @@ async def word_mode_template(m: Message, state: FSMContext):
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — шаблон: {KIND_LABELS.get(kind, kind)}")
         note_success(uid)
-        await m.answer(tr("msg_ready", lang) + "\n\n" + await signature_line(lang), reply_markup=main_kb(lang))
+        await m.answer(tr("msg_ready", lang) + "\n\n" + await signature_line(lang), reply_markup=main_kb(lang, uid=m.from_user.id))
         await state.clear()
     finally:
         finish_job(uid)
@@ -5333,7 +5403,7 @@ async def word_build(m: Message, state: FSMContext):
     except Exception as e:
         print("Word JSON parse error:", e)
         finish_job(uid)
-        await m.answer(tr("msg_no_text", lang, btn=WORD_KIND_LABELS.get(kind, {}).get(lang) or tr("msg_which_doc", lang)), reply_markup=main_kb(lang))
+        await m.answer(tr("msg_no_text", lang, btn=WORD_KIND_LABELS.get(kind, {}).get(lang) or tr("msg_which_doc", lang)), reply_markup=main_kb(lang, uid=m.from_user.id))
         await state.clear()
         return
 
@@ -5446,7 +5516,7 @@ async def word_build(m: Message, state: FSMContext):
         if kind not in STUDY_KINDS:
             final_msg += tr("msg_check_gaps", lang)
         final_msg += "\n\n" + await signature_line(lang)
-        await m.answer(final_msg, reply_markup=main_kb(lang))
+        await m.answer(final_msg, reply_markup=main_kb(lang, uid=m.from_user.id))
         await state.clear()
     finally:
         finish_job(uid)
@@ -5489,6 +5559,43 @@ async def start_collab(m: Message, state: FSMContext):
     await state.set_state(Form.waiting_collab_message)
 
 
+@dp.message(F.web_app_data)
+async def handle_miniapp_data(m: Message, state: FSMContext):
+    """Обрабатывает нажатия в Mini App - каждый пункт меню там при нажатии вызывает
+    Telegram.WebApp.sendData(...), и Telegram доставляет это боту как обычное сообщение
+    с заполненным m.web_app_data.data (JSON-строка вида {"action": "..."}). Дальше просто
+    вызывает ТЕ ЖЕ САМЫЕ функции, что и обычные текстовые кнопки - никакой отдельной
+    логики для Mini App не заводится, чтобы не дублировать и не рассинхронизировать
+    поведение между двумя способами навигации."""
+    try:
+        payload = json.loads(m.web_app_data.data)
+        action = (payload.get("action") or "").strip()
+    except Exception:
+        return
+    lang = user_lang(m.from_user.id)
+    u = get_user(m.from_user.id)
+
+    if action in ("mode_buttons", "mode_voice"):
+        u["control_mode"] = "voice" if action == "mode_voice" else "buttons"
+        u["control_mode_chosen"] = True
+        save_users()
+        await m.answer(tr("msg_control_set_voice" if action == "mode_voice" else "msg_control_set_buttons", lang))
+        await send_welcome(m, u, lang)
+        return
+
+    handlers_no_state = {"history": history, "plan": my_plan, "help": show_help}
+    handlers_with_state = {
+        "presentation": start_pres, "word": start_word, "excel": start_excel,
+        "template": start_word,  # шаблон - это подпункт внутри Word-раздела, не отдельная точка входа
+        "collab": start_collab,
+    }
+    if action in handlers_no_state:
+        await handlers_no_state[action](m)
+    elif action in handlers_with_state:
+        await handlers_with_state[action](m, state)
+
+
+
 @dp.message(Form.waiting_collab_message, F.text.in_(ALL_MAIN_MENU_LABELS))
 async def collab_cancel(m: Message, state: FSMContext):
     # Возврат в меню уже обработан общим хендлером to_main_menu (он зарегистрирован раньше
@@ -5496,7 +5603,7 @@ async def collab_cancel(m: Message, state: FSMContext):
     # оставлен только как явная страховка на случай будущих изменений порядка регистрации.
     lang = user_lang(m.from_user.id)
     await state.clear()
-    await m.answer(tr("msg_main_menu", lang), reply_markup=main_kb(lang))
+    await m.answer(tr("msg_main_menu", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
 
 
 @dp.message(Form.waiting_collab_message)
@@ -5515,7 +5622,7 @@ async def collab_message(m: Message, state: FSMContext):
         except Exception as e:
             print("Не удалось переслать сообщение о сотрудничестве админу:", admin_id, e)
     await state.clear()
-    await m.answer(tr("msg_collab_sent", lang), reply_markup=main_kb(lang))
+    await m.answer(tr("msg_collab_sent", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
 
 
 @dp.message(Command("grant"))
