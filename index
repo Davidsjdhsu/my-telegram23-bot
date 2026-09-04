@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Меню</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --text: #111111;
+    --hint: #707579;
+    --secondary-bg: #f4f4f5;
+    --accent: #3390ec;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    padding: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .card {
+    background: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+    border-radius: 16px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .greet-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .greet-name { font-size: 18px; font-weight: 600; margin: 0; }
+  .badge {
+    display: flex; align-items: center; gap: 4px;
+    background: #fdf1d1; color: #8a6d1a;
+    border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600;
+    flex-shrink: 0;
+  }
+  .greet-sub { font-size: 13px; color: var(--hint); margin: 0 0 12px; }
+  .usage-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--hint); margin-bottom: 4px; }
+  .usage-track { height: 6px; background: rgba(0,0,0,0.08); border-radius: 99px; overflow: hidden; margin-bottom: 14px; }
+  .usage-fill { height: 100%; background: var(--accent); border-radius: 99px; transition: width .3s; }
+  .toggle {
+    display: flex; gap: 4px; background: var(--secondary-bg); border-radius: 10px; padding: 3px;
+  }
+  .toggle button {
+    flex: 1; border: none; background: transparent; padding: 8px; border-radius: 8px;
+    font-size: 13px; font-weight: 600; color: var(--hint); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 5px;
+  }
+  .toggle button.active { background: var(--bg); color: var(--text); }
+  .section-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--hint); margin: 0 0 8px; padding: 0 2px;
+  }
+  .item-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+  .item {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--secondary-bg); border-radius: 14px; padding: 12px;
+    cursor: pointer; border: none; width: 100%; text-align: left; font-family: inherit;
+    -webkit-user-select: none; user-select: none;
+  }
+  .item:active { opacity: 0.6; }
+  .icon {
+    width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 20px;
+  }
+  .item-text { flex: 1; min-width: 0; }
+  .item-title { font-size: 14px; font-weight: 600; margin: 0; color: var(--text); }
+  .item-sub { font-size: 12px; margin: 1px 0 0; color: var(--hint); }
+  .chevron { color: var(--hint); font-size: 18px; flex-shrink: 0; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .grid-2 .item { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .grid-2 .item-title { font-size: 13px; }
+</style>
+</head>
+<body>
+
+  <div class="card">
+    <div class="greet-row">
+      <p class="greet-name" id="greetName">Здравствуйте 👋</p>
+      <div class="badge" id="planBadge">👑 Premium</div>
+    </div>
+    <p class="greet-sub">Что будем делать сегодня?</p>
+    <div class="usage-row">
+      <span>Использовано в этом месяце</span>
+      <span id="usageText">0 / 15</span>
+    </div>
+    <div class="usage-track"><div class="usage-fill" id="usageFill" style="width:0%"></div></div>
+    <div class="toggle">
+      <button id="btnModeButtons" class="active">👆 Кнопками</button>
+      <button id="btnModeVoice">🎙 Голосом</button>
+    </div>
+  </div>
+
+  <p class="section-label">Создать</p>
+  <div class="item-list">
+    <button class="item" data-action="presentation">
+      <div class="icon" style="background:#efe9fd">🎨</div>
+      <div class="item-text">
+        <p class="item-title">Презентация</p>
+        <p class="item-sub">Слайды с фото и графиками</p>
+      </div>
+      <span class="chevron">›</span>
+    </button>
+    <button class="item" data-action="word">
+      <div class="icon" style="background:#e8f1fd">📄</div>
+      <div class="item-text">
+        <p class="item-title">Word-документ</p>
+        <p class="item-sub">Договоры, рефераты, заявления</p>
+      </div>
+      <span class="chevron">›</span>
+    </button>
+    <button class="item" data-action="excel">
+      <div class="icon" style="background:#e8f8ee">📊</div>
+      <div class="item-text">
+        <p class="item-title">Excel-таблица</p>
+        <p class="item-sub">Сметы, бюджеты, расчёты</p>
+      </div>
+      <span class="chevron">›</span>
+    </button>
+    <button class="item" data-action="template">
+      <div class="icon" style="background:#fdf1e6">📥</div>
+      <div class="item-text">
+        <p class="item-title">Скачать шаблон</p>
+        <p class="item-sub">Пустой бланк для заполнения</p>
+      </div>
+      <span class="chevron">›</span>
+    </button>
+  </div>
+
+  <p class="section-label">Ещё</p>
+  <div class="grid-2">
+    <button class="item" data-action="history">
+      <div class="icon" style="background:#e6f6fb">📁</div>
+      <p class="item-title">История</p>
+    </button>
+    <button class="item" data-action="plan">
+      <div class="icon" style="background:#fdf1d1">👑</div>
+      <p class="item-title">Мой тариф</p>
+    </button>
+    <button class="item" data-action="help">
+      <div class="icon" style="background:#e8f1fd">❓</div>
+      <p class="item-title">Помощь</p>
+    </button>
+    <button class="item" data-action="collab">
+      <div class="icon" style="background:#fde8f0">🤝</div>
+      <p class="item-title">Сотрудничество</p>
+    </button>
+  </div>
+
+<script>
+  const tg = window.Telegram?.WebApp;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    const applyTheme = () => {
+      const p = tg.themeParams || {};
+      const root = document.documentElement.style;
+      if (p.bg_color) root.setProperty('--bg', p.bg_color);
+      if (p.text_color) root.setProperty('--text', p.text_color);
+      if (p.hint_color) root.setProperty('--hint', p.hint_color);
+      if (p.secondary_bg_color) root.setProperty('--secondary-bg', p.secondary_bg_color);
+      if (p.button_color) root.setProperty('--accent', p.button_color);
+    };
+    applyTheme();
+    tg.onEvent('themeChanged', applyTheme);
+  }
+
+  // Данные о пользователе передаёт сам бот через параметры адреса при открытии
+  // Mini App (?name=...&used=...&limit=...&plan=...&mode=...) - у статической
+  // страницы нет своего сервера и доступа к базе бота, поэтому актуальные цифры
+  // подставляются в момент формирования кнопки на стороне Python.
+  const params = new URLSearchParams(window.location.search);
+  const name = params.get('name') || (tg?.initDataUnsafe?.user?.first_name) || '';
+  const used = parseInt(params.get('used') || '0', 10);
+  const limit = parseInt(params.get('limit') || '15', 10);
+  const plan = params.get('plan') || 'Premium';
+  const mode = params.get('mode') || 'buttons';
+
+  document.getElementById('greetName').textContent = name ? `Здравствуйте, ${name} 👋` : 'Здравствуйте 👋';
+  document.getElementById('planBadge').textContent = `👑 ${plan}`;
+  document.getElementById('usageText').textContent = `${used} / ${limit}`;
+  document.getElementById('usageFill').style.width = `${Math.min(100, Math.round(100 * used / Math.max(limit, 1)))}%`;
+
+  if (mode === 'voice') {
+    document.getElementById('btnModeVoice').classList.add('active');
+    document.getElementById('btnModeButtons').classList.remove('active');
+  }
+
+  function sendAction(action) {
+    if (tg) {
+      tg.HapticFeedback?.impactOccurred('light');
+      tg.sendData(JSON.stringify({ action }));
+      tg.close();
+    } else {
+      // Открыто вне Telegram (например, для просмотра в обычном браузере при разработке)
+      alert('action: ' + action);
+    }
+  }
+
+  document.querySelectorAll('.item[data-action]').forEach(el => {
+    el.addEventListener('click', () => sendAction(el.dataset.action));
+  });
+
+  document.getElementById('btnModeButtons').addEventListener('click', () => sendAction('mode_buttons'));
+  document.getElementById('btnModeVoice').addEventListener('click', () => sendAction('mode_voice'));
+</script>
+
+</body>
+</html>
