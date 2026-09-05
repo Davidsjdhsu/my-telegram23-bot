@@ -40,6 +40,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from pypdf import PdfReader
 from PIL import Image, ImageOps, ImageEnhance, ImageChops, ImageStat, ImageFilter
 
 try:
@@ -424,13 +425,13 @@ TR = {
                      "zh": "完成！从现在起界面和文档都将使用该语言。👇", "es": "¡Listo! A partir de ahora la interfaz y los documentos estarán en este idioma. 👇",
                      "fr": "C'est fait ! Désormais l'interface et les documents seront dans cette langue. 👇"},
     "msg_welcome_intro": {
-        "ru": "Привет, {name} 👋\n\nЯ собираю красивые презентации, документы Word и таблицы Excel: текст, стиль и оформление — по твоей теме или из твоих данных. Можно печатать, а можно присылать голосовые — расшифрую сам 🎙\n\nНажми кнопку ниже и начнём.",
-        "en": "Hi, {name} 👋\n\nI put together polished presentations, Word documents and Excel tables: text, style and layout — from your topic or your own data. Type it in, or just send a voice message — I'll transcribe it myself 🎙\n\nTap a button below to start.",
-        "de": "Hallo, {name} 👋\n\nIch erstelle ansprechende Präsentationen, Word-Dokumente und Excel-Tabellen: Text, Stil und Layout — zu deinem Thema oder aus deinen Daten. Du kannst tippen oder einfach eine Sprachnachricht senden — ich transkribiere sie selbst 🎙\n\nTippe unten auf einen Button, um zu starten.",
-        "ar": "مرحباً {name} 👋\n\nأقوم بإعداد عروض تقديمية ومستندات Word وجداول Excel أنيقة: النص والنمط والتصميم — بناءً على موضوعك أو بياناتك. يمكنك الكتابة أو إرسال رسالة صوتية وسأقوم بتحويلها بنفسي 🎙\n\nاضغط الزر أدناه للبدء.",
-        "zh": "你好，{name} 👋\n\n我可以帮你制作精美的演示文稿、Word文档和Excel表格：根据你的主题或数据生成文本、风格和排版。你可以打字，也可以直接发语音——我会自动转成文字 🎙\n\n点击下方按钮开始吧。",
-        "es": "Hola, {name} 👋\n\nCreo presentaciones, documentos Word y tablas Excel cuidados: texto, estilo y diseño, a partir de tu tema o tus propios datos. Puedes escribir o simplemente enviar un mensaje de voz — yo lo transcribo 🎙\n\nToca un botón abajo para empezar.",
-        "fr": "Bonjour {name} 👋\n\nJe crée des présentations, des documents Word et des tableaux Excel soignés : texte, style et mise en page — à partir de votre sujet ou de vos propres données. Vous pouvez taper ou simplement envoyer un message vocal — je le transcris moi-même 🎙\n\nAppuyez sur un bouton ci-dessous pour commencer.",
+        "ru": "Привет, {name} 👋\n\nЯ умею две вещи:\n\n💬 Отвечать на вопросы и помогать с текстом — просто напишите сюда или пришлите голосовое, расшифрую сам 🎙\n📁 Собирать презентации, документы Word и таблицы Excel — с оформлением, под вашу тему или данные\n\nЗа документами и таблицами — в меню (кнопка «Меню» слева от поля ввода). Обо всём остальном — прямо здесь, в чате.",
+        "en": "Hi, {name} 👋\n\nI can do two things:\n\n💬 Answer questions and help with writing — just type here or send a voice message, I'll transcribe it myself 🎙\n📁 Put together presentations, Word documents and Excel tables — styled, from your topic or your data\n\nFor documents and tables — open the menu (the \"Menu\" button to the left of the message field). For everything else — right here in chat.",
+        "de": "Hallo, {name} 👋\n\nIch kann zwei Dinge:\n\n💬 Fragen beantworten und beim Schreiben helfen — einfach hier tippen oder eine Sprachnachricht senden, ich transkribiere sie selbst 🎙\n📁 Präsentationen, Word-Dokumente und Excel-Tabellen erstellen — mit Gestaltung, zu deinem Thema oder aus deinen Daten\n\nFür Dokumente und Tabellen — öffne das Menü (Button „Menü“ links neben dem Textfeld). Für alles andere — einfach hier im Chat.",
+        "ar": "مرحباً {name} 👋\n\nأستطيع فعل شيئين:\n\n💬 الإجابة على الأسئلة والمساعدة في الكتابة — فقط اكتب هنا أو أرسل رسالة صوتية، سأقوم بتحويلها بنفسي 🎙\n📁 إعداد عروض تقديمية ومستندات Word وجداول Excel أنيقة — بناءً على موضوعك أو بياناتك\n\nللمستندات والجداول — افتح القائمة (زر «القائمة» يسار حقل الرسالة). لكل شيء آخر — هنا في المحادثة مباشرة.",
+        "zh": "你好，{name} 👋\n\n我能做两件事：\n\n💬 回答问题、帮你写文字——直接在这里打字，或发语音消息，我会自动转成文字 🎙\n📁 制作精美的演示文稿、Word文档和Excel表格——根据你的主题或数据\n\n需要文档和表格——请打开菜单（消息框左侧的「菜单」按钮）。其他任何问题——直接在这里聊就行。",
+        "es": "Hola, {name} 👋\n\nPuedo hacer dos cosas:\n\n💬 Responder preguntas y ayudar a escribir — escribe aquí o envía un audio, yo lo transcribo 🎙\n📁 Crear presentaciones, documentos Word y tablas Excel cuidados — a partir de tu tema o tus datos\n\nPara documentos y tablas — abre el menú (botón «Menú» a la izquierda del campo de mensaje). Para todo lo demás — aquí mismo, en el chat.",
+        "fr": "Bonjour {name} 👋\n\nJe sais faire deux choses :\n\n💬 Répondre à vos questions et aider à rédiger — écrivez ici ou envoyez un message vocal, je le transcris moi-même 🎙\n📁 Créer des présentations, documents Word et tableaux Excel soignés — selon votre sujet ou vos données\n\nPour les documents et tableaux — ouvrez le menu (bouton « Menu » à gauche du champ de message). Pour tout le reste — directement ici, dans le chat.",
     },
     "msg_welcome": {
         "ru": "Здравствуйте, <b>{name}</b> 👋\n\nЧто будем делать сегодня?",
@@ -504,6 +505,51 @@ TR = {
         "zh": "🤝 <b>合作</b>\n\n关于合作、集成或批量定价的建议——请直接在这里写下你的想法，我会亲自阅读每条消息。",
         "es": "🤝 <b>Colaboración</b>\n\nPara propuestas de asociación, integraciones o tarifas por volumen, escribe aquí lo que te interesa. Leo todos los mensajes personalmente.",
         "fr": "🤝 <b>Partenariat</b>\n\nPour toute proposition de partenariat, d'intégration ou de tarif de gros, écrivez ici ce qui vous intéresse. Je lis chaque message personnellement.",
+    },
+    "msg_upload_unsupported": {
+        "ru": "Пока умею читать только PDF, Word (.docx) и PowerPoint (.pptx) — пришлите файл в одном из этих форматов.",
+        "en": "I can currently read PDF, Word (.docx) and PowerPoint (.pptx) files — please send the file in one of these formats.",
+        "de": "Ich kann derzeit nur PDF-, Word- (.docx) und PowerPoint-Dateien (.pptx) lesen — bitte sende die Datei in einem dieser Formate.",
+        "ar": "أستطيع حالياً قراءة ملفات PDF وWord (.docx) وPowerPoint (.pptx) فقط - يرجى إرسال الملف بأحد هذه الصيغ.",
+        "zh": "目前只能读取 PDF、Word（.docx）和 PowerPoint（.pptx）文件——请发送其中一种格式的文件。",
+        "es": "Por ahora solo puedo leer archivos PDF, Word (.docx) y PowerPoint (.pptx) — envía el archivo en uno de estos formatos.",
+        "fr": "Je ne sais lire que les fichiers PDF, Word (.docx) et PowerPoint (.pptx) pour l'instant — envoyez le fichier dans l'un de ces formats.",
+    },
+    "msg_upload_empty": {
+        "ru": "Не нашёл в файле текста для обработки — возможно, это скан или картинки без текстового слоя. Пришлите файл с настоящим текстом внутри.",
+        "en": "I couldn't find any text in this file — it might be a scan or images without a text layer. Please send a file with real text inside.",
+        "de": "Ich konnte keinen Text in der Datei finden — vielleicht ist es ein Scan oder Bilder ohne Textebene. Bitte sende eine Datei mit echtem Text.",
+        "ar": "لم أجد نصاً قابلاً للمعالجة في الملف - ربما يكون مسحاً ضوئياً أو صوراً بدون طبقة نصية. يرجى إرسال ملف يحتوي على نص حقيقي.",
+        "zh": "在文件里没有找到可处理的文字——可能是扫描件或没有文字层的图片。请发送包含真实文字的文件。",
+        "es": "No encontré texto para procesar en el archivo — puede ser un escaneo o imágenes sin capa de texto. Envía un archivo con texto real dentro.",
+        "fr": "Je n'ai trouvé aucun texte exploitable dans ce fichier — c'est peut-être un scan ou des images sans couche de texte. Envoyez un fichier contenant du vrai texte.",
+    },
+    "msg_upload_broken": {
+        "ru": "Не получилось открыть этот файл — возможно, он повреждён. Попробуйте прислать другой.",
+        "en": "Couldn't open this file — it might be corrupted. Please try sending another one.",
+        "de": "Die Datei konnte nicht geöffnet werden — sie ist möglicherweise beschädigt. Bitte versuche, eine andere zu senden.",
+        "ar": "تعذر فتح هذا الملف - قد يكون تالفاً. حاول إرسال ملف آخر.",
+        "zh": "无法打开该文件——可能已损坏。请尝试发送另一个文件。",
+        "es": "No se pudo abrir este archivo — puede estar dañado. Intenta enviar otro.",
+        "fr": "Impossible d'ouvrir ce fichier — il est peut-être corrompu. Essayez d'en envoyer un autre.",
+    },
+    "msg_upload_processing": {
+        "ru": "Читаю файл и собираю документ по нему — это может занять минуту-две ⏳",
+        "en": "Reading the file and putting together a document from it — this may take a minute or two ⏳",
+        "de": "Ich lese die Datei und erstelle daraus ein Dokument — das kann ein bis zwei Minuten dauern ⏳",
+        "ar": "أقرأ الملف وأُعِدّ مستنداً بناءً عليه - قد يستغرق هذا دقيقة أو دقيقتين ⏳",
+        "zh": "正在读取文件并据此生成文档——可能需要一两分钟 ⏳",
+        "es": "Leyendo el archivo y preparando un documento a partir de él — puede tardar uno o dos minutos ⏳",
+        "fr": "Lecture du fichier et préparation d'un document à partir de celui-ci — cela peut prendre une à deux minutes ⏳",
+    },
+    "msg_redirect_to_menu": {
+        "ru": "Похоже, вам нужен документ — а это как раз то, что я умею оформлять красиво 🙂\n\nЗагляните в меню (кнопка «Меню» слева от поля ввода) — там презентация, Word и Excel, и там же можно сразу поправить или дооформить готовый файл.",
+        "en": "Sounds like you need an actual document — that's exactly what I can put together nicely 🙂\n\nOpen the menu (the \"Menu\" button to the left of the message field) — presentations, Word and Excel are all there, and you can tweak the result right after it's made.",
+        "de": "Klingt, als bräuchtest du ein richtiges Dokument — genau das kann ich ansprechend gestalten 🙂\n\nÖffne das Menü (Button „Menü“ links neben dem Textfeld) — dort findest du Präsentation, Word und Excel, und du kannst das Ergebnis dort auch gleich anpassen.",
+        "ar": "يبدو أنك بحاجة إلى مستند حقيقي — وهذا بالضبط ما أستطيع إعداده بشكل أنيق 🙂\n\nافتح القائمة (زر «القائمة» يسار حقل الرسالة) — ستجد هناك العرض التقديمي وWord وExcel، ويمكنك تعديل النتيجة مباشرة بعد إنشائها.",
+        "zh": "看起来你需要一份正式文档——这正是我擅长精美制作的 🙂\n\n请打开菜单（消息框左侧的「菜单」按钮）——演示文稿、Word 和 Excel 都在那里，生成后还能直接调整。",
+        "es": "Parece que necesitas un documento de verdad — justo lo que puedo preparar con buen diseño 🙂\n\nAbre el menú (botón «Menú» a la izquierda del campo de mensaje) — ahí están presentación, Word y Excel, y puedes ajustar el resultado justo después de crearlo.",
+        "fr": "On dirait que vous avez besoin d'un vrai document — c'est justement ce que je sais bien mettre en forme 🙂\n\nOuvrez le menu (bouton « Menu » à gauche du champ de message) — présentation, Word et Excel sont là, et vous pouvez ajuster le résultat juste après.",
     },
     "msg_collab_sent": {
         "ru": "Спасибо, сообщение отправлено — отвечу вам напрямую в этот чат.",
@@ -1103,7 +1149,16 @@ class VoiceToTextMiddleware(BaseMiddleware):
     сообщение попадёт в конкретный хендлер. Благодаря этому ни один из существующих
     хендлеров (тема презентации, свои данные для Excel, сообщение для сотрудничества и
     т.д.) не пришлось переписывать под голос отдельно - они как читали m.text, так и
-    продолжают читать, просто теперь это может быть текст из голосового сообщения."""
+    продолжают читать, просто теперь это может быть текст из голосового сообщения.
+
+    ВАЖНО: регистрировать строго через outer_middleware(), не через middleware().
+    В aiogram обычная middleware() - "внутренняя": она срабатывает уже ПОСЛЕ того,
+    как aiogram подобрал хендлер по фильтрам, используя ИСХОДНОЕ сообщение (пустой
+    text, только voice). Хендлеры с фильтром по тексту (F.text, включая
+    free_chat_fallback) при этом не совпадут с пустым текстом - хендлер не найден,
+    подменять текст не для чего, голосовое вне активного сценария молча
+    игнорируется. outer_middleware() срабатывает ДО подбора хендлера - расшифровка
+    успевает произойти раньше, чем aiogram решает, какой хендлер вызывать."""
 
     async def __call__(self, handler, event, data):
         if isinstance(event, Message) and event.voice and not event.text:
@@ -1122,7 +1177,7 @@ class VoiceToTextMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
-dp.message.middleware(VoiceToTextMiddleware())
+dp.message.outer_middleware(VoiceToTextMiddleware())
 
 
 def can_generate(uid):
@@ -1423,8 +1478,95 @@ async def ask_grok(prompt: str, max_tokens: int = 4000) -> str:
         return f"{GROK_ERROR_PREFIX}{e}"
 
 
+def extract_text_from_docx(path: str) -> str:
+    doc = Document(path)
+    parts = [p.text for p in doc.paragraphs if p.text.strip()]
+    for table in doc.tables:
+        for row in table.rows:
+            parts.append(" | ".join(cell.text.strip() for cell in row.cells))
+    return "\n".join(parts)
+
+
+def extract_text_from_pptx(path: str) -> str:
+    prs = Presentation(path)
+    parts = []
+    for i, slide in enumerate(prs.slides, 1):
+        slide_lines = []
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape.text_frame.text.strip():
+                slide_lines.append(shape.text_frame.text.strip())
+            if shape.has_table:
+                for row in shape.table.rows:
+                    slide_lines.append(" | ".join(cell.text.strip() for cell in row.cells))
+        if slide_lines:
+            parts.append(f"Слайд {i}: " + " / ".join(slide_lines))
+    return "\n".join(parts)
+
+
+def extract_text_from_pdf(path: str) -> str:
+    reader = PdfReader(path)
+    parts = []
+    for page in reader.pages:
+        try:
+            t = page.extract_text() or ""
+        except Exception:
+            t = ""
+        if t.strip():
+            parts.append(t.strip())
+    return "\n".join(parts)
+
+
+# Максимум символов исходного текста, который реально имеет смысл отдавать в промпт -
+# дальше начинает страдать или качество (модель теряет фокус на длинном контексте),
+# или сам промпт становится слишком дорогим по токенам. Для файла с презентацией/докладом
+# среднего размера этого с большим запасом хватает; для книги на 300 страниц - нет,
+# но такое использование сюда и не предполагалось.
+MAX_UPLOAD_TEXT_CHARS = 18000
+
+
+def extract_text_from_upload(path: str, filename: str):
+    """Возвращает (текст, None) при успехе или (None, код_ошибки) при неудаче.
+    Коды ошибок: 'unsupported' (формат не поддержан), 'empty' (текста не нашлось,
+    например скан без OCR), 'broken' (файл повреждён или не открылся)."""
+    ext = (filename or "").lower().rsplit(".", 1)[-1] if "." in (filename or "") else ""
+    try:
+        if ext == "docx":
+            text = extract_text_from_docx(path)
+        elif ext == "pptx":
+            text = extract_text_from_pptx(path)
+        elif ext == "pdf":
+            text = extract_text_from_pdf(path)
+        else:
+            return None, "unsupported"
+    except Exception as e:
+        print("Ошибка извлечения текста из файла:", filename, e)
+        return None, "broken"
+    text = text.strip()
+    if not text:
+        return None, "empty"
+    return text[:MAX_UPLOAD_TEXT_CHARS], None
+
+
 def grok_failed(text: str) -> bool:
     return (text or "").startswith(GROK_ERROR_PREFIX)
+
+
+# Ключевые слова, по которым понимаем, что человек в свободном чате на самом деле хочет
+# документ, а не разговор - и должен быть отправлен в меню, а не получить ответ от ИИ.
+# Ловит русские и английские формулировки; для остальных языков бота эвристика слабее -
+# в этом случае человек просто получит обычный ответ чат-помощника, что тоже не страшно.
+DOCUMENT_INTENT_KEYWORDS = [
+    "презентац", "слайд", "доклад", "pptx", "power point", "powerpoint",
+    "word", "ворд", "докс", "docx", "реферат", "договор", "заявлени", "резюме",
+    "таблиц", "excel", "эксель", "xlsx", "смету", "смета", "формул",
+    "шаблон", "бланк",
+    "presentation", "slide", "spreadsheet", "resume", "cv ",
+]
+
+
+def looks_like_document_request(text: str) -> bool:
+    t = (text or "").lower()
+    return any(kw in t for kw in DOCUMENT_INTENT_KEYWORDS)
 
 
 async def ask_grok_chat(user_text: str, lang: str = "ru") -> str:
@@ -5703,6 +5845,9 @@ async def handle_miniapp_data(m: Message, state: FSMContext):
         text = (payload.get("text") or "").strip()
         if not text:
             return
+        if looks_like_document_request(text):
+            await m.answer(tr("msg_redirect_to_menu", lang))
+            return
         reply = await ask_grok_chat(text, lang)
         if reply:
             await m.answer(reply)
@@ -5767,6 +5912,110 @@ async def grant(m: Message):
         await m.answer("Формат: /grant user_id")
 
 
+@dp.message(StateFilter(None), F.document)
+async def document_upload(m: Message, state: FSMContext):
+    """Человек прислал файл (PDF/DOCX/PPTX), обычно с подписью вида "сделай реферат
+    по приложенной презентации". Читаем текст из файла и одним шагом собираем Word-
+    документ на его основе - в отличие от обычного сценария /word, здесь нет
+    черновика на согласование: сам факт присланного файла уже задаёт содержание,
+    план тут спрашивать не у кого. Совсем не найти этот хендлер сообщение не может
+    только если пользователь сейчас в другом активном сценарии (тогда есть более
+    специфичный обработчик состояния, который сработает раньше)."""
+    lang = user_lang(m.from_user.id)
+    uid = m.from_user.id
+    caption = (m.caption or "").strip()
+    instruction = caption or "Составь краткий реферат-конспект по содержимому этого файла."
+
+    if not can_afford(uid, CREDIT_COSTS["word"]):
+        await m.answer(tr("msg_limit", lang))
+        return
+    ok, reason = start_job(uid)
+    if not ok:
+        await m.answer(reason)
+        return
+
+    filename = m.document.file_name or "file"
+    local_path = f"/tmp/upload_{uid}_{random.randint(1000, 9999)}_{filename}"
+    try:
+        file_info = await bot.get_file(m.document.file_id)
+        await bot.download_file(file_info.file_path, local_path)
+    except Exception as e:
+        print("Ошибка скачивания файла от пользователя:", e)
+        finish_job(uid)
+        await m.answer(tr("msg_upload_broken", lang))
+        return
+
+    source_text, err = extract_text_from_upload(local_path, filename)
+    try:
+        if os.path.exists(local_path):
+            os.remove(local_path)
+    except Exception:
+        pass
+
+    if err:
+        finish_job(uid)
+        await m.answer(tr(f"msg_upload_{err}", lang))
+        return
+
+    await m.answer(tr("msg_upload_processing", lang))
+
+    low_instr = instruction.lower()
+    if "реферат" in low_instr:
+        kind = "referat"
+    elif "доклад" in low_instr:
+        kind = "report"
+    elif "эссе" in low_instr or "essay" in low_instr:
+        kind = "essay"
+    else:
+        kind = "doc"
+    kind_name = WORD_KIND_DESC.get(kind, "документ")
+    meta_schema = META_SCHEMAS.get(kind, META_SCHEMAS["doc"])
+    lang_instr = grok_json_lang_instruction(lang)
+
+    raw = await ask_grok(f"""Собери Word-документ на основе присланного пользователем файла: {kind_name}.
+Задача от пользователя: {instruction}
+Исходный материал (извлечён из присланного файла, может быть неидеально отформатирован построчно): 
+{source_text}
+На основе этого материала выполни задачу пользователя - напиши связный, содержательный текст, а не
+пересказывай материал построчно. Исправь ошибки, если они есть в исходнике.
+Не выдумывай факты, которых нет в материале и не следуют из него логично.
+Только JSON:
+{{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\\n\\nабзац2"}},{{"title":"...","content":"..."}}]}}{lang_instr}""",
+        max_tokens=8000)
+
+    try:
+        content = extract_json(raw)
+        if not isinstance(content.get("sections"), list) or not content["sections"]:
+            raise ValueError("В ответе модели нет разделов документа")
+    except Exception as e:
+        print("Ошибка разбора JSON при генерации из файла:", e)
+        finish_job(uid)
+        await m.answer(tr("msg_grok_error", lang), reply_markup=main_kb(lang, uid=uid))
+        return
+
+    u = get_user(uid)
+    docx_path = f"/tmp/upload_result_{uid}_{random.randint(1000, 9999)}.docx"
+    try:
+        build_word(docx_path, content.get("title") or kind_name, content["sections"], kind, content.get("meta") or {})
+        fname = safe_filename(content.get("title"), fallback=kind_name)
+        await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
+        u["generations"] += 1
+        spend_credits(uid, "word")
+        u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title') or kind_name} (из файла)")
+        save_users()
+        note_success(uid)
+    except Exception as e:
+        print("Ошибка сборки документа из файла:", e)
+        await m.answer(tr("msg_grok_error", lang), reply_markup=main_kb(lang, uid=uid))
+    finally:
+        finish_job(uid)
+        try:
+            if os.path.exists(docx_path):
+                os.remove(docx_path)
+        except Exception:
+            pass
+
+
 @dp.message(StateFilter(None), F.text)
 async def free_chat_fallback(m: Message, state: FSMContext):
     """Свободный чат-помощник вне сценариев генерации документов - тот же ответ,
@@ -5787,6 +6036,9 @@ async def free_chat_fallback(m: Message, state: FSMContext):
     if not text or text.startswith("/"):
         return
     lang = user_lang(m.from_user.id)
+    if looks_like_document_request(text):
+        await m.answer(tr("msg_redirect_to_menu", lang))
+        return
     reply = await ask_grok_chat(text, lang)
     if reply:
         await m.answer(reply)
