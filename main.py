@@ -10,7 +10,7 @@ import colorsys
 from collections import deque
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.types import (Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
                             WebAppInfo, MenuButtonWebApp, MenuButtonDefault)
 from aiogram.fsm.context import FSMContext
@@ -513,6 +513,15 @@ TR = {
         "zh": "谢谢，你的消息已发送——我会直接在此对话中回复你。",
         "es": "Gracias, tu mensaje fue enviado — te responderé directamente en este chat.",
         "fr": "Merci, votre message a été envoyé — je vous répondrai directement dans ce chat.",
+    },
+    "msg_chat_error": {
+        "ru": "Не получилось получить ответ, попробуйте ещё раз чуть позже.",
+        "en": "Couldn't get a reply, please try again a bit later.",
+        "de": "Antwort konnte nicht abgerufen werden, bitte versuche es später erneut.",
+        "ar": "تعذر الحصول على رد، جرّب مرة أخرى بعد قليل.",
+        "zh": "未能获取回复，请稍后再试。",
+        "es": "No se pudo obtener respuesta, inténtalo de nuevo más tarde.",
+        "fr": "Impossible d'obtenir une réponse, réessayez un peu plus tard.",
     },
     "msg_topup_notice": {
         "ru": "Автоматическая оплата кредитов пока подключается 🛠 Я передал ваш запрос — пополним баланс вручную и напишем вам сюда, как только всё будет готово.",
@@ -1821,12 +1830,10 @@ def build_miniapp_url(u):
 
 
 def main_kb(lang="ru", uid=None):
-    rows = []
-    if uid is not None:
-        miniapp_url = build_miniapp_url(get_user(uid))
-        if miniapp_url:
-            rows.append([KeyboardButton(text=tr("btn_open_miniapp", lang), web_app=WebAppInfo(url=miniapp_url))])
-    rows += [
+    # Кнопка открытия Mini App здесь больше не дублируется - её роль полностью
+    # взяла на себя нативная кнопка меню Telegram (см. sync_menu_button), которая
+    # висит слева от поля ввода постоянно и не занимает место в обычной клавиатуре.
+    rows = [
         [KeyboardButton(text=tr("btn_pres", lang))],
         [KeyboardButton(text=tr("btn_word", lang))],
         [KeyboardButton(text=tr("btn_excel", lang))],
@@ -2291,7 +2298,6 @@ async def send_welcome(m: Message, u: dict, lang: str, first_time: bool = False)
     intro_key = "msg_welcome_intro" if first_time else "msg_welcome"
     text = tr(intro_key, lang, name=name_safe)
     text += "\n\n" + tr("msg_welcome_plan_line", lang, credits=credits)
-    text += "\n" + _usage_bar(credits)
     await m.answer(text, parse_mode="HTML", reply_markup=main_kb(lang, uid=m.from_user.id))
 
 
@@ -5701,7 +5707,7 @@ async def handle_miniapp_data(m: Message, state: FSMContext):
         if reply:
             await m.answer(reply)
         else:
-            await m.answer(tr("msg_generation_error", lang) if "msg_generation_error" in TR else "Не получилось получить ответ, попробуйте ещё раз чуть позже.")
+            await m.answer(tr("msg_chat_error", lang))
         return
 
     handlers_no_state = {"history": history, "plan": my_plan, "help": show_help}
@@ -5759,6 +5765,33 @@ async def grant(m: Message):
         await m.answer(f"Доступ выдан пользователю {uid}, счётчик генераций сброшен")
     except (IndexError, ValueError):
         await m.answer("Формат: /grant user_id")
+
+
+@dp.message(StateFilter(None), F.text)
+async def free_chat_fallback(m: Message, state: FSMContext):
+    """Свободный чат-помощник вне сценариев генерации документов - тот же ответ,
+    что и action="chat" из Mini App (см. handle_miniapp_data), только доступный
+    прямо в обычном чате с ботом, без открытия Mini App.
+
+    Регистрируется САМЫМ ПОСЛЕДНИМ среди всех message-хендлеров и вдобавок
+    отфильтрован по StateFilter(None) - то есть до него в принципе не дойдёт
+    ни одно сообщение, если (а) текст совпал с какой-то кнопкой меню (у тех
+    хендлеров нет фильтра по состоянию, но конкретный текст уже наверняка не
+    совпадёт с произвольным вопросом пользователя) или (б) пользователь сейчас
+    находится в активном сценарии (Form.waiting_*) - там уже есть свои
+    хендлеры-ловцы "не годится, введите ещё раз" под каждое состояние, и они
+    зарегистрированы раньше в файле, так что имеют приоритет. Сюда попадает
+    только текст, который никто из более специфичных хендлеров не забрал, и
+    только когда пользователь не в середине никакого сценария."""
+    text = (m.text or "").strip()
+    if not text or text.startswith("/"):
+        return
+    lang = user_lang(m.from_user.id)
+    reply = await ask_grok_chat(text, lang)
+    if reply:
+        await m.answer(reply)
+    else:
+        await m.answer(tr("msg_chat_error", lang))
 
 
 @dp.errors()
