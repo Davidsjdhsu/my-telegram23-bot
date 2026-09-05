@@ -6220,9 +6220,39 @@ async def global_error_handler(event):
     return True
 
 
+def start_health_check_server():
+    """Render (и подобные платформы) для сервисов типа "Web Service" ждут, что
+    приложение ответит на HTTP-запрос проверки здоровья на порту из переменной
+    окружения PORT - иначе помечает деплой как неудавшийся, даже если сам бот
+    прекрасно работает через long-polling и никакого HTTP на самом деле не требует.
+    Этот сервер не имеет отношения к Mini App (та веб-страница отдельно живёт на
+    GitHub Pages) - он существует только чтобы Render видел "живой" сервис.
+    Работает в отдельном потоке на чистой стандартной библиотеке (без aiohttp),
+    чтобы не тянуть ещё одну внешнюю зависимость поверх и без того шаткого билда."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class _HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+        def log_message(self, format, *args):
+            pass  # не засорять логи бота запросами проверки здоровья
+
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"Health-check сервер запущен на порту {port}")
+
+
 async def main():
     print("Бот запущен")
     print("REPLICATE TOKEN:", "YES" if REPLICATE_API_TOKEN else "NO")
+    start_health_check_server()
     await dp.start_polling(bot)
 
 
