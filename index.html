@@ -7,6 +7,26 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<script async src="https://telegram.org/js/telegram-web-app.js" onerror="window.__tgLoadFailed=true;loadLocalTelegramFallback();"></script>
+<script>
+  // Основной скрипт telegram-web-app.js грузится с telegram.org (см. тег выше). Но
+  // onerror у <script> срабатывает только при ЯВНОМ сбое (404, обрыв соединения) - если
+  // сеть просто тихо роняет пакеты без внятного отказа (бывает при зажатых доменах),
+  // запрос повисает без события ошибки, и onerror не поможет. Поэтому дублируем проверку
+  // таймером: не дождались window.Telegram.WebApp за разумное время - берём копию с
+  // нашего же домена (GitHub Pages), не дожидаясь официального "провала".
+  var __localFallbackLoaded = false;
+  function loadLocalTelegramFallback() {
+    if (__localFallbackLoaded) return;
+    __localFallbackLoaded = true;
+    var s = document.createElement('script');
+    s.src = './telegram-web-app.js';
+    document.head.appendChild(s);
+  }
+  setTimeout(function () {
+    if (!window.Telegram || !window.Telegram.WebApp) loadLocalTelegramFallback();
+  }, 2500);
+</script>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body {
@@ -478,10 +498,10 @@
   // самому первому обращению (ready/expand) несколько попыток с паузой, а не сдаёмся сразу.
   function getTg() { return window.Telegram?.WebApp; }
 
-  (function initTelegramWithRetry(attemptsLeft = 6) {
+  (function initTelegramWithRetry(attemptsLeft = 20) {
     const tg = getTg();
     if (tg) { tg.ready(); tg.expand(); return; }
-    if (attemptsLeft > 0) setTimeout(() => initTelegramWithRetry(attemptsLeft - 1), 250);
+    if (attemptsLeft > 0) setTimeout(() => initTelegramWithRetry(attemptsLeft - 1), 300);
   })();
 
   // --- Данные пользователя из query-параметров ---
@@ -535,15 +555,19 @@
   const launchedFromTelegram = /tgWebAppData|tgWebAppPlatform/.test(location.hash) || /tgWebAppData/.test(location.search);
 
   // --- Отправка действия в бота (закрывает Mini App) ---
-  function sendAction(action, extra) {
+  function sendAction(action, extra, retriesLeft = 10) {
     const tg = getTg();
     if (tg) {
       tg.HapticFeedback?.impactOccurred('light');
       tg.sendData(JSON.stringify({ action, ...extra }));
       tg.close();
+    } else if (retriesLeft > 0) {
+      // Мост ещё не готов (могли нажать очень быстро, пока грузится резервный скрипт) -
+      // подождём немного перед тем, как сдаваться, а не отказывать сразу.
+      setTimeout(() => sendAction(action, extra, retriesLeft - 1), 300);
     } else if (launchedFromTelegram) {
-      // Мы точно внутри Telegram, но мост telegram-web-app.js не загрузился (плохая
-      // сеть) - честно говорим об этом, а не делаем вид, что действие ушло.
+      // Мы точно внутри Telegram, но мост telegram-web-app.js не догрузился даже за это
+      // время - честно говорим об этом, а не делаем вид, что действие ушло.
       alert('Не удалось связаться с Telegram — проверьте связь и откройте меню заново.');
     } else {
       // Открыто не из Telegram (например, тестовый просмотр в браузере) - это
