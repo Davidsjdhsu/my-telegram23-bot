@@ -9,3 +9,4 @@ python-docx==1.1.2
 openpyxl==3.1.2
 opencv-python-headless
 numpy
+pypdf
