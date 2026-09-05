@@ -3,208 +3,610 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Меню</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<title>Меню — Neon Glassmorphism</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg: #ffffff;
-    --text: #111111;
-    --hint: #707579;
-    --secondary-bg: #f4f4f5;
-    --accent: #3390ec;
-  }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  body {
-    margin: 0;
-    padding: 14px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg);
-    color: var(--text);
+  html, body {
+    margin: 0; min-height: 100%; background: #0d0b14; color: #f5f5f7;
+    font-family: 'Inter', -apple-system, sans-serif; -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
   }
-  .card {
-    background: var(--accent);
-    background: color-mix(in srgb, var(--accent) 12%, var(--bg));
-    border-radius: 16px;
-    padding: 16px;
-    margin-bottom: 16px;
+  .mono { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; }
+  .display { font-family: 'Space Grotesk', 'Inter', sans-serif; }
+
+  /* --- Фон --- */
+  .bg-root { position: relative; min-height: 100vh; }
+  .orb { position: fixed; border-radius: 50%; filter: blur(75px); pointer-events: none; z-index: 0; }
+  .orb1 { width: 300px; height: 300px; background: #8b5cf6; opacity: .5; top: -70px; left: -70px; }
+  .orb2 { width: 260px; height: 260px; background: #22d3ee; opacity: .38; top: 300px; right: -90px; }
+  .wrap { position: relative; z-index: 1; padding: 20px 18px 110px; max-width: 460px; margin: 0 auto; }
+
+  .glass { background: rgba(255,255,255,0.055); border: 1px solid rgba(255,255,255,0.13); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+
+  /* --- Шапка --- */
+  .greeting { font-size: 21px; font-weight: 700; margin: 0 0 16px; }
+
+  .limit-widget { border-radius: 18px; padding: 15px 17px; margin-bottom: 26px; display: flex; align-items: center; justify-content: space-between; }
+  .credits-left { display: flex; align-items: center; gap: 10px; }
+  .credits-icon { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, rgba(139,92,246,0.35), rgba(34,211,238,0.25)); display: flex; align-items: center; justify-content: center; }
+  .credits-icon svg { width: 18px; height: 18px; stroke: #d8d2ff; stroke-width: 1.7; fill: none; }
+  .credits-label { font-size: 11.5px; color: #9d97b0; margin: 0 0 1px; }
+  .credits-count { font-size: 17px; font-weight: 700; letter-spacing: .01em; }
+  .credits-topup {
+    padding: 8px 14px; border-radius: 12px; border: none; cursor: pointer; font-family: inherit;
+    font-size: 13px; font-weight: 600; color: #fff;
+    background: linear-gradient(135deg, #8b5cf6, #22d3ee);
   }
-  .greet-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
-  .greet-name { font-size: 18px; font-weight: 600; margin: 0; }
-  .badge {
-    display: flex; align-items: center; gap: 4px;
-    background: #fdf1d1; color: #8a6d1a;
-    border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600;
-    flex-shrink: 0;
+  .credits-topup:active { opacity: .8; }
+
+  /* --- Круговая шкала кредитов --- */
+  .gauge-widget { border-radius: 20px; padding: 18px; margin-bottom: 26px; }
+  .gauge-row { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+  .gauge-ring { width: 72px; height: 72px; flex-shrink: 0; position: relative; }
+  .gauge-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .gauge-ring .track { fill: none; stroke: rgba(255,255,255,0.09); stroke-width: 7; }
+  .gauge-ring .fill { fill: none; stroke: url(#gaugeGrad); stroke-width: 7; stroke-linecap: round; transition: stroke-dashoffset .6s ease; filter: drop-shadow(0 0 5px rgba(139,92,246,0.7)); }
+  .gauge-ring .num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; }
+  .gauge-info-label { font-size: 12px; color: #9d97b0; margin: 0 0 3px; }
+  .gauge-info-value { font-size: 16px; font-weight: 700; margin: 0 0 4px; }
+  .gauge-info-hint { font-size: 12px; color: #b8b3c7; margin: 0; }
+  .gauge-info-hint b { color: #d8d2ff; font-weight: 600; }
+  .gauge-topup {
+    width: 100%; padding: 11px; border-radius: 13px; border: none; cursor: pointer; font-family: inherit;
+    font-size: 13.5px; font-weight: 600; color: #fff;
+    background: linear-gradient(135deg, #8b5cf6, #22d3ee);
   }
-  .greet-sub { font-size: 13px; color: var(--hint); margin: 0 0 12px; }
-  .usage-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--hint); margin-bottom: 4px; }
-  .usage-track { height: 6px; background: rgba(0,0,0,0.08); border-radius: 99px; overflow: hidden; margin-bottom: 14px; }
-  .usage-fill { height: 100%; background: var(--accent); border-radius: 99px; transition: width .3s; }
-  .toggle {
-    display: flex; gap: 4px; background: var(--secondary-bg); border-radius: 10px; padding: 3px;
+  .gauge-topup:active { opacity: .8; }
+
+  /* --- Переключение экранов --- */
+  .screen { display: none; }
+  .screen.active { display: block; }
+
+  /* --- Чат-экран --- */
+  .chat-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .chat-badge-free {
+    font-size: 10.5px; font-weight: 700; letter-spacing: .03em; color: #86efac;
+    background: rgba(34,197,94,0.16); border: 1px solid rgba(34,197,94,0.3); padding: 3px 10px; border-radius: 99px;
   }
-  .toggle button {
-    flex: 1; border: none; background: transparent; padding: 8px; border-radius: 8px;
-    font-size: 13px; font-weight: 600; color: var(--hint); cursor: pointer;
-    display: flex; align-items: center; justify-content: center; gap: 5px;
+  .chat-sub { font-size: 13px; color: #9d97b0; margin: 4px 0 22px; }
+  .chat-bubble {
+    max-width: 84%; border-radius: 18px 18px 18px 4px; padding: 12px 15px; margin-bottom: 14px;
+    font-size: 14px; line-height: 1.45;
   }
-  .toggle button.active { background: var(--bg); color: var(--text); }
-  .section-label {
-    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
-    color: var(--hint); margin: 0 0 8px; padding: 0 2px;
+  .chat-bubble-assist { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); }
+  .chat-suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .chat-chip {
+    font-size: 12.5px; padding: 8px 14px; border-radius: 99px; cursor: pointer;
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.13); color: #d8d2ff;
   }
-  .item-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
-  .item {
-    display: flex; align-items: center; gap: 12px;
-    background: var(--secondary-bg); border-radius: 14px; padding: 12px;
-    cursor: pointer; border: none; width: 100%; text-align: left; font-family: inherit;
-    -webkit-user-select: none; user-select: none;
+  .chat-chip:active { background: rgba(255,255,255,0.12); }
+  .chat-input-bar {
+    position: fixed; left: 16px; right: 16px; bottom: 86px; z-index: 9; border-radius: 20px;
+    padding: 6px 6px 6px 16px; display: flex; align-items: center; gap: 8px;
+    background: rgba(24,20,36,0.85); border: 1px solid rgba(255,255,255,0.14);
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
   }
-  .item:active { opacity: 0.6; }
-  .icon {
-    width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center; font-size: 20px;
+  .chat-input-bar input {
+    flex: 1; background: none; border: none; outline: none; color: #fff; font-family: inherit; font-size: 14px; padding: 10px 0;
   }
-  .item-text { flex: 1; min-width: 0; }
-  .item-title { font-size: 14px; font-weight: 600; margin: 0; color: var(--text); }
-  .item-sub { font-size: 12px; margin: 1px 0 0; color: var(--hint); }
-  .chevron { color: var(--hint); font-size: 18px; flex-shrink: 0; }
-  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .grid-2 .item { flex-direction: column; align-items: flex-start; gap: 8px; }
-  .grid-2 .item-title { font-size: 13px; }
+  .chat-input-bar input::placeholder { color: #726c85; }
+  .chat-send {
+    width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0; border: none; cursor: pointer;
+    background: linear-gradient(135deg, #8b5cf6, #22d3ee); display: flex; align-items: center; justify-content: center;
+  }
+  .chat-send svg { width: 17px; height: 17px; stroke: #fff; stroke-width: 2.2; fill: none; }
+
+  /* --- Профиль --- */
+  .profile-row { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; }
+  .profile-avatar {
+    width: 56px; height: 56px; border-radius: 50%; flex-shrink: 0;
+    background: linear-gradient(135deg, #8b5cf6, #ec4899); display: flex; align-items: center; justify-content: center;
+    font-size: 22px; font-weight: 700; font-family: 'Space Grotesk', sans-serif;
+  }
+  .profile-name { font-size: 18px; font-weight: 700; margin: 0 0 2px; }
+  .profile-sub { font-size: 13px; color: #9d97b0; margin: 0; }
+  .history-item {
+    display: flex; align-items: center; gap: 12px; padding: 12px 4px;
+  }
+  .history-item:not(:last-child) { border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .history-icon { width: 36px; height: 36px; border-radius: 11px; background: rgba(255,255,255,0.07); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .history-icon svg { width: 17px; height: 17px; stroke: #b8b3c7; stroke-width: 1.7; fill: none; }
+  .history-name { font-size: 13.5px; font-weight: 500; }
+  .history-date { font-size: 11.5px; color: #726c85; }
+
+  /* --- Переключатель режима управления --- */
+  .mode-toggle { display: flex; gap: 4px; padding: 4px; border-radius: 14px; margin-bottom: 24px; }
+  .mode-btn {
+    flex: 1; border: none; background: none; padding: 10px 8px; border-radius: 11px; cursor: pointer;
+    font-family: inherit; font-size: 13px; font-weight: 600; color: #9d97b0;
+    display: flex; align-items: center; justify-content: center; gap: 7px; transition: all .2s ease;
+  }
+  .mode-btn svg { width: 16px; height: 16px; stroke-width: 1.8; fill: none; stroke: #9d97b0; }
+  .mode-btn.active { background: rgba(255,255,255,0.1); color: #fff; }
+  .mode-btn.active svg { stroke: #fff; }
+
+  .voice-hint { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-radius: 14px; margin-bottom: 18px; }
+  .voice-hint svg { width: 17px; height: 17px; stroke: #86efac; stroke-width: 1.8; fill: none; flex-shrink: 0; }
+  .voice-hint span { font-size: 12px; color: #b8b3c7; line-height: 1.4; }
+
+  .mic-btn {
+    width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0; border: none; cursor: pointer;
+    background: rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: center;
+  }
+  .mic-btn svg { width: 17px; height: 17px; stroke: #d8d2ff; stroke-width: 1.8; fill: none; }
+
+  /* --- Плитки Музыка/Картинки/Видео --- */
+  @keyframes pulse-glow {
+    0%, 100% { opacity: .55; transform: scale(1); }
+    50% { opacity: .9; transform: scale(1.18); }
+  }
+  .media-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+  .media-card {
+    border-radius: 20px; padding: 16px 10px 13px; min-height: 118px; position: relative; overflow: hidden;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center;
+    cursor: pointer; transition: transform .15s ease;
+  }
+  .media-card:active { transform: scale(0.93); }
+  .media-glow { position: absolute; width: 70px; height: 70px; border-radius: 50%; filter: blur(24px); top: -10px; animation: pulse-glow 3.2s ease-in-out infinite; }
+  .media-music .media-glow { background: #f472b6; }
+  .media-image .media-glow { background: #8b5cf6; }
+  .media-video .media-glow { background: #22d3ee; }
+  .media-icon { width: 36px; height: 36px; border-radius: 12px; display: flex; align-items: center; justify-content: center; position: relative; z-index: 1; }
+  .media-music .media-icon { background: rgba(244,114,182,0.22); }
+  .media-image .media-icon { background: rgba(139,92,246,0.22); }
+  .media-video .media-icon { background: rgba(34,211,238,0.22); }
+  .media-icon svg { width: 19px; height: 19px; stroke-width: 1.7; fill: none; }
+  .media-music .media-icon svg { stroke: #fbcfe8; }
+  .media-image .media-icon svg { stroke: #c4b5fd; }
+  .media-video .media-icon svg { stroke: #a5f3fc; }
+  .media-title { font-size: 12.5px; font-weight: 600; position: relative; z-index: 1; }
+  .media-cost {
+    font-size: 10.5px; font-weight: 600; color: #d8d2ff; position: relative; z-index: 1;
+    background: rgba(255,255,255,0.08); padding: 2px 8px; border-radius: 99px;
+  }
+  .badge-soon {
+    position: absolute; top: 8px; right: 8px; font-size: 8.5px; font-weight: 700; letter-spacing: .03em;
+    background: rgba(255,255,255,0.12); color: #d8d2ff; padding: 2px 6px; border-radius: 99px; z-index: 1;
+  }
+
+  /* --- Две главные карточки --- */
+  .hero-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .hero-card {
+    border-radius: 22px; padding: 20px 16px; min-height: 148px;
+    display: flex; flex-direction: column; justify-content: space-between;
+    cursor: pointer; position: relative; overflow: hidden;
+    transition: transform .15s ease;
+  }
+  .hero-card:active { transform: scale(0.95); }
+  .hero-glow { position: absolute; width: 90px; height: 90px; border-radius: 50%; filter: blur(30px); top: -20px; right: -20px; opacity: .6; }
+  .hero-1 .hero-glow { background: #8b5cf6; }
+  .hero-2 .hero-glow { background: #22c55e; }
+  .hero-icon { width: 34px; height: 34px; border-radius: 11px; display: flex; align-items: center; justify-content: center; position: relative; z-index: 1; }
+  .hero-1 .hero-icon { background: rgba(139,92,246,0.22); }
+  .hero-2 .hero-icon { background: rgba(34,197,94,0.22); }
+  .hero-icon svg { width: 19px; height: 19px; stroke-width: 1.7; fill: none; }
+  .hero-1 .hero-icon svg { stroke: #c4b5fd; }
+  .hero-2 .hero-icon svg { stroke: #86efac; }
+  .hero-title { font-size: 15px; font-weight: 600; position: relative; z-index: 1; }
+  .hero-sub { font-size: 11.5px; color: #9d97b0; margin-top: 2px; position: relative; z-index: 1; }
+  .hero-cost {
+    position: absolute; top: 14px; right: 14px; font-size: 10.5px; font-weight: 600; color: #d8d2ff; z-index: 1;
+    background: rgba(255,255,255,0.1); padding: 2px 8px; border-radius: 99px;
+  }
+
+  /* --- Смарт-папка --- */
+  .folder-card {
+    border-radius: 20px; padding: 17px 18px; margin-bottom: 28px;
+    display: flex; align-items: center; gap: 14px; cursor: pointer;
+    transition: transform .15s ease;
+  }
+  .folder-card:active { transform: scale(0.97); }
+  .folder-icon {
+    width: 46px; height: 46px; border-radius: 14px; flex-shrink: 0;
+    background: linear-gradient(135deg, rgba(139,92,246,0.35), rgba(34,211,238,0.25));
+    display: flex; align-items: center; justify-content: center;
+  }
+  .folder-icon svg { width: 23px; height: 23px; stroke: #d8d2ff; stroke-width: 1.6; fill: none; }
+  .folder-text { flex: 1; }
+  .folder-title { font-size: 15.5px; font-weight: 600; margin: 0 0 2px; }
+  .folder-sub { font-size: 12px; color: #9d97b0; margin: 0; }
+  .folder-chevron { color: #9d97b0; transform: rotate(90deg); transition: transform .3s ease; }
+  .folder-chevron svg { width: 16px; height: 16px; stroke-width: 2; fill: none; }
+
+  .section-label { font-size: 13px; font-weight: 600; color: #b8b3c7; margin: 0 0 12px; }
+
+  /* --- Модальное окно папки --- */
+  .modal-overlay {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(5,4,10,0.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    display: flex; align-items: flex-end; justify-content: center;
+    opacity: 0; pointer-events: none; transition: opacity .25s ease;
+  }
+  .modal-overlay.open { opacity: 1; pointer-events: auto; }
+  .modal-sheet {
+    width: 100%; max-width: 460px; border-radius: 24px 24px 0 0; padding: 10px 18px calc(22px + env(safe-area-inset-bottom));
+    background: rgba(22,19,32,0.92); border: 1px solid rgba(255,255,255,0.14); border-bottom: none;
+    backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+    transform: translateY(16px); transition: transform .3s cubic-bezier(.2,.8,.2,1);
+  }
+  .modal-overlay.open .modal-sheet { transform: translateY(0); }
+  .modal-handle { width: 36px; height: 4px; border-radius: 99px; background: rgba(255,255,255,0.25); margin: 8px auto 16px; }
+  .modal-title { font-size: 15px; font-weight: 600; margin: 0 0 14px; }
+  .modal-item {
+    display: flex; align-items: center; gap: 13px; padding: 13px 4px;
+    cursor: pointer; border: none; background: none; width: 100%; text-align: left; font-family: inherit; color: #fff;
+  }
+  .modal-item:not(:last-child) { border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .modal-item:active { opacity: .5; }
+  .modal-icon { width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .modal-icon svg { width: 19px; height: 19px; stroke-width: 1.7; fill: none; }
+  .m-purple { background: rgba(139,92,246,0.2); } .m-purple svg { stroke: #c4b5fd; }
+  .m-blue { background: rgba(56,189,248,0.2); } .m-blue svg { stroke: #7dd3fc; }
+  .m-green { background: rgba(34,197,94,0.2); } .m-green svg { stroke: #86efac; }
+  .m-amber { background: rgba(245,158,11,0.2); } .m-amber svg { stroke: #fcd34d; }
+  .modal-item-title { font-size: 15px; font-weight: 500; }
+  .modal-item-sub { font-size: 11.5px; color: #9d97b0; margin-top: 1px; }
+
+  /* --- Плавающая нижняя панель --- */
+  .tabbar-float {
+    position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 10; border-radius: 28px; padding: 8px 10px;
+    display: flex; align-items: center; justify-content: space-around;
+    background: rgba(24,20,36,0.75); border: 1px solid rgba(255,255,255,0.13);
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  }
+  .tab-item { display: flex; flex-direction: column; align-items: center; gap: 3px; color: #8b85a3; background: none; border: none; padding: 7px 16px; cursor: pointer; }
+  .tab-item svg { width: 20px; height: 20px; stroke-width: 1.7; fill: none; }
+  .tab-item.active { color: #fff; }
+  .tab-item span { font-size: 9.5px; font-weight: 500; }
 </style>
 </head>
 <body>
 
-  <div class="card">
-    <div class="greet-row">
-      <p class="greet-name" id="greetName">Здравствуйте 👋</p>
-      <div class="badge" id="planBadge">👑 Premium</div>
-    </div>
-    <p class="greet-sub">Что будем делать сегодня?</p>
-    <div class="usage-row">
-      <span>Использовано в этом месяце</span>
-      <span id="usageText">0 / 15</span>
-    </div>
-    <div class="usage-track"><div class="usage-fill" id="usageFill" style="width:0%"></div></div>
-    <div class="toggle">
-      <button id="btnModeButtons" class="active">👆 Кнопками</button>
-      <button id="btnModeVoice">🎙 Голосом</button>
-    </div>
-  </div>
+<svg width="0" height="0" style="position:absolute" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <defs>
+    <g id="i-presentation"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></g>
+    <g id="i-file"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/></g>
+    <g id="i-chart"><path d="M4 20V10M12 20V4M20 20v-7"/></g>
+    <g id="i-download"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></g>
+    <g id="i-help"><circle cx="12" cy="12" r="9"/><path d="M9.3 9a2.7 2.7 0 0 1 5.1 1.1c0 1.6-2.4 2.1-2.4 3.6"/><path d="M12 17.3v.01"/></g>
+    <g id="i-users"><circle cx="8.5" cy="8" r="3"/><path d="M2.5 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="8.3" r="2.4"/><path d="M15.7 14.1c2.4.4 4.3 2.5 4.3 5.9"/></g>
+    <g id="i-home"><path d="M3 11l9-7 9 7"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></g>
+    <g id="i-folder"><path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></g>
+    <g id="i-user"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3"/><path d="M6.3 19a6 6 0 0 1 11.4 0"/></g>
+    <g id="i-chevron"><path d="M9 6l6 6-6 6"/></g>
+    <g id="i-crown"><path d="M3 8l4 3 5-6 5 6 4-3-2 10H5z"/></g>
+    <g id="i-music"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></g>
+    <g id="i-image"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.8"/><path d="M21 15l-5-5L5 21"/></g>
+    <g id="i-video"><rect x="2" y="6" width="15" height="12" rx="2"/><path d="M17 10l5-3v10l-5-3z"/></g>
+    <g id="i-coin"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.2c0-1.2 1.1-2.2 2.5-2.2s2.5 1 2.5 2c0 1-.9 1.5-2 1.8-1.3.3-3 .8-3 2.2 0 1 1.1 2 2.5 2s2.5-1 2.5-2.2"/><path d="M12 6v1.3M12 16.7V18"/></g>
+    <g id="i-send"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></g>
+    <g id="i-sparkle"><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></g>
+    <g id="i-plus"><path d="M12 5v14M5 12h14"/></g>
+    <g id="i-mic"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></g>
+    <g id="i-tap"><path d="M9 12V5a1.5 1.5 0 0 1 3 0v5"/><path d="M12 10V4a1.5 1.5 0 0 1 3 0v6"/><path d="M15 10.5V6a1.5 1.5 0 0 1 3 0v8c0 3-2 6-6 6h-1c-3 0-4.5-1.5-6-4l-1.6-2.8a1.4 1.4 0 0 1 2.3-1.5L7 13"/></g>
+    <linearGradient id="gaugeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+</svg>
 
-  <p class="section-label">Создать</p>
-  <div class="item-list">
-    <button class="item" data-action="presentation">
-      <div class="icon" style="background:#efe9fd">🎨</div>
-      <div class="item-text">
-        <p class="item-title">Презентация</p>
-        <p class="item-sub">Слайды с фото и графиками</p>
-      </div>
-      <span class="chevron">›</span>
-    </button>
-    <button class="item" data-action="word">
-      <div class="icon" style="background:#e8f1fd">📄</div>
-      <div class="item-text">
-        <p class="item-title">Word-документ</p>
-        <p class="item-sub">Договоры, рефераты, заявления</p>
-      </div>
-      <span class="chevron">›</span>
-    </button>
-    <button class="item" data-action="excel">
-      <div class="icon" style="background:#e8f8ee">📊</div>
-      <div class="item-text">
-        <p class="item-title">Excel-таблица</p>
-        <p class="item-sub">Сметы, бюджеты, расчёты</p>
-      </div>
-      <span class="chevron">›</span>
-    </button>
-    <button class="item" data-action="template">
-      <div class="icon" style="background:#fdf1e6">📥</div>
-      <div class="item-text">
-        <p class="item-title">Скачать шаблон</p>
-        <p class="item-sub">Пустой бланк для заполнения</p>
-      </div>
-      <span class="chevron">›</span>
-    </button>
-  </div>
+<div class="bg-root">
+  <div class="orb orb1"></div>
+  <div class="orb orb2"></div>
 
-  <p class="section-label">Ещё</p>
-  <div class="grid-2">
-    <button class="item" data-action="history">
-      <div class="icon" style="background:#e6f6fb">📁</div>
-      <p class="item-title">История</p>
+  <div class="wrap">
+
+    <!-- ===== ЭКРАН: ЧАТ (главный, бесплатный) ===== -->
+    <div class="screen active" id="screen-chat">
+      <div class="chat-header">
+        <p class="greeting display" style="margin:0" id="greetName">Привет, Игорь! 👋</p>
+        <span class="chat-badge-free">БЕСПЛАТНО</span>
+      </div>
+      <p class="chat-sub">Я помощник бота — спросите что угодно, помогу разобраться или подскажу, что сделать</p>
+
+      <div class="chat-bubble chat-bubble-assist glass">
+        Здравствуйте! Я на связи и могу подсказать по любому вопросу — не обязательно по документам. Например, помогу составить план или просто отвечу на вопрос. Что вас интересует?
+      </div>
+
+      <div class="voice-hint glass">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-mic" xlink:href="#i-mic"/></svg>
+        <span>Можно не печатать — просто пришлите голосовое сообщение прямо в чат, я его расшифрую</span>
+      </div>
+
+      <div class="chat-suggestions">
+        <div class="chat-chip" data-fill="Как написать деловое письмо?">Как написать деловое письмо?</div>
+        <div class="chat-chip" data-fill="Помоги составить план проекта">Составить план проекта</div>
+        <div class="chat-chip" data-fill="Что ты умеешь?">Что ты умеешь?</div>
+      </div>
+    </div>
+
+    <!-- ===== ЭКРАН: СОЗДАТЬ (платное) ===== -->
+    <div class="screen" id="screen-create">
+      <p class="greeting display">Создать</p>
+
+      <div class="gauge-widget glass">
+        <div class="gauge-row">
+          <div class="gauge-ring">
+            <svg viewBox="0 0 80 80">
+              <circle class="track" cx="40" cy="40" r="33"/>
+              <circle class="fill" id="gaugeFill" cx="40" cy="40" r="33" stroke-dasharray="207.3" stroke-dashoffset="207.3"/>
+            </svg>
+            <div class="num mono" id="gaugeNum">128</div>
+          </div>
+          <div>
+            <p class="gauge-info-label">Баланс кредитов</p>
+            <p class="gauge-info-value mono" id="creditsCount">128 кредитов</p>
+            <p class="gauge-info-hint" id="creditsHint">Хватит примерно на <b>12 презентаций</b></p>
+          </div>
+        </div>
+        <button class="gauge-topup" data-action="topup">Пополнить баланс</button>
+      </div>
+
+      <p class="section-label">Форматы</p>
+      <div class="folder-card glass" id="folderDocsBtn">
+        <div class="folder-icon"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-folder" xlink:href="#i-folder"/></svg></div>
+        <div class="folder-text">
+          <p class="folder-title">Документы</p>
+          <p class="folder-sub">Презентация, Word, Excel</p>
+        </div>
+        <div class="folder-chevron"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron" xlink:href="#i-chevron"/></svg></div>
+      </div>
+
+      <div class="folder-card glass" id="folderMediaBtn">
+        <div class="folder-icon"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sparkle" xlink:href="#i-sparkle"/></svg></div>
+        <div class="folder-text">
+          <p class="folder-title">Медиа</p>
+          <p class="folder-sub">Музыка, картинка, видео · скоро</p>
+        </div>
+        <div class="folder-chevron"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron" xlink:href="#i-chevron"/></svg></div>
+      </div>
+    </div>
+
+    <!-- ===== ЭКРАН: ПРОФИЛЬ ===== -->
+    <div class="screen" id="screen-profile">
+      <p class="greeting display">Профиль</p>
+      <div class="profile-row">
+        <div class="profile-avatar" id="avatarInitial">?</div>
+        <div>
+          <p class="profile-name" id="profName">Игорь</p>
+          <p class="profile-sub"><span class="mono" id="profCredits">128</span> кредитов на балансе</p>
+        </div>
+      </div>
+
+      <p class="section-label">Способ управления</p>
+      <div class="mode-toggle glass">
+        <button class="mode-btn active" id="modeButtonsBtn">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-tap" xlink:href="#i-tap"/></svg>Кнопками
+        </button>
+        <button class="mode-btn" id="modeVoiceBtn">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-mic" xlink:href="#i-mic"/></svg>Голосом
+        </button>
+      </div>
+
+      <p class="section-label">Последние работы</p>
+      <div class="glass" style="border-radius:16px;padding:4px 14px" id="historyList"></div>
+      <p style="display:none;font-size:12px;color:#726c85;padding:6px 4px" id="historyEmpty">Пока ничего не создавали</p>
+
+      <p class="section-label" style="margin-top:22px">Поддержка</p>
+      <div class="folder-card glass" data-action="help" style="margin-bottom:12px">
+        <div class="folder-icon"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-help" xlink:href="#i-help"/></svg></div>
+        <div class="folder-text"><p class="folder-title" style="font-size:14px">Помощь</p></div>
+      </div>
+      <div class="folder-card glass" data-action="collab">
+        <div class="folder-icon"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users" xlink:href="#i-users"/></svg></div>
+        <div class="folder-text"><p class="folder-title" style="font-size:14px">Сотрудничество</p></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Модальное окно "Документы" -->
+<div class="modal-overlay" id="modalDocs">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <p class="modal-title">Выберите формат</p>
+    <button class="modal-item" data-action="presentation">
+      <div class="modal-icon m-purple"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-presentation" xlink:href="#i-presentation"/></svg></div>
+      <div><div class="modal-item-title">Презентация</div><div class="modal-item-sub">Слайды, фото, графики</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">10 кр.</span>
     </button>
-    <button class="item" data-action="plan">
-      <div class="icon" style="background:#fdf1d1">👑</div>
-      <p class="item-title">Мой тариф</p>
+    <button class="modal-item" data-action="word">
+      <div class="modal-icon m-blue"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-file" xlink:href="#i-file"/></svg></div>
+      <div><div class="modal-item-title">Word-документ</div><div class="modal-item-sub">Договоры, рефераты, заявления</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">5 кр.</span>
     </button>
-    <button class="item" data-action="help">
-      <div class="icon" style="background:#e8f1fd">❓</div>
-      <p class="item-title">Помощь</p>
+    <button class="modal-item" data-action="excel">
+      <div class="modal-icon m-green"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chart" xlink:href="#i-chart"/></svg></div>
+      <div><div class="modal-item-title">Excel-таблица</div><div class="modal-item-sub">Сметы, формулы, графики</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">5 кр.</span>
     </button>
-    <button class="item" data-action="collab">
-      <div class="icon" style="background:#fde8f0">🤝</div>
-      <p class="item-title">Сотрудничество</p>
+    <button class="modal-item" data-action="template">
+      <div class="modal-icon m-amber"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-download" xlink:href="#i-download"/></svg></div>
+      <div><div class="modal-item-title">Скачать шаблон</div><div class="modal-item-sub">Пустой бланк для заполнения</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">0 кр.</span>
     </button>
   </div>
+</div>
+
+<!-- Модальное окно "Медиа" -->
+<div class="modal-overlay" id="modalMedia">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <p class="modal-title">Выберите формат</p>
+    <button class="modal-item" data-action="music">
+      <div class="modal-icon" style="background:rgba(244,114,182,0.2)"><svg viewBox="0 0 24 24" stroke="#fbcfe8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-music" xlink:href="#i-music"/></svg></div>
+      <div><div class="modal-item-title">Музыка</div><div class="modal-item-sub">Скоро</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">10 кр.</span>
+    </button>
+    <button class="modal-item" data-action="image">
+      <div class="modal-icon m-purple"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-image" xlink:href="#i-image"/></svg></div>
+      <div><div class="modal-item-title">Картинка</div><div class="modal-item-sub">Скоро</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">10 кр.</span>
+    </button>
+    <button class="modal-item" data-action="video">
+      <div class="modal-icon" style="background:rgba(34,211,238,0.2)"><svg viewBox="0 0 24 24" stroke="#a5f3fc" stroke-linecap="round" stroke-linejoin="round"><use href="#i-video" xlink:href="#i-video"/></svg></div>
+      <div><div class="modal-item-title">Видео</div><div class="modal-item-sub">Скоро</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">20 кр.</span>
+    </button>
+  </div>
+</div>
+
+<!-- Строка ввода — видна только на экране чата -->
+<div class="chat-input-bar glass" id="chatInputBar">
+  <button class="mic-btn" id="micBtn"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-mic" xlink:href="#i-mic"/></svg></button>
+  <input type="text" id="chatInput" placeholder="Напишите сообщение...">
+  <button class="chat-send" id="chatSend"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-send" xlink:href="#i-send"/></svg></button>
+</div>
+
+<div class="tabbar-float">
+  <button class="tab-item active" data-tab="chat"><svg viewBox="0 0 24 24" stroke="#fff" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home" xlink:href="#i-home"/></svg><span>Чат</span></button>
+  <button class="tab-item" data-tab="create"><svg viewBox="0 0 24 24" stroke="#8b85a3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-plus" xlink:href="#i-plus"/></svg><span>Создать</span></button>
+  <button class="tab-item" data-tab="profile"><svg viewBox="0 0 24 24" stroke="#8b85a3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-user" xlink:href="#i-user"/></svg><span>Профиль</span></button>
+</div>
 
 <script>
   const tg = window.Telegram?.WebApp;
-  if (tg) {
-    tg.ready();
-    tg.expand();
-    const applyTheme = () => {
-      const p = tg.themeParams || {};
-      const root = document.documentElement.style;
-      if (p.bg_color) root.setProperty('--bg', p.bg_color);
-      if (p.text_color) root.setProperty('--text', p.text_color);
-      if (p.hint_color) root.setProperty('--hint', p.hint_color);
-      if (p.secondary_bg_color) root.setProperty('--secondary-bg', p.secondary_bg_color);
-      if (p.button_color) root.setProperty('--accent', p.button_color);
-    };
-    applyTheme();
-    tg.onEvent('themeChanged', applyTheme);
-  }
+  if (tg) { tg.ready(); tg.expand(); }
 
-  // Данные о пользователе передаёт сам бот через параметры адреса при открытии
-  // Mini App (?name=...&used=...&limit=...&plan=...&mode=...) - у статической
-  // страницы нет своего сервера и доступа к базе бота, поэтому актуальные цифры
-  // подставляются в момент формирования кнопки на стороне Python.
+  // --- Данные пользователя из query-параметров ---
   const params = new URLSearchParams(window.location.search);
-  const name = params.get('name') || (tg?.initDataUnsafe?.user?.first_name) || '';
-  const used = parseInt(params.get('used') || '0', 10);
-  const limit = parseInt(params.get('limit') || '15', 10);
-  const plan = params.get('plan') || 'Premium';
-  const mode = params.get('mode') || 'buttons';
+  const name = params.get('name') || (tg?.initDataUnsafe?.user?.first_name) || 'Игорь';
+  const credits = parseInt(params.get('credits') || '128', 10);
 
-  document.getElementById('greetName').textContent = name ? `Здравствуйте, ${name} 👋` : 'Здравствуйте 👋';
-  document.getElementById('planBadge').textContent = `👑 ${plan}`;
-  document.getElementById('usageText').textContent = `${used} / ${limit}`;
-  document.getElementById('usageFill').style.width = `${Math.min(100, Math.round(100 * used / Math.max(limit, 1)))}%`;
+  document.getElementById('greetName').textContent = `Привет, ${name}! 👋`;
+  document.getElementById('creditsCount').textContent = `${credits} кредитов`;
+  document.getElementById('profName').textContent = name;
+  document.getElementById('profCredits').textContent = credits;
+  document.getElementById('avatarInitial').textContent = name.trim()[0]?.toUpperCase() || '?';
 
-  if (mode === 'voice') {
-    document.getElementById('btnModeVoice').classList.add('active');
-    document.getElementById('btnModeButtons').classList.remove('active');
+  // --- История последних работ из query-параметра (JSON-массив строк вида "02.09 12:45 — Название") ---
+  let history = [];
+  try { history = JSON.parse(params.get('history') || '[]'); } catch (e) { history = []; }
+  const historyList = document.getElementById('historyList');
+  const historyEmpty = document.getElementById('historyEmpty');
+  if (history.length === 0) {
+    historyList.style.display = 'none';
+    historyEmpty.style.display = 'block';
+  } else {
+    history.slice(-8).reverse().forEach(entry => {
+      const div = document.createElement('div');
+      div.className = 'history-item';
+      const safe = document.createElement('div');
+      safe.textContent = entry;
+      div.innerHTML = `<div class="history-icon"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-file" xlink:href="#i-file"/></svg></div>
+        <div><div class="history-name"></div></div>`;
+      div.querySelector('.history-name').textContent = entry;
+      historyList.appendChild(div);
+    });
   }
 
-  function sendAction(action) {
+  // Круговая шкала: считаем "полным баком" условно 200 кредитов, плюс информативная подсказка
+  const GAUGE_MAX = 200;
+  const CIRC = 2 * Math.PI * 33; // ≈ 207.3
+  const pct = Math.max(0, Math.min(1, credits / GAUGE_MAX));
+  document.getElementById('gaugeFill').style.strokeDasharray = CIRC;
+  document.getElementById('gaugeFill').style.strokeDashoffset = CIRC * (1 - pct);
+  document.getElementById('gaugeNum').textContent = credits;
+
+  const presCount = Math.floor(credits / 10);
+  document.getElementById('creditsHint').innerHTML = presCount > 0
+    ? `Хватит примерно на <b>${presCount} презентаций</b>`
+    : `Кредитов не осталось — пора пополнить`;
+
+  // --- Отправка действия в бота (закрывает Mini App) ---
+  function sendAction(action, extra) {
     if (tg) {
       tg.HapticFeedback?.impactOccurred('light');
-      tg.sendData(JSON.stringify({ action }));
+      tg.sendData(JSON.stringify({ action, ...extra }));
       tg.close();
     } else {
-      // Открыто вне Telegram (например, для просмотра в обычном браузере при разработке)
-      alert('action: ' + action);
+      alert('action: ' + action + (extra ? ' ' + JSON.stringify(extra) : ''));
+      document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('open'));
     }
   }
 
-  document.querySelectorAll('.item[data-action]').forEach(el => {
-    el.addEventListener('click', () => sendAction(el.dataset.action));
+  function showSoon() {
+    tg?.HapticFeedback?.notificationOccurred('warning');
+    const msg = 'Эта функция ещё в разработке — скоро появится!';
+    if (tg?.showAlert) tg.showAlert(msg); else alert(msg);
+  }
+
+  const SOON_ACTIONS = ['music', 'image', 'video'];
+
+  document.querySelectorAll('[data-action]').forEach(el => {
+    el.addEventListener('click', () => {
+      if (SOON_ACTIONS.includes(el.dataset.action)) { showSoon(); return; }
+      sendAction(el.dataset.action);
+    });
   });
 
-  document.getElementById('btnModeButtons').addEventListener('click', () => sendAction('mode_buttons'));
-  document.getElementById('btnModeVoice').addEventListener('click', () => sendAction('mode_voice'));
+  // --- Папки: открытие/закрытие своих модалок ---
+  const modalDocs = document.getElementById('modalDocs');
+  const modalMedia = document.getElementById('modalMedia');
+  document.getElementById('folderDocsBtn').addEventListener('click', () => {
+    modalDocs.classList.add('open');
+    tg?.HapticFeedback?.impactOccurred('light');
+  });
+  document.getElementById('folderMediaBtn').addEventListener('click', () => {
+    modalMedia.classList.add('open');
+    tg?.HapticFeedback?.impactOccurred('light');
+  });
+  [modalDocs, modalMedia].forEach(overlay => {
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
+  });
+
+  // --- Переключение вкладок ---
+  const chatInputBar = document.getElementById('chatInputBar');
+  document.querySelectorAll('.tab-item').forEach(t => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.tab-item').forEach(x => { x.classList.remove('active'); x.querySelector('svg').setAttribute('stroke', '#8b85a3'); });
+      t.classList.add('active');
+      t.querySelector('svg').setAttribute('stroke', '#fff');
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      document.getElementById('screen-' + t.dataset.tab).classList.add('active');
+      chatInputBar.style.display = t.dataset.tab === 'chat' ? 'flex' : 'none';
+      window.scrollTo(0, 0);
+      tg?.HapticFeedback?.selectionChanged();
+    });
+  });
+
+  // --- Переключатель режима управления (реальное действие для бота) ---
+  const mode = params.get('mode') || 'buttons';
+  const modeButtonsBtn = document.getElementById('modeButtonsBtn');
+  const modeVoiceBtn = document.getElementById('modeVoiceBtn');
+  if (mode === 'voice') { modeVoiceBtn.classList.add('active'); modeButtonsBtn.classList.remove('active'); }
+  modeButtonsBtn.addEventListener('click', () => {
+    modeButtonsBtn.classList.add('active'); modeVoiceBtn.classList.remove('active');
+    sendAction('mode_buttons');
+  });
+  modeVoiceBtn.addEventListener('click', () => {
+    modeVoiceBtn.classList.add('active'); modeButtonsBtn.classList.remove('active');
+    sendAction('mode_voice');
+  });
+
+  // --- Микрофон в чате: запись звука прямо в Mini App невозможна (sendData передаёт только текст) ---
+  document.getElementById('micBtn').addEventListener('click', () => {
+    const msg = 'Mini App пока не умеет записывать звук — пришлите голосовое сообщение прямо в чат с ботом, оно расшифруется автоматически';
+    tg?.HapticFeedback?.impactOccurred('light');
+    if (tg?.showAlert) tg.showAlert(msg); else alert(msg);
+  });
+
+  // --- Чат: чипы-подсказки заполняют поле, кнопка отправки уходит в обычный чат бота ---
+  const chatInput = document.getElementById('chatInput');
+  document.querySelectorAll('.chat-chip').forEach(chip => {
+    chip.addEventListener('click', () => { chatInput.value = chip.dataset.fill; chatInput.focus(); });
+  });
+  document.getElementById('chatSend').addEventListener('click', () => {
+    const text = chatInput.value.trim();
+    if (!text) return;
+    sendAction('chat', { text });
+  });
 </script>
 
 </body>
