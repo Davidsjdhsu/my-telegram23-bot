@@ -472,12 +472,21 @@
 </div>
 
 <script>
-  const tg = window.Telegram?.WebApp;
-  if (tg) { tg.ready(); tg.expand(); }
+  // На медленной сети (видел живой случай на 3G) скрипт telegram-web-app.js может
+  // не успеть догрузиться к моменту первого рендера - поэтому не кэшируем window.Telegram.WebApp
+  // один раз в константу, а всегда получаем свежее значение через getTg(). Плюс даём
+  // самому первому обращению (ready/expand) несколько попыток с паузой, а не сдаёмся сразу.
+  function getTg() { return window.Telegram?.WebApp; }
+
+  (function initTelegramWithRetry(attemptsLeft = 6) {
+    const tg = getTg();
+    if (tg) { tg.ready(); tg.expand(); return; }
+    if (attemptsLeft > 0) setTimeout(() => initTelegramWithRetry(attemptsLeft - 1), 250);
+  })();
 
   // --- Данные пользователя из query-параметров ---
   const params = new URLSearchParams(window.location.search);
-  const name = params.get('name') || (tg?.initDataUnsafe?.user?.first_name) || 'Игорь';
+  const name = params.get('name') || (getTg()?.initDataUnsafe?.user?.first_name) || 'Игорь';
   const credits = parseInt(params.get('credits') || '128', 10);
 
   document.getElementById('greetName').textContent = `Привет, ${name}! 👋`;
@@ -520,19 +529,32 @@
     ? `Хватит примерно на <b>${presCount} презентаций</b>`
     : `Кредитов не осталось — пора пополнить`;
 
+  // Реальный признак того, что страницу открыл именно Telegram (а не мы сами тестируем
+  // в обычном браузере/артефакте) - Telegram всегда подставляет initData в хэш или
+  // query, даже если сам SDK-скрипт по какой-то причине не догрузился.
+  const launchedFromTelegram = /tgWebAppData|tgWebAppPlatform/.test(location.hash) || /tgWebAppData/.test(location.search);
+
   // --- Отправка действия в бота (закрывает Mini App) ---
   function sendAction(action, extra) {
+    const tg = getTg();
     if (tg) {
       tg.HapticFeedback?.impactOccurred('light');
       tg.sendData(JSON.stringify({ action, ...extra }));
       tg.close();
+    } else if (launchedFromTelegram) {
+      // Мы точно внутри Telegram, но мост telegram-web-app.js не загрузился (плохая
+      // сеть) - честно говорим об этом, а не делаем вид, что действие ушло.
+      alert('Не удалось связаться с Telegram — проверьте связь и откройте меню заново.');
     } else {
+      // Открыто не из Telegram (например, тестовый просмотр в браузере) - это
+      // ожидаемо, показываем действие как есть, для удобства тестирования.
       alert('action: ' + action + (extra ? ' ' + JSON.stringify(extra) : ''));
       document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('open'));
     }
   }
 
   function showSoon() {
+    const tg = getTg();
     tg?.HapticFeedback?.notificationOccurred('warning');
     const msg = 'Эта функция ещё в разработке — скоро появится!';
     if (tg?.showAlert) tg.showAlert(msg); else alert(msg);
@@ -552,11 +574,11 @@
   const modalMedia = document.getElementById('modalMedia');
   document.getElementById('folderDocsBtn').addEventListener('click', () => {
     modalDocs.classList.add('open');
-    tg?.HapticFeedback?.impactOccurred('light');
+    getTg()?.HapticFeedback?.impactOccurred('light');
   });
   document.getElementById('folderMediaBtn').addEventListener('click', () => {
     modalMedia.classList.add('open');
-    tg?.HapticFeedback?.impactOccurred('light');
+    getTg()?.HapticFeedback?.impactOccurred('light');
   });
   [modalDocs, modalMedia].forEach(overlay => {
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
@@ -573,7 +595,7 @@
       document.getElementById('screen-' + t.dataset.tab).classList.add('active');
       chatInputBar.style.display = t.dataset.tab === 'chat' ? 'flex' : 'none';
       window.scrollTo(0, 0);
-      tg?.HapticFeedback?.selectionChanged();
+      getTg()?.HapticFeedback?.selectionChanged();
     });
   });
 
@@ -593,6 +615,7 @@
 
   // --- Микрофон в чате: запись звука прямо в Mini App невозможна (sendData передаёт только текст) ---
   document.getElementById('micBtn').addEventListener('click', () => {
+    const tg = getTg();
     const msg = 'Mini App пока не умеет записывать звук — пришлите голосовое сообщение прямо в чат с ботом, оно расшифруется автоматически';
     tg?.HapticFeedback?.impactOccurred('light');
     if (tg?.showAlert) tg.showAlert(msg); else alert(msg);
