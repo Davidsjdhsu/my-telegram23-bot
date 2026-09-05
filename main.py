@@ -11,7 +11,8 @@ from collections import deque
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.filters import Command
-from aiogram.types import Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, WebAppInfo
+from aiogram.types import (Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+                            WebAppInfo, MenuButtonWebApp, MenuButtonDefault)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -369,6 +370,7 @@ TR = {
                      "ar": "🌐 اللغة", "zh": "🌐 语言", "es": "🌐 Idioma", "fr": "🌐 Langue"},
     "btn_open_miniapp": {"ru": "✨ Открыть меню", "en": "✨ Open menu", "de": "✨ Menü öffnen",
                          "ar": "✨ فتح القائمة", "zh": "✨ 打开菜单", "es": "✨ Abrir menú", "fr": "✨ Ouvrir le menu"},
+    "btn_menu_short": {"ru": "Меню", "en": "Menu", "de": "Menü", "ar": "القائمة", "zh": "菜单", "es": "Menú", "fr": "Menu"},
     "btn_same_as_interface": {"ru": "Как в интерфейсе ({iface_lang})", "en": "Same as interface ({iface_lang})", "de": "Wie die Oberfläche ({iface_lang})",
                               "ar": "نفس لغة الواجهة ({iface_lang})", "zh": "与界面语言相同（{iface_lang}）", "es": "Igual que la interfaz ({iface_lang})", "fr": "Comme l'interface ({iface_lang})"},
     "btn_main_menu": {"ru": "🏠 Главное меню", "en": "🏠 Main menu", "de": "🏠 Hauptmenü",
@@ -2255,11 +2257,35 @@ def _usage_bar(credits, full_reference=200, width=12):
     return "▓" * filled + "░" * (width - filled)
 
 
+async def sync_menu_button(chat_id: int, u: dict, lang: str):
+    """Настраивает нативную кнопку меню Telegram (та, что сидит слева от поля ввода
+    сообщения, а не внутри Mini App) - именно так это выглядит у GigaChat и других
+    ботов с Mini App. В отличие от кнопки в reply-клавиатуре (main_kb), эта кнопка
+    системная и не пропадает даже когда бот показывает ReplyKeyboardRemove или
+    пользователь свернул клавиатуру. Вызывается из send_welcome(), т.е. на каждый
+    /start, смену языка и смену режима управления - ссылка на Mini App внутри неё
+    несёт актуальные на тот момент кредиты/историю, но не обновляется на лету при
+    каждой генерации (Telegram не даёт события "открыли меню", чтобы пересчитать
+    её непосредственно перед открытием)."""
+    miniapp_url = build_miniapp_url(u)
+    try:
+        if miniapp_url:
+            await bot.set_chat_menu_button(
+                chat_id=chat_id,
+                menu_button=MenuButtonWebApp(text=tr("btn_menu_short", lang), web_app=WebAppInfo(url=miniapp_url))
+            )
+        else:
+            await bot.set_chat_menu_button(chat_id=chat_id, menu_button=MenuButtonDefault())
+    except Exception as e:
+        print("Не удалось установить кнопку меню чата:", chat_id, e)
+
+
 async def send_welcome(m: Message, u: dict, lang: str, first_time: bool = False):
     """Приветствие с именем и балансом кредитов - используется и при /start
     у уже знакомых пользователей (короткая форма), и сразу после выбора языка/режима
     управления в самый первый раз (first_time=True - разворачивается в объяснение,
     что вообще умеет бот, раз человек видит его впервые)."""
+    await sync_menu_button(m.from_user.id, u, lang)
     credits = u.get("credits", STARTING_CREDITS)
     name_safe = html.escape(u.get("name") or "🙂")
     intro_key = "msg_welcome_intro" if first_time else "msg_welcome"
