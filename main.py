@@ -180,6 +180,15 @@ dp = Dispatcher(storage=MemoryStorage())
 USERS_FILE = os.path.join(BASE_DIR, "users.json")
 PLAN_LIMITS = {"premium": 15}
 
+# --- Кредиты ----------------------------------------------------------------
+# Новая модель монетизации поверх старой: вместо единого лимита генераций в
+# месяц - баланс кредитов, который тратится по конкретной цене за каждый
+# формат. PLAN_LIMITS выше оставлен как есть (на него по-прежнему смотрит
+# статистика /grant и старая логика), но реальный допуск к генерации теперь
+# решает can_afford() ниже, а не can_generate().
+CREDIT_COSTS = {"presentation": 10, "word": 5, "excel": 5, "template": 0}
+STARTING_CREDITS = 50  # стартовый баланс для новых пользователей - подобрать под реальную экономику отдельно
+
 
 def load_users():
     """Читает users.json после рестарта, чтобы не обнулялись язык, тариф и история."""
@@ -413,13 +422,13 @@ TR = {
                      "zh": "完成！从现在起界面和文档都将使用该语言。👇", "es": "¡Listo! A partir de ahora la interfaz y los documentos estarán en este idioma. 👇",
                      "fr": "C'est fait ! Désormais l'interface et les documents seront dans cette langue. 👇"},
     "msg_welcome_intro": {
-        "ru": "Привет, {name} 👋\n\nЯ собираю красивые презентации, документы Word и таблицы Excel: текст, стиль и оформление — по твоей теме или из твоих данных.\n\nНажми кнопку ниже и начнём.",
-        "en": "Hi, {name} 👋\n\nI put together polished presentations, Word documents and Excel tables: text, style and layout — from your topic or your own data.\n\nTap a button below to start.",
-        "de": "Hallo, {name} 👋\n\nIch erstelle ansprechende Präsentationen, Word-Dokumente und Excel-Tabellen: Text, Stil und Layout — zu deinem Thema oder aus deinen Daten.\n\nTippe unten auf einen Button, um zu starten.",
-        "ar": "مرحباً {name} 👋\n\nأقوم بإعداد عروض تقديمية ومستندات Word وجداول Excel أنيقة: النص والنمط والتصميم — بناءً على موضوعك أو بياناتك.\n\nاضغط الزر أدناه للبدء.",
-        "zh": "你好，{name} 👋\n\n我可以帮你制作精美的演示文稿、Word文档和Excel表格：根据你的主题或数据生成文本、风格和排版。\n\n点击下方按钮开始吧。",
-        "es": "Hola, {name} 👋\n\nCreo presentaciones, documentos Word y tablas Excel cuidados: texto, estilo y diseño, a partir de tu tema o tus propios datos.\n\nToca un botón abajo para empezar.",
-        "fr": "Bonjour {name} 👋\n\nJe crée des présentations, des documents Word et des tableaux Excel soignés : texte, style et mise en page — à partir de votre sujet ou de vos propres données.\n\nAppuyez sur un bouton ci-dessous pour commencer.",
+        "ru": "Привет, {name} 👋\n\nЯ собираю красивые презентации, документы Word и таблицы Excel: текст, стиль и оформление — по твоей теме или из твоих данных. Можно печатать, а можно присылать голосовые — расшифрую сам 🎙\n\nНажми кнопку ниже и начнём.",
+        "en": "Hi, {name} 👋\n\nI put together polished presentations, Word documents and Excel tables: text, style and layout — from your topic or your own data. Type it in, or just send a voice message — I'll transcribe it myself 🎙\n\nTap a button below to start.",
+        "de": "Hallo, {name} 👋\n\nIch erstelle ansprechende Präsentationen, Word-Dokumente und Excel-Tabellen: Text, Stil und Layout — zu deinem Thema oder aus deinen Daten. Du kannst tippen oder einfach eine Sprachnachricht senden — ich transkribiere sie selbst 🎙\n\nTippe unten auf einen Button, um zu starten.",
+        "ar": "مرحباً {name} 👋\n\nأقوم بإعداد عروض تقديمية ومستندات Word وجداول Excel أنيقة: النص والنمط والتصميم — بناءً على موضوعك أو بياناتك. يمكنك الكتابة أو إرسال رسالة صوتية وسأقوم بتحويلها بنفسي 🎙\n\nاضغط الزر أدناه للبدء.",
+        "zh": "你好，{name} 👋\n\n我可以帮你制作精美的演示文稿、Word文档和Excel表格：根据你的主题或数据生成文本、风格和排版。你可以打字，也可以直接发语音——我会自动转成文字 🎙\n\n点击下方按钮开始吧。",
+        "es": "Hola, {name} 👋\n\nCreo presentaciones, documentos Word y tablas Excel cuidados: texto, estilo y diseño, a partir de tu tema o tus propios datos. Puedes escribir o simplemente enviar un mensaje de voz — yo lo transcribo 🎙\n\nToca un botón abajo para empezar.",
+        "fr": "Bonjour {name} 👋\n\nJe crée des présentations, des documents Word et des tableaux Excel soignés : texte, style et mise en page — à partir de votre sujet ou de vos propres données. Vous pouvez taper ou simplement envoyer un message vocal — je le transcris moi-même 🎙\n\nAppuyez sur un bouton ci-dessous pour commencer.",
     },
     "msg_welcome": {
         "ru": "Здравствуйте, <b>{name}</b> 👋\n\nЧто будем делать сегодня?",
@@ -431,13 +440,13 @@ TR = {
         "fr": "Bonjour <b>{name}</b> 👋\n\nQue fait-on aujourd'hui ?",
     },
     "msg_welcome_plan_line": {
-        "ru": "👑 {plan} · использовано {used} из {limit}",
-        "en": "👑 {plan} · used {used} of {limit}",
-        "de": "👑 {plan} · verwendet {used} von {limit}",
-        "ar": "👑 {plan} · تم استخدام {used} من {limit}",
-        "zh": "👑 {plan} · 已使用 {used}/{limit}",
-        "es": "👑 {plan} · usado {used} de {limit}",
-        "fr": "👑 {plan} · utilisé {used} sur {limit}",
+        "ru": "💳 Баланс: {credits} кредитов",
+        "en": "💳 Balance: {credits} credits",
+        "de": "💳 Guthaben: {credits} Credits",
+        "ar": "💳 الرصيد: {credits} كريدت",
+        "zh": "💳 余额：{credits} 积分",
+        "es": "💳 Saldo: {credits} créditos",
+        "fr": "💳 Solde : {credits} crédits",
     },
     "msg_main_menu": {"ru": "Главное меню 👇", "en": "Main menu 👇", "de": "Hauptmenü 👇", "ar": "القائمة الرئيسية 👇",
                       "zh": "主菜单 👇", "es": "Menú principal 👇", "fr": "Menu principal 👇"},
@@ -502,6 +511,15 @@ TR = {
         "zh": "谢谢，你的消息已发送——我会直接在此对话中回复你。",
         "es": "Gracias, tu mensaje fue enviado — te responderé directamente en este chat.",
         "fr": "Merci, votre message a été envoyé — je vous répondrai directement dans ce chat.",
+    },
+    "msg_topup_notice": {
+        "ru": "Автоматическая оплата кредитов пока подключается 🛠 Я передал ваш запрос — пополним баланс вручную и напишем вам сюда, как только всё будет готово.",
+        "en": "Automatic credit top-up is still being set up 🛠 I've passed on your request — we'll add credits manually and message you here once it's done.",
+        "de": "Die automatische Aufladung wird gerade eingerichtet 🛠 Deine Anfrage wurde weitergeleitet — wir laden das Guthaben manuell auf und melden uns hier.",
+        "ar": "الشحن التلقائي للرصيد قيد الإعداد 🛠 تم إرسال طلبك - سنضيف الرصيد يدوياً ونراسلك هنا.",
+        "zh": "自动充值功能正在接入中 🛠 已收到你的请求——我们会手动充值并在这里通知你。",
+        "es": "La recarga automática de créditos aún se está configurando 🛠 Envié tu solicitud — añadiremos el saldo manualmente y te escribiremos aquí.",
+        "fr": "La recharge automatique de crédits est en cours de mise en place 🛠 Votre demande a été transmise — nous ajouterons le solde manuellement et vous écrirons ici.",
     },
     "msg_cancelled": {"ru": "Отменил текущее действие. Начнём заново 👇", "en": "Cancelled the current action. Let's start over 👇",
                       "de": "Aktuelle Aktion abgebrochen. Fangen wir neu an 👇", "ar": "تم إلغاء الإجراء الحالي. لنبدأ من جديد 👇",
@@ -822,13 +840,13 @@ TR = {
                              "zh": "没能理解。请用下方按钮选择操作，或输入 /cancel 重新开始。",
                              "es": "No entendí. Elige una acción con el botón de abajo, o escribe /cancel para empezar de nuevo.",
                              "fr": "Je n'ai pas compris. Choisis une action avec le bouton ci-dessous, ou tape /cancel pour recommencer."},
-    "msg_plan_info": {"ru": "ℹ️ Генераций: {used} из {limit}\nОсталось: {left}",
-                      "en": "ℹ️ Generations: {used} of {limit}\nRemaining: {left}",
-                      "de": "ℹ️ Generierungen: {used} von {limit}\nVerbleibend: {left}",
-                      "ar": "ℹ️ التوليدات: {used} من {limit}\nالمتبقي: {left}",
-                      "zh": "ℹ️ 生成次数：{used} / {limit}\n剩余：{left}",
-                      "es": "ℹ️ Generaciones: {used} de {limit}\nRestantes: {left}",
-                      "fr": "ℹ️ Générations : {used} sur {limit}\nRestant : {left}"},
+    "msg_plan_info": {"ru": "💳 Баланс: {credits} кредитов\nПрезентация — 10 кр. · Word/Excel — 5 кр. · шаблон бесплатно",
+                      "en": "💳 Balance: {credits} credits\nPresentation — 10 cr. · Word/Excel — 5 cr. · template is free",
+                      "de": "💳 Guthaben: {credits} Credits\nPräsentation — 10 Cr. · Word/Excel — 5 Cr. · Vorlage kostenlos",
+                      "ar": "💳 الرصيد: {credits} كريدت\nعرض تقديمي — 10 · وورد/إكسل — 5 · القالب مجاني",
+                      "zh": "💳 余额：{credits} 积分\n演示文稿 — 10 积分 · Word/Excel — 5 积分 · 模板免费",
+                      "es": "💳 Saldo: {credits} créditos\nPresentación — 10 cr. · Word/Excel — 5 cr. · plantilla gratis",
+                      "fr": "💳 Solde : {credits} crédits\nPrésentation — 10 cr. · Word/Excel — 5 cr. · modèle gratuit"},
     "msg_pptx_ready": {
         "ru": "Готово ✅\n\nОткрывай именно PPTX в PowerPoint, Keynote или Google Презентациях.\n\nЕсли на телефоне все фото одинаковые, это не ошибка файла. Так бывает в предпросмотре Telegram, WPS и встроенных «Документах». Открой тот же файл на другом устройстве или в нормальном редакторе презентаций.",
         "en": "Done ✅\n\nOpen the PPTX file specifically in PowerPoint, Keynote, or Google Slides.\n\nIf all the photos look the same on your phone, that's not a file error. This happens in Telegram's preview, WPS, and built-in \"Files\" apps. Open the same file on another device or in a proper presentation editor.",
@@ -1028,7 +1046,12 @@ def pick_theme(topic: str):
 def get_user(uid):
     if uid not in users_db:
         users_db[uid] = {"name": "", "plan": "premium", "generations": 0, "history": [], "busy": False,
-                          "lang": "ru", "lang_chosen": False, "control_mode": "buttons", "control_mode_chosen": False}
+                          "lang": "ru", "lang_chosen": False, "control_mode": "buttons", "control_mode_chosen": False,
+                          "credits": STARTING_CREDITS}
+        save_users()
+    elif "credits" not in users_db[uid]:
+        # существующие пользователи с прошлой версии бота - выдаём тот же стартовый баланс один раз
+        users_db[uid]["credits"] = STARTING_CREDITS
         save_users()
     return users_db[uid]
 
@@ -1094,6 +1117,22 @@ dp.message.middleware(VoiceToTextMiddleware())
 def can_generate(uid):
     u = get_user(uid)
     return u["generations"] < PLAN_LIMITS.get(u["plan"], 15)
+
+
+def can_afford(uid, cost):
+    """Хватает ли у пользователя кредитов на конкретное действие. cost=0 (шаблон)
+    всегда проходит, даже с пустым балансом."""
+    return get_user(uid).get("credits", 0) >= cost
+
+
+def spend_credits(uid, action):
+    """Списывает стоимость завершённой генерации. Вызывать один раз, сразу после
+    того как результат уже отправлен пользователю - до этого момента ошибка
+    генерации не должна списывать кредиты."""
+    u = get_user(uid)
+    cost = CREDIT_COSTS.get(action, 0)
+    u["credits"] = max(0, u.get("credits", 0) - cost)
+    return u["credits"]
 
 
 # --- Защита от флуда и DDoS ------------------------------------------------
@@ -1375,6 +1414,30 @@ async def ask_grok(prompt: str, max_tokens: int = 4000) -> str:
 
 def grok_failed(text: str) -> bool:
     return (text or "").startswith(GROK_ERROR_PREFIX)
+
+
+async def ask_grok_chat(user_text: str, lang: str = "ru") -> str:
+    """Отдельная функция для бесплатного чат-помощника (кнопка "Чат" в Mini App и
+    просто свободные сообщения боту вне сценариев генерации документов). Использует
+    того же клиента и модель, что и ask_grok(), но с обычным системным промптом
+    помощника, а не "арт-директора презентаций" - иначе ответы на посторонние
+    вопросы неуместно тянуло бы в сторону слайдов и заголовков."""
+    lang_names = {"ru": "русском", "en": "английском", "de": "немецком", "ar": "арабском",
+                  "zh": "китайском", "es": "испанском", "fr": "французском"}
+    try:
+        r = await client.chat.completions.create(
+            model="grok-3",
+            messages=[
+                {"role": "system", "content": f"Ты дружелюбный помощник в Telegram-боте, который умеет генерировать презентации, Word-документы и Excel-таблицы. Сейчас с тобой общаются в свободном чате вне этих сценариев - отвечай на любые вопросы полезно и по существу, обычным живым языком, без канцелярита. Если вопрос действительно ближе к тому, что умеет бот (составить документ, таблицу, презентацию) - можешь мягко подсказать, что для этого в главном меню есть отдельные разделы, но не отказывай в самом ответе. Отвечай на {lang_names.get(lang, 'русском')} языке. Держи ответ по существу и не слишком длинным - это чат в Telegram, а не документ."},
+                {"role": "user", "content": user_text}
+            ],
+            temperature=0.8,
+            max_tokens=1200
+        )
+        return r.choices[0].message.content
+    except Exception as e:
+        print("Grok API error (chat):", e)
+        return None
 
 
 async def generate_image(prompt: str, path: str) -> bool:
@@ -1739,16 +1802,17 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
 def build_miniapp_url(u):
     """Персональная ссылка на Mini App с текущими данными пользователя в query-параметрах -
     у статической странички нет своего сервера и доступа к базе бота, поэтому актуальные
-    имя/тариф/остаток лимита подставляются сюда в момент постройки клавиатуры."""
+    имя/баланс кредитов/режим управления/история подставляются сюда в момент постройки
+    клавиатуры. История обрезается до последних 8 записей и до 60 символов каждая - иначе
+    адрес мог бы стать неприлично длинным (у ссылок есть практический предел длины)."""
     if not MINIAPP_URL:
         return None
-    limit = PLAN_LIMITS.get(u.get("plan", "premium"), 15)
+    history_short = [h[:60] for h in (u.get("history") or [])[-8:]]
     params = urlencode({
         "name": u.get("name") or "",
-        "used": u.get("generations", 0),
-        "limit": limit,
-        "plan": u.get("plan", "premium").capitalize(),
+        "credits": u.get("credits", STARTING_CREDITS),
         "mode": u.get("control_mode", "buttons"),
+        "history": json.dumps(history_short, ensure_ascii=False),
     })
     sep = "&" if "?" in MINIAPP_URL else "?"
     return f"{MINIAPP_URL}{sep}{params}"
@@ -2179,26 +2243,29 @@ def style_kb(include_keep=False, lang="ru"):
 STYLE_BY_LABEL = {label: k for k, variants in THEME_LABELS_I18N.items() for label in variants.values()}
 
 
-def _usage_bar(used, limit, width=12):
+def _usage_bar(credits, full_reference=200, width=12):
     """Текстовый прогресс-бар из юникод-блоков - Telegram не умеет графические
-    прогресс-бары в обычных сообщениях, это ближайший реалистичный аналог."""
-    limit = max(int(limit), 1)
-    filled = max(0, min(width, round(width * used / limit)))
+    прогресс-бары в обычных сообщениях, это ближайший реалистичный аналог.
+    У кредитов нет естественного "потолка" как был у старого лимита генераций,
+    поэтому шкала строится относительно условного "полного бака" (совпадает с
+    тем же ориентиром, что использует круговая шкала в Mini App) - это делает
+    полосу наглядной, а не про формальное сравнение с каким-то лимитом."""
+    full_reference = max(int(full_reference), 1)
+    filled = max(0, min(width, round(width * credits / full_reference)))
     return "▓" * filled + "░" * (width - filled)
 
 
 async def send_welcome(m: Message, u: dict, lang: str, first_time: bool = False):
-    """Приветствие с именем, тарифом и прогресс-баром лимита - используется и при /start
+    """Приветствие с именем и балансом кредитов - используется и при /start
     у уже знакомых пользователей (короткая форма), и сразу после выбора языка/режима
     управления в самый первый раз (first_time=True - разворачивается в объяснение,
     что вообще умеет бот, раз человек видит его впервые)."""
-    limit = PLAN_LIMITS.get(u["plan"], 15)
-    used = u["generations"]
+    credits = u.get("credits", STARTING_CREDITS)
     name_safe = html.escape(u.get("name") or "🙂")
     intro_key = "msg_welcome_intro" if first_time else "msg_welcome"
     text = tr(intro_key, lang, name=name_safe)
-    text += "\n\n" + tr("msg_welcome_plan_line", lang, plan=u.get("plan", "premium").capitalize(), used=used, limit=limit)
-    text += "\n" + _usage_bar(used, limit)
+    text += "\n\n" + tr("msg_welcome_plan_line", lang, credits=credits)
+    text += "\n" + _usage_bar(credits)
     await m.answer(text, parse_mode="HTML", reply_markup=main_kb(lang, uid=m.from_user.id))
 
 
@@ -2216,10 +2283,6 @@ async def cmd_start(m: Message, state: FSMContext):
         await m.answer(intro, reply_markup=lang_kb())
         return
     lang = user_lang(m.from_user.id)
-    if not u.get("control_mode_chosen"):
-        await state.set_state(Form.waiting_control_mode)
-        await m.answer(tr("msg_choose_control", lang), reply_markup=control_kb(lang))
-        return
     await send_welcome(m, u, lang)
 
 
@@ -2230,17 +2293,20 @@ async def set_language(m: Message, state: FSMContext):
         await m.answer(" / ".join(TR["msg_choose_lang"][c] for c in ("ru", "en", "ar", "zh")), reply_markup=lang_kb())
         return
     u = get_user(m.from_user.id)
+    was_new = not u.get("lang_chosen")
     u["lang"] = code
     u["lang_chosen"] = True
     save_users()
-    if not u.get("control_mode_chosen"):
-        await state.set_state(Form.waiting_control_mode)
-        await m.answer(tr("msg_choose_control", code), reply_markup=control_kb(code))
-        return
     await state.clear()
-    await send_welcome(m, u, code)
+    await send_welcome(m, u, code, first_time=was_new)
 
 
+# Голос (кнопками/голосом) больше не спрашивается отдельным обязательным шагом при /start -
+# раньше это перебивало уже знакомых пользователей неожиданным вопросом посреди их же
+# сценария (например, во время печати темы презентации), что выглядело как "бот сломался".
+# Само распознавание голоса работает всегда и для всех одинаково (см. VoiceToTextMiddleware),
+# этот выбор влияет только на переключатель в Mini App - set_control_mode остаётся доступной
+# функцией, просто вызывается оттуда (через handle_miniapp_data), а не как обязательный шаг.
 @dp.message(Form.waiting_control_mode, F.text.in_(ALL_BTN_CONTROL_BUTTONS_LABELS | ALL_BTN_CONTROL_VOICE_LABELS))
 async def set_control_mode(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
@@ -2251,13 +2317,7 @@ async def set_control_mode(m: Message, state: FSMContext):
     save_users()
     await state.clear()
     await m.answer(tr("msg_control_set_voice" if is_voice else "msg_control_set_buttons", lang))
-    await send_welcome(m, u, lang, first_time=True)
-
-
-@dp.message(Form.waiting_control_mode)
-async def control_mode_fallback(m: Message, state: FSMContext):
-    lang = user_lang(m.from_user.id)
-    await m.answer(tr("msg_choose_control", lang), reply_markup=control_kb(lang))
+    await send_welcome(m, u, lang)
 
 
 @dp.message(F.text.in_(TR["btn_language"].values()))
@@ -2291,7 +2351,7 @@ async def to_main_menu(m: Message, state: FSMContext):
 @dp.message(F.text.in_(ALL_BTN_PRES_LABELS))
 async def start_pres(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
-    if not can_generate(m.from_user.id):
+    if not can_afford(m.from_user.id, CREDIT_COSTS["presentation"]):
         await m.answer(tr("msg_limit", lang))
         return
     await m.answer(tr("msg_how_build_pres", lang), reply_markup=mode_kb(lang=lang))
@@ -3010,6 +3070,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         await m.answer_document(FSInputFile(pptx_path, filename=f"{pres_fname}.pptx"), caption=tr("msg_pptx_caption", lang))
         await m.answer_document(FSInputFile(pdf_path, filename=f"{pres_fname}.pdf"), caption=tr("msg_pptx_pdf_caption", lang))
         u["generations"] += 1
+        spend_credits(uid, "presentation")
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
         note_success(uid)
         for p in (cover_src, cover_own, cover_img, cover_panel_img, pptx_path, pdf_path, *raw_sources, *user_photo_originals, *[f for pair in images if pair for f in pair]):
@@ -4248,7 +4309,7 @@ def excel_mode_kb(lang="ru"):
 @dp.message(F.text.in_(ALL_BTN_EXCEL_LABELS))
 async def start_excel(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
-    if not can_generate(m.from_user.id):
+    if not can_afford(m.from_user.id, CREDIT_COSTS["excel"]):
         await m.answer(tr("msg_limit", lang))
         return
     await m.answer(tr("msg_for_whom_table", lang), reply_markup=excel_category_kb(lang))
@@ -4541,6 +4602,7 @@ async def excel_build(m: Message, state: FSMContext):
         fname = safe_filename(title_for_name, fallback=EXCEL_KIND_DESC.get(kind, "Таблица"))
         await m.answer_document(FSInputFile(xlsx_path, filename=f"{fname}.xlsx"), caption=tr("msg_excel_caption", lang))
         u["generations"] += 1
+        spend_credits(uid, "excel")
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {title_for_name}")
         note_success(uid)
         try:
@@ -4571,10 +4633,11 @@ async def excel_confirm_fallback(m: Message, state: FSMContext):
 
 @dp.message(F.text.in_(ALL_BTN_WORD_LABELS))
 async def start_word(m: Message, state: FSMContext):
+    # Вход сюда не блокируем по кредитам на этом шаге: раздел Word ведёт и к платному
+    # документу (5 кр.), и к бесплатному шаблону (0 кр.), а какой из них выберут -
+    # станет ясно только позже в диалоге (см. mode_kb/show_template). Реальная проверка
+    # и списание - в word_confirm()/template-ветке, непосредственно перед отправкой файла.
     lang = user_lang(m.from_user.id)
-    if not can_generate(m.from_user.id):
-        await m.answer(tr("msg_limit", lang))
-        return
     await m.answer(tr("msg_for_whom_doc", lang), reply_markup=word_category_kb(lang))
     await state.set_state(Form.waiting_word_category)
 
@@ -5089,6 +5152,9 @@ def word_hint(kind: str, mode: str, lang: str = "ru") -> str:
 @dp.message(Form.waiting_word_mode, F.text.in_(ALL_BTN_AI_GENERATE_LABELS))
 async def word_mode_ai(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
+    if not can_afford(m.from_user.id, CREDIT_COSTS["word"]):
+        await m.answer(tr("msg_limit", lang))
+        return
     await state.update_data(mode="ai", user_text="")
     await m.answer(tr("msg_content_lang_prompt", lang), reply_markup=content_lang_kb(lang))
     await state.set_state(Form.waiting_word_content_lang)
@@ -5110,6 +5176,9 @@ async def word_content_lang(m: Message, state: FSMContext):
 @dp.message(Form.waiting_word_mode, F.text.in_(ALL_BTN_OWN_TEXT_LABELS))
 async def word_mode_user(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
+    if not can_afford(m.from_user.id, CREDIT_COSTS["word"]):
+        await m.answer(tr("msg_limit", lang))
+        return
     await state.update_data(mode="user")
     data = await state.get_data()
     await m.answer(word_hint(data.get("word_kind", "doc"), "user", lang), reply_markup=cancel_kb(lang))
@@ -5144,6 +5213,7 @@ async def word_mode_template(m: Message, state: FSMContext):
         except Exception:
             pass
         u["generations"] += 1
+        spend_credits(uid, "template")  # стоимость 0, но оставлено для единообразия и на случай будущей правки цены
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — шаблон: {KIND_LABELS.get(kind, kind)}")
         note_success(uid)
         await m.answer(tr("msg_ready", lang) + "\n\n" + await signature_line(lang), reply_markup=main_kb(lang, uid=m.from_user.id))
@@ -5505,6 +5575,7 @@ async def word_build(m: Message, state: FSMContext):
         await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
         await m.answer_document(FSInputFile(pdf_path, filename=f"{fname}.pdf"), caption=tr("msg_pdf_caption", lang))
         u["generations"] += 1
+        spend_credits(uid, "word")
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
         note_success(uid)
         for p in (docx_path, pdf_path):
@@ -5542,8 +5613,7 @@ async def history(m: Message):
 async def my_plan(m: Message):
     lang = user_lang(m.from_user.id)
     u = get_user(m.from_user.id)
-    limit = PLAN_LIMITS.get(u["plan"], 15)
-    await m.answer(tr("msg_plan_info", lang, used=u['generations'], limit=limit, left=max(0, limit - u['generations'])))
+    await m.answer(tr("msg_plan_info", lang, credits=u.get("credits", STARTING_CREDITS)))
 
 
 @dp.message(F.text.in_(ALL_BTN_HELP_LABELS))
@@ -5581,6 +5651,31 @@ async def handle_miniapp_data(m: Message, state: FSMContext):
         save_users()
         await m.answer(tr("msg_control_set_voice" if action == "mode_voice" else "msg_control_set_buttons", lang))
         await send_welcome(m, u, lang)
+        return
+
+    if action == "topup":
+        # Автоматической оплаты пока нет - пересылаем запрос админу тем же способом,
+        # что и "Сотрудничество", и честно предупреждаем пользователя, что это ручной процесс.
+        uname = f"@{m.from_user.username}" if m.from_user.username else str(m.from_user.id)
+        forward_text = (f"💳 Запрос на пополнение баланса от {u.get('name') or uname} "
+                         f"({uname}, id={m.from_user.id}). Текущий баланс: {u.get('credits', STARTING_CREDITS)} кредитов.")
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(admin_id, forward_text)
+            except Exception as e:
+                print("Не удалось переслать запрос на пополнение админу:", admin_id, e)
+        await m.answer(tr("msg_topup_notice", lang))
+        return
+
+    if action == "chat":
+        text = (payload.get("text") or "").strip()
+        if not text:
+            return
+        reply = await ask_grok_chat(text, lang)
+        if reply:
+            await m.answer(reply)
+        else:
+            await m.answer(tr("msg_generation_error", lang) if "msg_generation_error" in TR else "Не получилось получить ответ, попробуйте ещё раз чуть позже.")
         return
 
     handlers_no_state = {"history": history, "plan": my_plan, "help": show_help}
