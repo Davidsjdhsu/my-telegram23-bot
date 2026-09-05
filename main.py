@@ -329,6 +329,7 @@ class Form(StatesGroup):
     waiting_excel_content_lang = State()
     waiting_control_mode = State()
     waiting_collab_message = State()
+    waiting_file_instruction = State()
 
 
 # ==================== ЯЗЫКИ / i18n ====================
@@ -541,6 +542,15 @@ TR = {
         "zh": "正在读取文件并据此生成文档——可能需要一两分钟 ⏳",
         "es": "Leyendo el archivo y preparando un documento a partir de él — puede tardar uno o dos minutos ⏳",
         "fr": "Lecture du fichier et préparation d'un document à partir de celui-ci — cela peut prendre une à deux minutes ⏳",
+    },
+    "msg_upload_what_next": {
+        "ru": "Похоже, это {description}. Что с ним сделать — собрать презентацию, документ Word или таблицу Excel? Опишите одним сообщением (можно голосом).",
+        "en": "Looks like this is {description}. What should I do with it — a presentation, a Word document, or an Excel table? Describe it in one message (voice works too).",
+        "de": "Das sieht nach {description} aus. Was soll ich damit machen — eine Präsentation, ein Word-Dokument oder eine Excel-Tabelle? Beschreibe es in einer Nachricht (auch per Sprachnachricht).",
+        "ar": "يبدو أن هذا {description}. ماذا تريد أن أفعل به - عرضاً تقديمياً أم مستند Word أم جدول Excel؟ صف ذلك في رسالة واحدة (يمكن بالصوت أيضاً).",
+        "zh": "看起来这是{description}。需要我做成什么——演示文稿、Word 文档还是 Excel 表格？请用一条消息说明（也可以用语音）。",
+        "es": "Parece que esto es {description}. ¿Qué quieres que haga con él — una presentación, un documento Word o una tabla Excel? Descríbelo en un mensaje (también vale por voz).",
+        "fr": "On dirait que c'est {description}. Qu'est-ce que je dois en faire — une présentation, un document Word ou un tableau Excel ? Décrivez-le en un message (la voix fonctionne aussi).",
     },
     "msg_redirect_to_menu": {
         "ru": "Похоже, вам нужен документ — а это как раз то, что я умею оформлять красиво 🙂\n\nЗагляните в меню (кнопка «Меню» слева от поля ввода) — там презентация, Word и Excel, и там же можно сразу поправить или дооформить готовый файл.",
@@ -1545,6 +1555,72 @@ def extract_text_from_upload(path: str, filename: str):
     if not text:
         return None, "empty"
     return text[:MAX_UPLOAD_TEXT_CHARS], None
+
+
+# Ключевые слова для распознавания, какой ИМЕННО формат вывода просят применительно
+# к уже присланному файлу - отдельно от DOCUMENT_INTENT_KEYWORDS (та функция только
+# решает "это вообще про документ или нет", эта - "какой конкретно из трёх форматов").
+PRESENTATION_FORMAT_KEYWORDS = ["презентац", "слайд", "pptx", "powerpoint", "power point", "presentation"]
+EXCEL_FORMAT_KEYWORDS = ["эксель", "excel", "таблиц", "xlsx", "smeta", "смету", "смета", "spreadsheet"]
+# Эти слова однозначно называют РЕЗУЛЬТАТ как текстовый документ, даже если где-то в той же
+# фразе упомянута "презентация" - но уже как источник, а не как желаемый формат вывода
+# ("сделай РЕФЕРАТ по этой ПРЕЗЕНТАЦИИ" должно дать word, а не presentation). Поэтому
+# проверяются с более высоким приоритетом, раньше форматных ключевых слов.
+WORD_OUTPUT_STRONG_KEYWORDS = ["реферат", "доклад", "эссе", "essay", "report ", "конспект"]
+
+
+def detect_requested_format(text: str) -> str:
+    """Возвращает 'presentation', 'excel' или 'word'. Если упомянуты ключевые слова
+    сразу нескольких форматов (обычная ситуация: "сделай ТАБЛИЦУ по данным из этой
+    ПРЕЗЕНТАЦИИ" - таблица это результат, презентация источник) - побеждает то,
+    что встречается РАНЬШЕ в предложении, поскольку люди обычно называют желаемый
+    результат раньше, чем описывают источник. При отсутствии явных признаков любого
+    формата - Word как самый универсальный запасной вариант."""
+    t = (text or "").lower()
+
+    def earliest_index(keywords):
+        positions = [t.index(kw) for kw in keywords if kw in t]
+        return min(positions) if positions else None
+
+    candidates = {
+        "word": earliest_index(WORD_OUTPUT_STRONG_KEYWORDS),
+        "presentation": earliest_index(PRESENTATION_FORMAT_KEYWORDS),
+        "excel": earliest_index(EXCEL_FORMAT_KEYWORDS),
+    }
+    found = {k: v for k, v in candidates.items() if v is not None}
+    if not found:
+        return "word"
+    return min(found, key=found.get)
+
+
+def detect_slide_count(text: str, default: int = 10) -> int:
+    """Ищет в тексте что-то вроде "8 слайдов"/"на 12 слайдов" - иначе разумное значение
+    по умолчанию. Намеренно простая эвристика, не через ИИ - здесь это не оправдывает
+    отдельный запрос к Grok ради одного числа."""
+    m = re.search(r"(\d{1,2})\s*слайд", (text or "").lower())
+    if m:
+        n = int(m.group(1))
+        if 3 <= n <= 30:
+            return n
+    return default
+
+
+async def describe_upload_briefly(source_text: str, ext: str, lang: str) -> str:
+    """Короткое (одна фраза) описание темы присланного файла - используется только
+    когда человек прислал файл БЕЗ подписи, чтобы бот мог осмысленно спросить
+    "что с ним сделать", а не просто "вот файл, что дальше". Если короткий запрос
+    к Grok не удался - откатываемся на нейтральное "документ", не блокируя сценарий."""
+    try:
+        summary = await ask_grok(
+            f"Опиши ОДНИМ коротким предложением (5-10 слов), о чём этот текст - "
+            f"это будет показано пользователю как подсказка. Без вступлений, только суть.\n\n{source_text[:3000]}",
+            max_tokens=60
+        )
+        if grok_failed(summary) or not summary.strip():
+            raise ValueError("empty")
+        return summary.strip().strip('"')
+    except Exception:
+        return {"pdf": "PDF-документ", "docx": "Word-документ", "pptx": "презентация"}.get(ext, "файл")
 
 
 def grok_failed(text: str) -> bool:
@@ -5912,20 +5988,9 @@ async def grant(m: Message):
         await m.answer("Формат: /grant user_id")
 
 
-@dp.message(StateFilter(None), F.document)
-async def document_upload(m: Message, state: FSMContext):
-    """Человек прислал файл (PDF/DOCX/PPTX), обычно с подписью вида "сделай реферат
-    по приложенной презентации". Читаем текст из файла и одним шагом собираем Word-
-    документ на его основе - в отличие от обычного сценария /word, здесь нет
-    черновика на согласование: сам факт присланного файла уже задаёт содержание,
-    план тут спрашивать не у кого. Совсем не найти этот хендлер сообщение не может
-    только если пользователь сейчас в другом активном сценарии (тогда есть более
-    специфичный обработчик состояния, который сработает раньше)."""
+async def build_word_from_upload(m: Message, state: FSMContext, source_text: str, instruction: str):
     lang = user_lang(m.from_user.id)
     uid = m.from_user.id
-    caption = (m.caption or "").strip()
-    instruction = caption or "Составь краткий реферат-конспект по содержимому этого файла."
-
     if not can_afford(uid, CREDIT_COSTS["word"]):
         await m.answer(tr("msg_limit", lang))
         return
@@ -5933,31 +5998,6 @@ async def document_upload(m: Message, state: FSMContext):
     if not ok:
         await m.answer(reason)
         return
-
-    filename = m.document.file_name or "file"
-    local_path = f"/tmp/upload_{uid}_{random.randint(1000, 9999)}_{filename}"
-    try:
-        file_info = await bot.get_file(m.document.file_id)
-        await bot.download_file(file_info.file_path, local_path)
-    except Exception as e:
-        print("Ошибка скачивания файла от пользователя:", e)
-        finish_job(uid)
-        await m.answer(tr("msg_upload_broken", lang))
-        return
-
-    source_text, err = extract_text_from_upload(local_path, filename)
-    try:
-        if os.path.exists(local_path):
-            os.remove(local_path)
-    except Exception:
-        pass
-
-    if err:
-        finish_job(uid)
-        await m.answer(tr(f"msg_upload_{err}", lang))
-        return
-
-    await m.answer(tr("msg_upload_processing", lang))
 
     low_instr = instruction.lower()
     if "реферат" in low_instr:
@@ -6014,6 +6054,118 @@ async def document_upload(m: Message, state: FSMContext):
                 os.remove(docx_path)
         except Exception:
             pass
+
+
+async def build_presentation_from_upload(m: Message, state: FSMContext, source_text: str, instruction: str):
+    lang = user_lang(m.from_user.id)
+    uid = m.from_user.id
+    if not can_afford(uid, CREDIT_COSTS["presentation"]):
+        await m.answer(tr("msg_limit", lang))
+        return
+    # Переиспользуем существующий сборщик презентаций целиком (тот же, что и в обычном
+    # сценарии /presentation, режим "мои данные") - просто заполняем то же состояние,
+    # которое он и так ожидает, вместо того чтобы дублировать всю логику раскладок,
+    # фото и графиков ещё раз здесь.
+    await state.update_data(
+        mode="user", user_text=source_text, extra=instruction,
+        slides=detect_slide_count(instruction), topic=instruction[:200],
+    )
+    await _build_presentation(m, state)
+
+
+async def build_excel_from_upload(m: Message, state: FSMContext, source_text: str, instruction: str):
+    lang = user_lang(m.from_user.id)
+    uid = m.from_user.id
+    if not can_afford(uid, CREDIT_COSTS["excel"]):
+        await m.answer(tr("msg_limit", lang))
+        return
+    low_instr = instruction.lower()
+    if "смет" in low_instr:
+        kind = "expense_estimate"
+    elif "бюджет" in low_instr:
+        kind = "family_budget"
+    elif "прайс" in low_instr or "price" in low_instr:
+        kind = "price_list"
+    else:
+        kind = "calc_table"
+    # Переиспользуем существующий сборщик Excel (режим "свои данные") тем же способом -
+    # через заполнение состояния, а не копию логики.
+    await state.update_data(excel_kind=kind, excel_mode="user", excel_topic=source_text, extra=instruction)
+    await excel_build(m, state)
+
+
+async def dispatch_upload_generation(m: Message, state: FSMContext, source_text: str, instruction: str):
+    """Единая точка входа после того, как понятны и текст файла, и инструкция (пришли
+    вместе одним сообщением или инструкция получена вторым сообщением после уточняющего
+    вопроса) - определяет формат по инструкции и вызывает нужный из трёх сборщиков."""
+    fmt = detect_requested_format(instruction)
+    if fmt == "presentation":
+        await build_presentation_from_upload(m, state, source_text, instruction)
+    elif fmt == "excel":
+        await build_excel_from_upload(m, state, source_text, instruction)
+    else:
+        await build_word_from_upload(m, state, source_text, instruction)
+
+
+@dp.message(Form.waiting_file_instruction)
+async def file_instruction_followup(m: Message, state: FSMContext):
+    """Ответ на вопрос "что сделать с этим файлом" - текст уже расшифрован из голоса
+    outer_middleware'ом, если пришёл голосом, так что здесь всегда обычный текст."""
+    instruction = (m.text or "").strip()
+    data = await state.get_data()
+    source_text = data.get("upload_source_text")
+    await state.clear()
+    if not instruction or not source_text:
+        lang = user_lang(m.from_user.id)
+        await m.answer(tr("msg_didnt_understand", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
+        return
+    lang = user_lang(m.from_user.id)
+    await m.answer(tr("msg_upload_processing", lang))
+    await dispatch_upload_generation(m, state, source_text, instruction)
+
+
+@dp.message(StateFilter(None), F.document)
+async def document_upload(m: Message, state: FSMContext):
+    """Человек прислал файл (PDF/DOCX/PPTX). Если подпись уже содержит задачу
+    ("сделай реферат по приложенной презентации") - собираем сразу, без лишних
+    вопросов. Если подписи нет - коротко говорим, что за файл, и спрашиваем, что
+    с ним сделать (следующее сообщение обработает file_instruction_followup выше)."""
+    lang = user_lang(m.from_user.id)
+    uid = m.from_user.id
+    caption = (m.caption or "").strip()
+
+    filename = m.document.file_name or "file"
+    local_path = f"/tmp/upload_{uid}_{random.randint(1000, 9999)}_{filename}"
+    try:
+        file_info = await bot.get_file(m.document.file_id)
+        await bot.download_file(file_info.file_path, local_path)
+    except Exception as e:
+        print("Ошибка скачивания файла от пользователя:", e)
+        await m.answer(tr("msg_upload_broken", lang))
+        return
+
+    ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+    source_text, err = extract_text_from_upload(local_path, filename)
+    try:
+        if os.path.exists(local_path):
+            os.remove(local_path)
+    except Exception:
+        pass
+
+    if err:
+        await m.answer(tr(f"msg_upload_{err}", lang))
+        return
+
+    if caption:
+        await m.answer(tr("msg_upload_processing", lang))
+        await dispatch_upload_generation(m, state, source_text, caption)
+        return
+
+    # Подписи нет - коротко описываем файл и ждём инструкцию следующим сообщением.
+    description = await describe_upload_briefly(source_text, ext, lang)
+    await state.update_data(upload_source_text=source_text)
+    await state.set_state(Form.waiting_file_instruction)
+    await m.answer(tr("msg_upload_what_next", lang, description=description))
 
 
 @dp.message(StateFilter(None), F.text)
