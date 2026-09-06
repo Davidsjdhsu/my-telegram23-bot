@@ -6196,6 +6196,24 @@ async def handle_miniapp_data(m: Message, state: FSMContext):
         action = (payload.get("action") or "").strip()
     except Exception:
         return
+    try:
+        await _handle_miniapp_payload(m, state, payload, action)
+    except Exception as e:
+        print("Ошибка Mini App:", repr(e))
+        import traceback
+        traceback.print_exc()
+        uid = m.from_user.id if m.from_user else None
+        if uid:
+            try:
+                await bot.send_message(
+                    uid,
+                    f"Меню дошло, но обработка упала: {type(e).__name__}: {e}",
+                )
+            except Exception:
+                pass
+
+
+async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, action: str):
     m = ensure_answerable(m)
     lang = user_lang(m.from_user.id)
     u = get_user(m.from_user.id)
