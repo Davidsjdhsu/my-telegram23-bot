@@ -230,6 +230,7 @@ def _build_users_payload():
             "lang_chosen": bool(u.get("lang_chosen")),
             "control_mode": u.get("control_mode") or "buttons",
             "control_mode_chosen": bool(u.get("control_mode_chosen")),
+            "credits": int(u.get("credits") if u.get("credits") is not None else STARTING_CREDITS),
         }
     return payload
 
@@ -2090,7 +2091,12 @@ def main_kb(lang="ru", uid=None):
     # Кнопка открытия Mini App здесь больше не дублируется - её роль полностью
     # взяла на себя нативная кнопка меню Telegram (см. sync_menu_button), которая
     # висит слева от поля ввода постоянно и не занимает место в обычной клавиатуре.
-    rows = [
+    rows = []
+    if uid is not None:
+        miniapp_url = build_miniapp_url(get_user(uid))
+        if miniapp_url:
+            rows.append([KeyboardButton(text=tr("btn_open_miniapp", lang), web_app=WebAppInfo(url=miniapp_url))])
+    rows += [
         [KeyboardButton(text=tr("btn_pres", lang))],
         [KeyboardButton(text=tr("btn_word", lang))],
         [KeyboardButton(text=tr("btn_excel", lang))],
@@ -2969,9 +2975,9 @@ async def _build_presentation(m: Message, state: FSMContext):
     u = get_user(uid)
     ok, reason = start_job(uid)
     if not ok:
-        await m.answer(reason)
+        await bot.send_message(uid, reason)
         return
-    await m.answer(tr("msg_building_pres_photos", lang))
+    await bot.send_message(uid, tr("msg_building_pres_photos", lang))
     try:
 
         theme_name = data.get("theme_name") or pick_theme(data.get("topic", ""))[0]
@@ -3356,8 +3362,9 @@ async def _build_presentation(m: Message, state: FSMContext):
         pdf.save()
 
         pres_fname = safe_filename(content.get("title"), fallback="Презентация")
-        await m.answer_document(FSInputFile(pptx_path, filename=f"{pres_fname}.pptx"), caption=tr("msg_pptx_caption", lang))
-        await m.answer_document(FSInputFile(pdf_path, filename=f"{pres_fname}.pdf"), caption=tr("msg_pptx_pdf_caption", lang))
+        chat_id = m.chat.id if getattr(m, "chat", None) else m.from_user.id
+        await bot.send_document(chat_id, FSInputFile(pptx_path, filename=f"{pres_fname}.pptx"), caption=tr("msg_pptx_caption", lang))
+        await bot.send_document(chat_id, FSInputFile(pdf_path, filename=f"{pres_fname}.pdf"), caption=tr("msg_pptx_pdf_caption", lang))
         u["generations"] += 1
         spend_credits(uid, "presentation")
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
@@ -3368,14 +3375,20 @@ async def _build_presentation(m: Message, state: FSMContext):
                     os.remove(p)
             except Exception:
                 pass
-        await m.answer(
+        chat_id = m.chat.id if getattr(m, "chat", None) else uid
+        await bot.send_message(
+            chat_id,
             tr("msg_pptx_ready", lang) + "\n\n" + await signature_line(lang),
-            reply_markup=main_kb(lang, uid=m.from_user.id)
+            reply_markup=main_kb(lang, uid=uid)
         )
         await state.clear()
     except Exception as e:
         print("Ошибка сборки презентации:", repr(e))
-        await m.answer(tr("msg_grok_error", lang), reply_markup=main_kb(lang, uid=uid))
+        try:
+            chat_id = m.chat.id if getattr(m, "chat", None) else uid
+            await bot.send_message(chat_id, tr("msg_grok_error", lang), reply_markup=main_kb(lang, uid=uid))
+        except Exception as e2:
+            print("Не смог отправить ошибку сборки:", repr(e2))
     finally:
         finish_job(uid)
 
@@ -5961,10 +5974,11 @@ async def handle_miniapp_data(m: Message, state: FSMContext):
 
     if action == "gen_presentation":
         if not can_afford(m.from_user.id, CREDIT_COSTS["presentation"]):
-            await m.answer(tr("msg_limit", lang))
+            await bot.send_message(m.from_user.id, tr("msg_limit", lang))
             return
         topic = (payload.get("topic") or "").strip()
         if not topic:
+            await bot.send_message(m.from_user.id, "Не вижу тему презентации. Напиши её в чат или открой меню с клавиатуры «Открыть меню».")
             return
         user_text = (payload.get("user_text") or "").strip()
         slides = payload.get("slides")
@@ -5977,10 +5991,12 @@ async def handle_miniapp_data(m: Message, state: FSMContext):
             theme_name=payload.get("style") or "default", slides=slides,
             mode="user" if user_text else "ai", content_lang=lang,
         )
+        await bot.send_message(
+            m.from_user.id,
+            "Приняла из меню. Собираю презентацию в чате, обычно 2–3 минуты. Не закрывай бота.",
+        )
         if payload.get("photo_mode") == "own":
-            # Та же ветка, что и в обычном сценарии: просим прислать фото по одному,
-            # дальше подхватывает уже существующий хендлер Form.waiting_pres_photos.
-            await m.answer(tr("msg_send_photos_one_by_one", lang, slides=slides), reply_markup=photos_done_kb(lang))
+            await bot.send_message(m.from_user.id, tr("msg_send_photos_one_by_one", lang, slides=slides), reply_markup=photos_done_kb(lang))
             await state.set_state(Form.waiting_pres_photos)
         else:
             await _build_presentation(m, state)
@@ -6027,13 +6043,20 @@ async def handle_miniapp_data(m: Message, state: FSMContext):
         if not text:
             return
         if looks_like_document_request(text):
-            await m.answer(tr("msg_redirect_to_menu", lang))
+            fmt = detect_requested_format(text)
+            await bot.send_message(m.from_user.id, "Собираю это в чате.")
+            if fmt == "presentation":
+                await start_pres(m, state)
+            elif fmt == "excel":
+                await start_excel(m, state)
+            else:
+                await start_word(m, state)
             return
         reply = await ask_grok_chat(text, lang)
         if reply:
-            await m.answer(reply)
+            await bot.send_message(m.from_user.id, reply)
         else:
-            await m.answer(tr("msg_chat_error", lang))
+            await bot.send_message(m.from_user.id, tr("msg_chat_error", lang))
         return
 
     handlers_no_state = {"history": history, "plan": my_plan, "help": show_help}
@@ -6338,7 +6361,23 @@ async def free_chat_fallback(m: Message, state: FSMContext):
         return
     lang = user_lang(m.from_user.id)
     if looks_like_document_request(text):
-        await m.answer(tr("msg_redirect_to_menu", lang))
+        fmt = detect_requested_format(text)
+        if fmt == "presentation":
+            if not can_afford(m.from_user.id, CREDIT_COSTS["presentation"]):
+                await m.answer(tr("msg_limit", lang))
+                return
+            slides = detect_slide_count(text, 8)
+            await state.update_data(
+                topic=text, user_text="", extra="", extra_used=0,
+                theme_name="default", slides=slides, mode="ai", content_lang=lang,
+            )
+            await m.answer("Собираю презентацию здесь, в чате. Обычно 2–3 минуты.")
+            await _build_presentation(m, state)
+            return
+        if fmt == "excel":
+            await start_excel(m, state)
+            return
+        await start_word(m, state)
         return
     reply = await ask_grok_chat(text, lang)
     if reply:
