@@ -2056,6 +2056,16 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
 
 
 
+# Версия статической страницы Mini App - руками увеличивается на 1 при каждой
+# правке index.html на GitHub Pages. Без этого Telegram может закэшировать содержимое
+# по точному адресу ссылки и продолжать показывать старую версию даже после того, как
+# на GitHub Pages давно лежит новая - у него нет своего способа узнать, что файл
+# изменился, если сама ссылка выглядит одинаково. Добавляя это число в query-параметры,
+# каждая новая версия HTML получает технически другой адрес, и кэш Telegram больше не
+# может ошибочно посчитать её той же самой страницей.
+MINIAPP_VERSION = 2
+
+
 def build_miniapp_url(u):
     """Персональная ссылка на Mini App с текущими данными пользователя в query-параметрах -
     у статической странички нет своего сервера и доступа к базе бота, поэтому актуальные
@@ -2070,6 +2080,7 @@ def build_miniapp_url(u):
         "credits": u.get("credits", STARTING_CREDITS),
         "mode": u.get("control_mode", "buttons"),
         "history": json.dumps(history_short, ensure_ascii=False),
+        "v": MINIAPP_VERSION,
     })
     sep = "&" if "?" in MINIAPP_URL else "?"
     return f"{MINIAPP_URL}{sep}{params}"
