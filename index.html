@@ -7,14 +7,18 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
-<script async src="https://telegram.org/js/telegram-web-app.js" onerror="window.__tgLoadFailed=true;loadLocalTelegramFallback();"></script>
 <script>
-  // Основной скрипт telegram-web-app.js грузится с telegram.org (см. тег выше). Но
-  // onerror у <script> срабатывает только при ЯВНОМ сбое (404, обрыв соединения) - если
-  // сеть просто тихо роняет пакеты без внятного отказа (бывает при зажатых доменах),
-  // запрос повисает без события ошибки, и onerror не поможет. Поэтому дублируем проверку
+  // Основной скрипт telegram-web-app.js грузится с telegram.org (тег ниже). Но onerror
+  // у <script> срабатывает только при ЯВНОМ сбое (404, обрыв соединения) - если сеть
+  // просто тихо роняет пакеты без внятного отказа (бывает при зажатых доменах), запрос
+  // повисает без события ошибки, и onerror не поможет. Поэтому дублируем проверку
   // таймером: не дождались window.Telegram.WebApp за разумное время - берём копию с
   // нашего же домена (GitHub Pages), не дожидаясь официального "провала".
+  //
+  // ВАЖНО: это объявление обязано идти ДО тега со скриптом telegram.org ниже, а не после -
+  // раньше было наоборот, и при быстрой сетевой ошибке onerror мог сработать раньше, чем
+  // браузер успевал распарсить этот блок, вызывая "loadLocalTelegramFallback is not
+  // defined" прямо в консоли (поймано тестом, не в проде, но баг был реальный).
   var __localFallbackLoaded = false;
   function loadLocalTelegramFallback() {
     if (__localFallbackLoaded) return;
@@ -27,6 +31,7 @@
     if (!window.Telegram || !window.Telegram.WebApp) loadLocalTelegramFallback();
   }, 2500);
 </script>
+<script async src="https://telegram.org/js/telegram-web-app.js" onerror="window.__tgLoadFailed=true;loadLocalTelegramFallback();"></script>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body {
@@ -151,6 +156,51 @@
   .voice-hint { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-radius: 14px; margin-bottom: 18px; }
   .voice-hint svg { width: 17px; height: 17px; stroke: #86efac; stroke-width: 1.8; fill: none; flex-shrink: 0; }
   .voice-hint span { font-size: 12px; color: #b8b3c7; line-height: 1.4; }
+
+  /* --- Форма генерации внутри Mini App --- */
+  .form-header { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+  .form-back { width: 34px; height: 34px; border-radius: 50%; border: none; background: rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+  .form-back svg { width: 16px; height: 16px; stroke: #fff; stroke-width: 2.2; fill: none; }
+  .form-title { font-size: 19px; font-weight: 700; margin: 0; }
+
+  .field-label { font-size: 12.5px; font-weight: 600; color: #b8b3c7; margin: 0 0 8px; display: flex; align-items: center; justify-content: space-between; }
+  .field-label .opt { font-weight: 400; color: #726c85; font-size: 11px; }
+  .field-block { margin-bottom: 18px; }
+  .field-input, .field-textarea, .field-select {
+    width: 100%; border-radius: 14px; border: 1px solid rgba(255,255,255,0.13);
+    background: rgba(255,255,255,0.05); color: #fff; font-family: inherit; font-size: 14.5px;
+    padding: 12px 14px; box-sizing: border-box;
+  }
+  .field-input:focus, .field-textarea:focus, .field-select:focus { outline: none; border-color: rgba(139,92,246,0.6); }
+  .field-textarea { resize: vertical; min-height: 76px; line-height: 1.4; }
+  .field-select { appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239d97b0' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; background-size: 18px; padding-right: 36px; }
+  .field-select optgroup { color: #9d97b0; font-style: normal; }
+  .field-select option { color: #fff; background: #1c1830; }
+
+  .chip-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+  .chip-row::-webkit-scrollbar { display: none; }
+  .field-chip {
+    flex-shrink: 0; padding: 9px 15px; border-radius: 99px; font-size: 13px; font-weight: 500;
+    color: #b8b3c7; border: 1px solid rgba(255,255,255,0.13); background: rgba(255,255,255,0.04);
+    cursor: pointer; white-space: nowrap; transition: all .2s ease;
+  }
+  .field-chip.active { color: #fff; border-color: transparent; background: linear-gradient(90deg, #8b5cf6, #22d3ee); }
+
+  .stepper { display: flex; align-items: center; gap: 14px; }
+  .stepper-btn {
+    width: 38px; height: 38px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.13);
+    background: rgba(255,255,255,0.05); color: #fff; font-size: 19px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .stepper-value { font-size: 17px; font-weight: 700; min-width: 30px; text-align: center; font-family: 'JetBrains Mono', monospace; }
+
+  .form-submit {
+    width: 100%; padding: 15px; border-radius: 16px; border: none; cursor: pointer;
+    background: linear-gradient(135deg, #8b5cf6, #22d3ee); color: #fff; font-family: inherit;
+    font-size: 15px; font-weight: 700; margin-top: 6px; box-shadow: 0 8px 24px rgba(139,92,246,0.35);
+  }
+  .form-submit:active { opacity: .85; }
+  .form-cost { text-align: center; font-size: 12px; color: #726c85; margin-top: 10px; }
 
   .mic-btn {
     width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0; border: none; cursor: pointer;
@@ -382,7 +432,7 @@
         <div class="folder-icon"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sparkle" xlink:href="#i-sparkle"/></svg></div>
         <div class="folder-text">
           <p class="folder-title">Медиа</p>
-          <p class="folder-sub">Музыка, картинка, видео · скоро</p>
+          <p class="folder-sub">Картинка · музыка и видео скоро</p>
         </div>
         <div class="folder-chevron"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron" xlink:href="#i-chevron"/></svg></div>
       </div>
@@ -424,6 +474,167 @@
       </div>
     </div>
 
+    <!-- ===== ЭКРАН: ФОРМА ПРЕЗЕНТАЦИИ ===== -->
+    <div class="screen" id="screen-form-pres">
+      <div class="form-header">
+        <button class="form-back" data-back-to="create"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <p class="form-title">Презентация</p>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label">Тема</p>
+        <input class="field-input" id="presTopic" type="text" placeholder="Например: история кофе">
+      </div>
+
+      <div class="field-block">
+        <p class="field-label">Свой текст или данные <span class="opt">необязательно</span></p>
+        <textarea class="field-textarea" id="presUserText" placeholder="Если есть готовый текст, тезисы или цифры — вставьте сюда, я использую именно их. Иначе просто напишу по теме сам."></textarea>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label">Стиль</p>
+        <div class="chip-row" id="presStyleChips">
+          <div class="field-chip active" data-value="default" data-group="presStyle">Обычный</div>
+          <div class="field-chip" data-value="business" data-group="presStyle">Деловой</div>
+          <div class="field-chip" data-value="tech" data-group="presStyle">Технологии</div>
+          <div class="field-chip" data-value="nature" data-group="presStyle">Природа</div>
+          <div class="field-chip" data-value="history" data-group="presStyle">История</div>
+          <div class="field-chip" data-value="science" data-group="presStyle">Наука</div>
+          <div class="field-chip" data-value="school" data-group="presStyle">Учёба</div>
+          <div class="field-chip" data-value="fashion" data-group="presStyle">Мода</div>
+          <div class="field-chip" data-value="sport" data-group="presStyle">Спорт</div>
+          <div class="field-chip" data-value="travel" data-group="presStyle">Путешествия</div>
+          <div class="field-chip" data-value="food" data-group="presStyle">Еда</div>
+          <div class="field-chip" data-value="art" data-group="presStyle">Искусство</div>
+          <div class="field-chip" data-value="eco" data-group="presStyle">Экология</div>
+          <div class="field-chip" data-value="minimal" data-group="presStyle">Минимализм</div>
+        </div>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label">Слайдов</p>
+        <div class="stepper">
+          <button class="stepper-btn" id="presSlidesMinus">−</button>
+          <span class="stepper-value" id="presSlidesValue">8</span>
+          <button class="stepper-btn" id="presSlidesPlus">+</button>
+        </div>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label">Фото</p>
+        <div class="chip-row">
+          <div class="field-chip active" data-value="ai" data-group="presPhoto">Через ИИ</div>
+          <div class="field-chip" data-value="own" data-group="presPhoto">Свои — пришлю после</div>
+        </div>
+      </div>
+
+      <button class="form-submit" id="presSubmit">Создать презентацию</button>
+      <p class="form-cost">Стоимость: 10 кредитов</p>
+    </div>
+
+    <!-- ===== ЭКРАН: ФОРМА WORD ===== -->
+    <div class="screen" id="screen-form-word">
+      <div class="form-header">
+        <button class="form-back" data-back-to="create"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <p class="form-title">Word-документ</p>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label">Тип документа</p>
+        <select class="field-select" id="wordKind">
+          <optgroup label="Учебные">
+            <option value="referat">Реферат</option>
+            <option value="coursework">Курсовая работа</option>
+            <option value="report">Доклад</option>
+            <option value="essay">Эссе</option>
+            <option value="notes">Конспект</option>
+          </optgroup>
+          <optgroup label="Договоры">
+            <option value="dkp">Договор купли-продажи</option>
+            <option value="rent">Договор аренды</option>
+            <option value="services">Договор оказания услуг</option>
+            <option value="employment">Трудовой договор</option>
+            <option value="supply">Договор поставки</option>
+            <option value="gift">Договор дарения</option>
+            <option value="loan">Расписка / договор займа</option>
+            <option value="marriage_contract">Брачный договор</option>
+          </optgroup>
+          <optgroup label="Официальные документы">
+            <option value="statement">Заявление</option>
+            <option value="proxy">Доверенность</option>
+            <option value="act">Акт приёма-передачи</option>
+            <option value="claim">Досудебная претензия</option>
+            <option value="consent">Согласие на выезд ребёнка</option>
+            <option value="lawsuit">Исковое заявление</option>
+            <option value="offer">Коммерческое предложение</option>
+            <option value="doc" selected>Другое / обычный документ</option>
+          </optgroup>
+        </select>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label">Тема, данные или готовый текст</p>
+        <textarea class="field-textarea" id="wordContent" placeholder="Опишите тему — напишу сам. Или вставьте свой текст/данные — оформлю их."></textarea>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label">Уточнения <span class="opt">необязательно</span></p>
+        <input class="field-input" id="wordExtra" type="text" placeholder="ФИО, даты, детали для подстановки">
+      </div>
+
+      <div class="field-block">
+        <p class="field-label">Объём</p>
+        <div class="chip-row">
+          <div class="field-chip active" data-value="short" data-group="wordSize">Короче</div>
+          <div class="field-chip" data-value="long" data-group="wordSize">Подробнее</div>
+        </div>
+      </div>
+
+      <button class="form-submit" id="wordSubmit">Создать документ</button>
+      <p class="form-cost">Стоимость: 5 кредитов</p>
+    </div>
+
+    <!-- ===== ЭКРАН: ФОРМА EXCEL ===== -->
+    <div class="screen" id="screen-form-excel">
+      <div class="form-header">
+        <button class="form-back" data-back-to="create"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <p class="form-title">Excel-таблица</p>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label">Тип таблицы</p>
+        <select class="field-select" id="excelKind">
+          <option value="expense_estimate">Смета расходов</option>
+          <option value="family_budget">Семейный бюджет</option>
+          <option value="project_budget">Смета проекта / бизнес-план</option>
+          <option value="price_list">Прайс-лист</option>
+          <option value="calc_table" selected>Расчётная таблица к учебной работе</option>
+          <option value="startup_model">Финансовая модель стартапа</option>
+        </select>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label">Тема или свои данные</p>
+        <textarea class="field-textarea" id="excelContent" placeholder="Опишите тему — посчитаю сам с примерными цифрами. Или вставьте свои реальные данные — посчитаю по ним."></textarea>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label">Уточнения <span class="opt">необязательно</span></p>
+        <input class="field-input" id="excelExtra" type="text" placeholder="Валюта, период, другие детали">
+      </div>
+
+      <div class="field-block">
+        <p class="field-label">Данные</p>
+        <div class="chip-row">
+          <div class="field-chip active" data-value="ai" data-group="excelMode">Придумай сам</div>
+          <div class="field-chip" data-value="user" data-group="excelMode">Это мои реальные данные</div>
+        </div>
+      </div>
+
+      <button class="form-submit" id="excelSubmit">Создать таблицу</button>
+      <p class="form-cost">Стоимость: 5 кредитов</p>
+    </div>
+
   </div>
 </div>
 
@@ -432,17 +643,17 @@
   <div class="modal-sheet">
     <div class="modal-handle"></div>
     <p class="modal-title">Выберите формат</p>
-    <button class="modal-item" data-action="presentation">
+    <button class="modal-item" data-open-form="form-pres">
       <div class="modal-icon m-purple"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-presentation" xlink:href="#i-presentation"/></svg></div>
       <div><div class="modal-item-title">Презентация</div><div class="modal-item-sub">Слайды, фото, графики</div></div>
       <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">10 кр.</span>
     </button>
-    <button class="modal-item" data-action="word">
+    <button class="modal-item" data-open-form="form-word">
       <div class="modal-icon m-blue"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-file" xlink:href="#i-file"/></svg></div>
       <div><div class="modal-item-title">Word-документ</div><div class="modal-item-sub">Договоры, рефераты, заявления</div></div>
       <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">5 кр.</span>
     </button>
-    <button class="modal-item" data-action="excel">
+    <button class="modal-item" data-open-form="form-excel">
       <div class="modal-icon m-green"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chart" xlink:href="#i-chart"/></svg></div>
       <div><div class="modal-item-title">Excel-таблица</div><div class="modal-item-sub">Сметы, формулы, графики</div></div>
       <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">5 кр.</span>
@@ -467,7 +678,7 @@
     </button>
     <button class="modal-item" data-action="image">
       <div class="modal-icon m-purple"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-image" xlink:href="#i-image"/></svg></div>
-      <div><div class="modal-item-title">Картинка</div><div class="modal-item-sub">Скоро</div></div>
+      <div><div class="modal-item-title">Картинка</div><div class="modal-item-sub">По описанию, любой сюжет</div></div>
       <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">10 кр.</span>
     </button>
     <button class="modal-item" data-action="video">
@@ -584,7 +795,7 @@
     if (tg?.showAlert) tg.showAlert(msg); else alert(msg);
   }
 
-  const SOON_ACTIONS = ['music', 'image', 'video'];
+  const SOON_ACTIONS = ['music', 'video'];
 
   document.querySelectorAll('[data-action]').forEach(el => {
     el.addEventListener('click', () => {
@@ -654,6 +865,95 @@
     const text = chatInput.value.trim();
     if (!text) return;
     sendAction('chat', { text });
+  });
+
+  // --- Общая функция переключения на любой экран (не только вкладки таббара) ---
+  function showScreen(id) {
+    document.querySelectorAll('.tab-item').forEach(x => { x.classList.remove('active'); x.querySelector('svg').setAttribute('stroke', '#8b85a3'); });
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById('screen-' + id).classList.add('active');
+    chatInputBar.style.display = 'none';
+    window.scrollTo(0, 0);
+  }
+
+  // --- Открытие форм из модалки "Документы" ---
+  document.querySelectorAll('[data-open-form]').forEach(el => {
+    el.addEventListener('click', () => {
+      modalDocs.classList.remove('open');
+      showScreen(el.dataset.openForm);
+      getTg()?.HapticFeedback?.impactOccurred('light');
+    });
+  });
+
+  // --- Кнопка "назад" в формах — возвращает на вкладку "Создать" ---
+  document.querySelectorAll('.form-back').forEach(el => {
+    el.addEventListener('click', () => {
+      document.querySelector(`.tab-item[data-tab="${el.dataset.backTo}"]`).click();
+    });
+  });
+
+  // --- Общий выбор среди чипов внутри одной data-group (радио-кнопки на вид чипов) ---
+  document.querySelectorAll('.field-chip[data-group]').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const group = chip.dataset.group;
+      document.querySelectorAll(`.field-chip[data-group="${group}"]`).forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      getTg()?.HapticFeedback?.selectionChanged();
+    });
+  });
+
+  // --- Степпер числа слайдов ---
+  let presSlides = 8;
+  const presSlidesValueEl = document.getElementById('presSlidesValue');
+  document.getElementById('presSlidesMinus').addEventListener('click', () => {
+    presSlides = Math.max(4, presSlides - 1);
+    presSlidesValueEl.textContent = presSlides;
+  });
+  document.getElementById('presSlidesPlus').addEventListener('click', () => {
+    presSlides = Math.min(20, presSlides + 1);
+    presSlidesValueEl.textContent = presSlides;
+  });
+
+  function activeChipValue(group, fallback) {
+    const el = document.querySelector(`.field-chip[data-group="${group}"].active`);
+    return el ? el.dataset.value : fallback;
+  }
+
+  // --- Отправка формы презентации ---
+  document.getElementById('presSubmit').addEventListener('click', () => {
+    const topic = document.getElementById('presTopic').value.trim();
+    if (!topic) { document.getElementById('presTopic').focus(); return; }
+    sendAction('gen_presentation', {
+      topic,
+      user_text: document.getElementById('presUserText').value.trim(),
+      style: activeChipValue('presStyle', 'default'),
+      slides: presSlides,
+      photo_mode: activeChipValue('presPhoto', 'ai'),
+    });
+  });
+
+  // --- Отправка формы Word ---
+  document.getElementById('wordSubmit').addEventListener('click', () => {
+    const content = document.getElementById('wordContent').value.trim();
+    if (!content) { document.getElementById('wordContent').focus(); return; }
+    sendAction('gen_word', {
+      kind: document.getElementById('wordKind').value,
+      content,
+      extra: document.getElementById('wordExtra').value.trim(),
+      size: activeChipValue('wordSize', 'short'),
+    });
+  });
+
+  // --- Отправка формы Excel ---
+  document.getElementById('excelSubmit').addEventListener('click', () => {
+    const content = document.getElementById('excelContent').value.trim();
+    if (!content) { document.getElementById('excelContent').focus(); return; }
+    sendAction('gen_excel', {
+      kind: document.getElementById('excelKind').value,
+      content,
+      extra: document.getElementById('excelExtra').value.trim(),
+      mode: activeChipValue('excelMode', 'ai'),
+    });
   });
 </script>
 
