@@ -188,7 +188,7 @@ PLAN_LIMITS = {"premium": 15}
 # формат. PLAN_LIMITS выше оставлен как есть (на него по-прежнему смотрит
 # статистика /grant и старая логика), но реальный допуск к генерации теперь
 # решает can_afford() ниже, а не can_generate().
-CREDIT_COSTS = {"presentation": 10, "word": 5, "excel": 5, "template": 0}
+CREDIT_COSTS = {"presentation": 10, "word": 5, "excel": 5, "template": 0, "image": 10}
 STARTING_CREDITS = 50  # стартовый баланс для новых пользователей - подобрать под реальную экономику отдельно
 
 
@@ -330,6 +330,7 @@ class Form(StatesGroup):
     waiting_control_mode = State()
     waiting_collab_message = State()
     waiting_file_instruction = State()
+    waiting_image_prompt = State()
 
 
 # ==================== ЯЗЫКИ / i18n ====================
@@ -533,6 +534,33 @@ TR = {
         "zh": "无法打开该文件——可能已损坏。请尝试发送另一个文件。",
         "es": "No se pudo abrir este archivo — puede estar dañado. Intenta enviar otro.",
         "fr": "Impossible d'ouvrir ce fichier — il est peut-être corrompu. Essayez d'en envoyer un autre.",
+    },
+    "msg_image_prompt": {
+        "ru": "Опишите, что нарисовать — можно текстом или голосом. Чем подробнее описание, тем точнее результат.",
+        "en": "Describe what to draw — text or voice both work. The more detail you give, the more accurate the result.",
+        "de": "Beschreibe, was gezeichnet werden soll — Text oder Sprachnachricht, beides geht. Je detaillierter, desto genauer das Ergebnis.",
+        "ar": "صف ما تريد رسمه - نصاً أو صوتاً. كلما زادت التفاصيل، كانت النتيجة أدق.",
+        "zh": "请描述要画的内容——文字或语音都可以。描述越详细，结果越准确。",
+        "es": "Describe qué dibujar — puede ser texto o voz. Cuanto más detallada la descripción, más preciso el resultado.",
+        "fr": "Décrivez ce qu'il faut dessiner — texte ou voix, les deux fonctionnent. Plus la description est détaillée, plus le résultat sera précis.",
+    },
+    "msg_image_generating": {
+        "ru": "Рисую — это может занять минуту ⏳",
+        "en": "Drawing it now — this may take a minute ⏳",
+        "de": "Ich zeichne — das kann eine Minute dauern ⏳",
+        "ar": "أرسم الآن - قد يستغرق هذا دقيقة ⏳",
+        "zh": "正在绘制——可能需要一分钟 ⏳",
+        "es": "Dibujando — puede tardar un minuto ⏳",
+        "fr": "Je dessine — cela peut prendre une minute ⏳",
+    },
+    "msg_image_failed": {
+        "ru": "Не получилось нарисовать — попробуйте описать по-другому или повторите чуть позже.",
+        "en": "Couldn't generate the image — try describing it differently or try again a bit later.",
+        "de": "Bild konnte nicht erstellt werden — versuche eine andere Beschreibung oder später erneut.",
+        "ar": "تعذر إنشاء الصورة - جرّب وصفاً مختلفاً أو حاول لاحقاً.",
+        "zh": "生成图片失败——请换个描述方式，或稍后再试。",
+        "es": "No se pudo generar la imagen — intenta describirla de otra forma o vuelve a intentarlo más tarde.",
+        "fr": "Impossible de générer l'image — essayez une autre description ou réessayez plus tard.",
     },
     "msg_upload_processing": {
         "ru": "Читаю файл и собираю документ по нему — это может занять минуту-две ⏳",
@@ -5917,6 +5945,68 @@ async def handle_miniapp_data(m: Message, state: FSMContext):
         await m.answer(tr("msg_topup_notice", lang))
         return
 
+    if action == "gen_presentation":
+        if not can_afford(m.from_user.id, CREDIT_COSTS["presentation"]):
+            await m.answer(tr("msg_limit", lang))
+            return
+        topic = (payload.get("topic") or "").strip()
+        if not topic:
+            return
+        user_text = (payload.get("user_text") or "").strip()
+        slides = payload.get("slides")
+        try:
+            slides = max(3, min(30, int(slides)))
+        except (TypeError, ValueError):
+            slides = 8
+        await state.update_data(
+            topic=topic, user_text=user_text, extra="", extra_used=0,
+            theme_name=payload.get("style") or "default", slides=slides,
+        )
+        if payload.get("photo_mode") == "own":
+            # Та же ветка, что и в обычном сценарии: просим прислать фото по одному,
+            # дальше подхватывает уже существующий хендлер Form.waiting_pres_photos.
+            await m.answer(tr("msg_send_photos_one_by_one", lang, slides=slides), reply_markup=photos_done_kb(lang))
+            await state.set_state(Form.waiting_pres_photos)
+        else:
+            await _build_presentation(m, state)
+        return
+
+    if action == "gen_word":
+        if not can_afford(m.from_user.id, CREDIT_COSTS["word"]):
+            await m.answer(tr("msg_limit", lang))
+            return
+        content = (payload.get("content") or "").strip()
+        if not content:
+            return
+        await state.update_data(
+            word_kind=payload.get("kind") or "doc", word_size=payload.get("size") or "short",
+            topic=content, user_text="", extra=(payload.get("extra") or "").strip(),
+        )
+        await word_build(m, state)
+        return
+
+    if action == "gen_excel":
+        if not can_afford(m.from_user.id, CREDIT_COSTS["excel"]):
+            await m.answer(tr("msg_limit", lang))
+            return
+        content = (payload.get("content") or "").strip()
+        if not content:
+            return
+        await state.update_data(
+            excel_kind=payload.get("kind") or "calc_table", excel_topic=content,
+            extra=(payload.get("extra") or "").strip(), excel_mode=payload.get("mode") or "ai",
+        )
+        await excel_build(m, state)
+        return
+
+    if action == "image":
+        if not can_afford(m.from_user.id, CREDIT_COSTS["image"]):
+            await m.answer(tr("msg_limit", lang))
+            return
+        await state.set_state(Form.waiting_image_prompt)
+        await m.answer(tr("msg_image_prompt", lang))
+        return
+
     if action == "chat":
         text = (payload.get("text") or "").strip()
         if not text:
@@ -6105,6 +6195,50 @@ async def dispatch_upload_generation(m: Message, state: FSMContext, source_text:
         await build_excel_from_upload(m, state, source_text, instruction)
     else:
         await build_word_from_upload(m, state, source_text, instruction)
+
+
+@dp.message(Form.waiting_image_prompt)
+async def image_prompt_handler(m: Message, state: FSMContext):
+    """Текст уже расшифрован из голоса outer_middleware'ом, если пришёл голосом."""
+    lang = user_lang(m.from_user.id)
+    uid = m.from_user.id
+    prompt = (m.text or "").strip()
+    await state.clear()
+    if not prompt:
+        await m.answer(tr("msg_didnt_understand", lang), reply_markup=main_kb(lang, uid=uid))
+        return
+    if not can_afford(uid, CREDIT_COSTS["image"]):
+        await m.answer(tr("msg_limit", lang))
+        return
+    ok, reason = start_job(uid)
+    if not ok:
+        await m.answer(reason)
+        return
+
+    await m.answer(tr("msg_image_generating", lang))
+    img_path = f"/tmp/genimg_{uid}_{random.randint(1000, 9999)}.png"
+    try:
+        success = await generate_image(prompt, img_path)
+        if not success or not os.path.exists(img_path):
+            await m.answer(tr("msg_image_failed", lang))
+            return
+        u = get_user(uid)
+        await m.answer_photo(FSInputFile(img_path))
+        spend_credits(uid, "image")
+        u["generations"] += 1
+        u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — картинка: {prompt[:60]}")
+        save_users()
+        note_success(uid)
+    except Exception as e:
+        print("Ошибка генерации картинки:", e)
+        await m.answer(tr("msg_image_failed", lang))
+    finally:
+        finish_job(uid)
+        try:
+            if os.path.exists(img_path):
+                os.remove(img_path)
+        except Exception:
+            pass
 
 
 @dp.message(Form.waiting_file_instruction)
