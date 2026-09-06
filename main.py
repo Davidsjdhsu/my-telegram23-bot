@@ -1703,7 +1703,7 @@ STYLE_KEYWORDS = [
     ("технологи", "tech"), ("техно ", "tech"), ("tech", "tech"),
     ("бизнес", "business"), ("делов", "business"),
     ("учебн", "school"), ("школьн", "school"), ("для школы", "school"),
-    ("модн", "fashion"), ("fashion", "fashion"), ("стиль мода", "fashion"),
+    ("модны", "fashion"), ("fashion", "fashion"), ("стиль мода", "fashion"),
     ("спорт", "sport"),
     ("путешеств", "travel"), ("туризм", "travel"),
     ("кулинар", "food"), ("еда", "food"), ("food", "food"),
@@ -1825,10 +1825,27 @@ async def ask_grok_chat(user_text: str, lang: str = "ru") -> str:
         r = await client.chat.completions.create(
             model="grok-3",
             messages=[
-                {"role": "system", "content": f"Ты дружелюбный помощник в Telegram-боте, который умеет генерировать презентации, Word-документы и Excel-таблицы. Сейчас с тобой общаются в свободном чате вне этих сценариев - отвечай на любые вопросы полезно и по существу, обычным живым языком, без канцелярита. Если вопрос действительно ближе к тому, что умеет бот (составить документ, таблицу, презентацию) - можешь мягко подсказать, что для этого в главном меню есть отдельные разделы, но не отказывай в самом ответе. Отвечай на {lang_names.get(lang, 'русском')} языке. Держи ответ по существу и не слишком длинным - это чат в Telegram, а не документ."},
+                {"role": "system", "content": (
+                    f"Ты живой собеседник в Telegram, не корпоративный робот и не колл-центр. "
+                    f"Отвечай на {lang_names.get(lang, 'русском')} языке. "
+                    "Копируй манеру ТЕКУЩЕГО сообщения, не прошлого разговора: "
+                    "если пишет коротко — коротко, если разговорно — разговорно, "
+                    "если спокойно и без мата — отвечай спокойно и без мата, "
+                    "если с матом — можно материться в том же градусе, без морали и без оправданий. "
+                    "Мат только в речи, не в человека: не оскорбляй собеседника, не унижай, не посылай, не переходи на личности. "
+                    "Без канцелярита, без «конечно! с радостью помогу», без списков «вот несколько вариантов», "
+                    "без фраз вроде «как языковая модель». Пиши как нормальный знакомый в мессенджере. "
+                    "Суть вопроса не теряй. "
+                    "Если просят совет или мнение по политике, религии или личным финансам "
+                    "(куда вложить, какую крипту купить, как голосовать, какая вера правильная) — "
+                    "коротко откажись: в чате этими темами не занимаешься. Без лекции и без спора. "
+                    "Презентацию, Word или Excel на любую тему, в том числе такую, делать можно: "
+                    "это файл, не совет. Тогда ответь по-человечески и направь в меню или одну фразу в чат. "
+                    "Ответ держи коротким, как в переписке."
+                )},
                 {"role": "user", "content": user_text}
             ],
-            temperature=0.8,
+            temperature=0.95,
             max_tokens=1200
         )
         return r.choices[0].message.content
@@ -6090,6 +6107,53 @@ async def start_collab(m: Message, state: FSMContext):
     await state.set_state(Form.waiting_collab_message)
 
 
+async def handle_free_text_request(m: Message, state: FSMContext, text: str):
+    """Общая обработка фразы из чата бота и из поля чата Mini App."""
+    lang = user_lang(m.from_user.id)
+    text = (text or "").strip()
+    if not text:
+        return
+    if looks_like_document_request(text):
+        fmt = detect_requested_format(text)
+        if fmt == "presentation":
+            if not can_afford(m.from_user.id, CREDIT_COSTS["presentation"]):
+                await bot.send_message(m.from_user.id, tr("msg_limit", lang))
+                return
+            slides = extract_slide_count(text)
+            style = extract_style(text)
+            photo_mode = extract_photo_mode(text)
+            missing = []
+            if slides is None:
+                missing.append("slides")
+            if style is None:
+                missing.append("style")
+            if photo_mode is None:
+                missing.append("photo")
+            if missing:
+                await state.update_data(pres_topic=text)
+                await state.set_state(Form.waiting_pres_clarify)
+                await bot.send_message(
+                    m.from_user.id,
+                    tr("msg_pres_clarify", lang, missing=build_missing_list(missing, lang)),
+                )
+                return
+            await state.update_data(
+                topic=text, user_text="", extra="", extra_used=0,
+                theme_name=style, slides=slides, mode="ai", content_lang=lang,
+                photo_mode=photo_mode,
+            )
+            await bot.send_message(m.from_user.id, "Принял запрос. Собираю черновик.")
+            await process_slides(m, state)
+            return
+        if fmt == "excel":
+            await bot.send_message(m.from_user.id, "Для таблицы открой «Создать» в меню или напиши в чат после /cancel.")
+            return
+        await bot.send_message(m.from_user.id, "Для документа открой «Создать» в меню или напиши в чат после /cancel.")
+        return
+    reply = await ask_grok_chat(text, lang)
+    await bot.send_message(m.from_user.id, reply or tr("msg_chat_error", lang))
+
+
 def ensure_answerable(m: Message):
     """Сообщения, которые приходят от Mini App через web_app_data, эмпирически ведут себя
     иначе, чем обычные текстовые: m.answer()/m.answer_document() у них могут не долетать
@@ -6222,21 +6286,14 @@ async def handle_miniapp_data(m: Message, state: FSMContext):
         text = (payload.get("text") or "").strip()
         if not text:
             return
-        if looks_like_document_request(text):
-            fmt = detect_requested_format(text)
-            await bot.send_message(m.from_user.id, "Собираю это в чате.")
-            if fmt == "presentation":
-                await start_pres(m, state)
-            elif fmt == "excel":
-                await start_excel(m, state)
-            else:
-                await start_word(m, state)
-            return
-        reply = await ask_grok_chat(text, lang)
-        if reply:
-            await bot.send_message(m.from_user.id, reply)
-        else:
-            await bot.send_message(m.from_user.id, tr("msg_chat_error", lang))
+        try:
+            await handle_free_text_request(m, state, text)
+        except Exception as e:
+            print("Ошибка Mini App chat:", repr(e))
+            await bot.send_message(
+                m.from_user.id,
+                "Не смог обработать запрос из меню. Напиши ту же фразу прямо в чат или /cancel.",
+            )
         return
 
     handlers_no_state = {"history": history, "plan": my_plan, "help": show_help}
@@ -6567,47 +6624,7 @@ async def free_chat_fallback(m: Message, state: FSMContext):
     text = (m.text or "").strip()
     if not text or text.startswith("/"):
         return
-    lang = user_lang(m.from_user.id)
-    if looks_like_document_request(text):
-        fmt = detect_requested_format(text)
-        if fmt == "presentation":
-            if not can_afford(m.from_user.id, CREDIT_COSTS["presentation"]):
-                await m.answer(tr("msg_limit", lang))
-                return
-            slides = extract_slide_count(text)
-            style = extract_style(text)
-            photo_mode = extract_photo_mode(text)
-            missing = []
-            if slides is None:
-                missing.append("slides")
-            if style is None:
-                missing.append("style")
-            if photo_mode is None:
-                missing.append("photo")
-            if missing:
-                # Чего-то не хватает - один раз уточняем недостающее одним сообщением,
-                # вместо того чтобы молча брать значения по умолчанию.
-                await state.update_data(pres_topic=text)
-                await state.set_state(Form.waiting_pres_clarify)
-                await m.answer(tr("msg_pres_clarify", lang, missing=build_missing_list(missing, lang)))
-                return
-            await state.update_data(
-                topic=text, user_text="", extra="", extra_used=0,
-                theme_name=style, slides=slides, mode="ai", content_lang=lang,
-                photo_mode=photo_mode,
-            )
-            await process_slides(m, state)
-            return
-        if fmt == "excel":
-            await start_excel(m, state)
-            return
-        await start_word(m, state)
-        return
-    reply = await ask_grok_chat(text, lang)
-    if reply:
-        await m.answer(reply)
-    else:
-        await m.answer(tr("msg_chat_error", lang))
+    await handle_free_text_request(m, state, text)
 
 
 @dp.errors()
