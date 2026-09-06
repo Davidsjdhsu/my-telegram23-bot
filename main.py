@@ -142,6 +142,27 @@ def register_pdf_fonts():
                 return "CyrRegular", "CyrBold"
             except Exception as e:
                 print("Не удалось зарегистрировать шрифт", regular, ":", e)
+    # Последняя попытка: скопировать системный DejaVu в fonts/ на случай,
+    # если Render положил шрифты, но не в ожидаемый путь из FONT_CANDIDATES.
+    extra = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    ]
+    extra_b = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    regular = next((p for p in extra if os.path.exists(p)), None)
+    bold = next((p for p in extra_b if os.path.exists(p)), None)
+    if regular and bold:
+        try:
+            pdfmetrics.registerFont(TTFont("CyrRegular", regular))
+            pdfmetrics.registerFont(TTFont("CyrBold", bold))
+            return "CyrRegular", "CyrBold"
+        except Exception as e:
+            print("Не удалось зарегистрировать запасной шрифт:", e)
     print("ВНИМАНИЕ: шрифт с кириллицей не найден — русский текст в PDF будет нечитаемым. "
           "Положи DejaVuSans.ttf и DejaVuSans-Bold.ttf в папку fonts/ рядом со скриптом.")
     return "Helvetica", "Helvetica-Bold"
@@ -179,7 +200,9 @@ client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
 whisper_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-USERS_FILE = os.path.join(BASE_DIR, "users.json")
+# На Render диск сервиса сбрасывается при деплое. Если задан DATA_DIR
+# (persistent disk), база пользователей живёт там.
+USERS_FILE = os.path.join(os.getenv("DATA_DIR", BASE_DIR), "users.json")
 PLAN_LIMITS = {"premium": 15}
 
 # --- Кредиты ----------------------------------------------------------------
@@ -332,6 +355,7 @@ class Form(StatesGroup):
     waiting_collab_message = State()
     waiting_file_instruction = State()
     waiting_image_prompt = State()
+    waiting_pres_clarify = State()
 
 
 # ==================== ЯЗЫКИ / i18n ====================
@@ -571,6 +595,15 @@ TR = {
         "zh": "正在读取文件并据此生成文档——可能需要一两分钟 ⏳",
         "es": "Leyendo el archivo y preparando un documento a partir de él — puede tardar uno o dos minutos ⏳",
         "fr": "Lecture du fichier et préparation d'un document à partir de celui-ci — cela peut prendre une à deux minutes ⏳",
+    },
+    "msg_pres_clarify": {
+        "ru": "Тему понял. Уточните ещё, что важно, а остальное возьму по умолчанию:{missing}\n\nМожно одной фразой, например: «12 слайдов, стиль история, фото через ИИ».",
+        "en": "Got the topic. Please clarify what matters, I'll default the rest:{missing}\n\nOne phrase is fine, e.g. \"12 slides, history style, AI photos\".",
+        "de": "Thema verstanden. Bitte gib noch an, was wichtig ist, den Rest wähle ich automatisch:{missing}\n\nEin Satz reicht, z. B. „12 Folien, Stil Geschichte, Fotos per KI“.",
+        "ar": "فهمت الموضوع. يرجى توضيح ما يهم، والباقي سأختاره افتراضياً:{missing}\n\nتكفي عبارة واحدة، مثل: «12 شريحة، أسلوب تاريخي، صور بالذكاء الاصطناعي».",
+        "zh": "主题明白了。请补充说明一下这些，其余我会用默认值：{missing}\n\n一句话说明即可，例如：「12张幻灯片，历史风格，AI配图」。",
+        "es": "Entendido el tema. Aclara lo que te importa, el resto lo pondré por defecto:{missing}\n\nBasta una frase, por ejemplo: «12 diapositivas, estilo historia, fotos con IA».",
+        "fr": "Sujet compris. Précisez ce qui compte, le reste sera par défaut :{missing}\n\nUne phrase suffit, par ex. « 12 diapositives, style histoire, photos par IA ».",
     },
     "msg_upload_what_next": {
         "ru": "Похоже, это {description}. Что с ним сделать — собрать презентацию, документ Word или таблицу Excel? Опишите одним сообщением (можно голосом).",
@@ -1626,12 +1659,97 @@ def detect_slide_count(text: str, default: int = 10) -> int:
     """Ищет в тексте что-то вроде "8 слайдов"/"на 12 слайдов" - иначе разумное значение
     по умолчанию. Намеренно простая эвристика, не через ИИ - здесь это не оправдывает
     отдельный запрос к Grok ради одного числа."""
-    m = re.search(r"(\d{1,2})\s*слайд", (text or "").lower())
+    n = extract_slide_count(text)
+    return n if n else default
+
+
+_SLIDE_WORDS = {
+    "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7, "восемь": 8,
+    "девять": 9, "десять": 10, "одиннадцать": 11, "двенадцать": 12,
+    "тринадцать": 13, "четырнадцать": 14, "пятнадцать": 15, "шестнадцать": 16,
+    "двадцать": 20, "тридцать": 30,
+    "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "twelve": 12, "sixteen": 16, "twenty": 20,
+}
+
+
+def extract_slide_count(text: str):
+    """Как detect_slide_count, но возвращает None, если число явно не указано - в отличие
+    от версии с default, здесь важно ИМЕННО отличить "не сказал" от "сказал восемь",
+    чтобы решить, нужно ли переспрашивать."""
+    t = (text or "").lower()
+    m = re.search(r"(\d{1,2})\s*(?:слайд|slide)", t)
     if m:
         n = int(m.group(1))
         if 3 <= n <= 30:
             return n
-    return default
+    m = re.search(r"(?:слайд|slide)\w*\s*[—\-:]*\s*(\d{1,2})", t)
+    if m:
+        n = int(m.group(1))
+        if 3 <= n <= 30:
+            return n
+    for word, n in sorted(_SLIDE_WORDS.items(), key=lambda x: -len(x[0])):
+        if re.search(rf"\b{word}\b\s*(?:слайд|slide)", t) or re.search(rf"(?:слайд|slide)\w*\s*{word}\b", t):
+            return n
+    return None
+
+
+# Простое сопоставление обиходных слов со стилями презентации (ключи THEMES). Не
+# претендует на полный разбор языка - ловит самые ходовые формулировки, остальное
+# просто останется нераспознанным и попадёт в список "уточнить".
+STYLE_KEYWORDS = [
+    ("минимал", "minimal"), ("минимализм", "minimal"),
+    ("историческ", "history"), ("история", "history"), ("истори ", "history"),
+    ("технологи", "tech"), ("техно ", "tech"), ("tech", "tech"),
+    ("бизнес", "business"), ("делов", "business"),
+    ("учебн", "school"), ("школьн", "school"), ("для школы", "school"),
+    ("модн", "fashion"), ("fashion", "fashion"), ("стиль мода", "fashion"),
+    ("спорт", "sport"),
+    ("путешеств", "travel"), ("туризм", "travel"),
+    ("кулинар", "food"), ("еда", "food"), ("food", "food"),
+    ("искусств", "art"),
+    ("эколог", "eco"),
+    ("природ", "nature"),
+    ("научн", "science"), ("science", "science"),
+]
+
+
+def extract_style(text: str):
+    t = " " + (text or "").lower() + " "
+    for kw, style in STYLE_KEYWORDS:
+        if kw in t:
+            return style
+    return None
+
+
+def extract_photo_mode(text: str):
+    t = (text or "").lower()
+    if any(kw in t for kw in [
+        "свои фото", "мои фото", "пришлю фото", "свои снимки", "личные фото",
+        "own photo", "мое фото", "мои картинк", "без ии фото",
+    ]):
+        return "own"
+    if any(kw in t for kw in [
+        "через ии", "через нейросеть", "нарисуй сам", "сгенерируй фото",
+        "ai photo", "сам придумай фото", "фото ии", "картинки ии",
+        "сгенерируй картин", "нейрофото",
+    ]):
+        return "ai"
+    return None
+
+
+MISSING_ITEM_LABELS = {
+    "slides": {"ru": "число слайдов", "en": "number of slides", "de": "Anzahl der Folien",
+               "ar": "عدد الشرائح", "zh": "幻灯片数量", "es": "número de diapositivas", "fr": "nombre de diapositives"},
+    "style": {"ru": "стиль", "en": "style", "de": "Stil", "ar": "الأسلوب", "zh": "风格", "es": "estilo", "fr": "style"},
+    "photo": {"ru": "фото — свои или через ИИ", "en": "photos — yours or AI-generated", "de": "Fotos — eigene oder per KI",
+              "ar": "الصور - خاصة بك أم بالذكاء الاصطناعي", "zh": "配图——自己的还是AI生成",
+              "es": "fotos — propias o generadas por IA", "fr": "photos — les vôtres ou générées par IA"},
+}
+
+
+def build_missing_list(missing_keys, lang):
+    return "".join(f"\n— {MISSING_ITEM_LABELS[k].get(lang, MISSING_ITEM_LABELS[k]['ru'])}" for k in missing_keys)
 
 
 async def describe_upload_briefly(source_text: str, ext: str, lang: str) -> str:
@@ -1668,10 +1786,31 @@ DOCUMENT_INTENT_KEYWORDS = [
     "presentation", "slide", "spreadsheet", "resume", "cv ",
 ]
 
+# Однозначные глаголы-команды, показывающие, что человек ПРОСИТ действие, а не просто
+# упомянул слово в разговоре или вопросе ("что такое презентация?", "у меня есть
+# презентация на работе" не должны запускать генерацию сами по себе). Специально не
+# включены "хочу"/"нужен" и подобные - они слишком легко превращаются в отрицание
+# ("не хочу", "не нужен"), см. NEGATION_PATTERNS ниже как ещё один слой защиты.
+DOCUMENT_ACTION_VERBS = [
+    "сделай", "сделать", "создай", "создать", "собери", "собрать",
+    "напиши", "написать", "составь", "составить", "оформи", "оформить",
+    "подготовь", "подготовить", "сгенерируй", "сгенерировать", "построй", "построить",
+    "посчитай", "посчитать", "нарисуй", "нарисовать",
+    "make", "create", "generate", "build", "write",
+]
+
+# Явное отрицание рядом с ключевым словом - если оно есть, не запускаем генерацию,
+# даже если формально совпали и глагол, и ключевое слово.
+NEGATION_PATTERNS = ["не хочу", "не нужен", "не нужна", "не нужно", "не надо", "не буду", "don't", "do not"]
+
 
 def looks_like_document_request(text: str) -> bool:
     t = (text or "").lower()
-    return any(kw in t for kw in DOCUMENT_INTENT_KEYWORDS)
+    if any(neg in t for neg in NEGATION_PATTERNS):
+        return False
+    has_keyword = any(kw in t for kw in DOCUMENT_INTENT_KEYWORDS)
+    has_verb = any(v in t for v in DOCUMENT_ACTION_VERBS)
+    return has_keyword and has_verb
 
 
 async def ask_grok_chat(user_text: str, lang: str = "ru") -> str:
@@ -2742,13 +2881,19 @@ async def process_theme(m: Message, state: FSMContext):
 @dp.message(Form.waiting_slides)
 async def process_slides(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
-    slides = 8
-    t = m.text or ""
-    if "16" in t:
-        slides = 16
-    elif "12" in t:
-        slides = 12
     data = await state.get_data()
+    # Если число слайдов уже определено заранее (новые сценарии - форма в Mini App,
+    # мгновенная сборка в чате с уже распознанными деталями) - берём его и не парсим
+    # заново текст сообщения. Иначе (старый пошаговый сценарий) - как раньше, ищем
+    # число прямо в тексте ответа на вопрос "сколько слайдов".
+    slides = data.get("slides")
+    if not slides:
+        slides = 8
+        t = m.text or ""
+        if "16" in t:
+            slides = 16
+        elif "12" in t:
+            slides = 12
     angle = random.choice(ANGLES)
     await state.update_data(slides=slides, angle=angle)
     await m.answer(tr("msg_building_sample", lang), reply_markup=cancel_kb(lang))
@@ -2884,6 +3029,17 @@ async def process_extra(m: Message, state: FSMContext):
 @dp.message(Form.waiting_confirm, F.text.in_(ALL_BTN_FULL_VERSION_LABELS))
 async def ask_photo_source(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
+    data = await state.get_data()
+    # Если предпочтение по фото уже известно заранее (форма в Mini App или мгновенная
+    # сборка в чате, где это уже спросили/распознали) - не переспрашиваем ещё раз,
+    # сразу идём в нужную ветку.
+    known_photo_mode = data.get("photo_mode")
+    if known_photo_mode == "own":
+        await photo_source_own(m, state)
+        return
+    if known_photo_mode == "ai":
+        await _build_presentation(m, state)
+        return
     await state.update_data(user_photos=[])
     await m.answer(
         tr("msg_photo_or_own", lang),
@@ -5934,6 +6090,35 @@ async def start_collab(m: Message, state: FSMContext):
     await state.set_state(Form.waiting_collab_message)
 
 
+def ensure_answerable(m: Message):
+    """Сообщения, которые приходят от Mini App через web_app_data, эмпирически ведут себя
+    иначе, чем обычные текстовые: m.answer()/m.answer_document() у них могут не долетать
+    до пользователя без какой-либо ошибки на нашей стороне (поймано на живых логах -
+    Replicate успешно отработал, файл собрался, но m.answer_document() с ним просто не
+    показался в чате). Вместо того чтобы вручную переписывать каждый answer() во всех
+    функциях генерации (word_build/excel_build/_build_presentation и т.д. - их за месяцы
+    накопилось слишком много, и они используются и обычным чат-сценарием тоже, где
+    m.answer() работает нормально) - подменяем эти три метода ТОЛЬКО на этом конкретном
+    объекте сообщения на прямую отправку через bot.send_* с явно вычисленным chat_id.
+    Дальше объект m ведёт себя как обычно для всего остального кода, который его
+    использует, включая уже существующие функции - им не нужно знать про эту подмену."""
+    chat_id = m.chat.id if getattr(m, "chat", None) else m.from_user.id
+
+    async def _answer(text, reply_markup=None, **kw):
+        return await bot.send_message(chat_id, text, reply_markup=reply_markup, **kw)
+
+    async def _answer_document(document, caption=None, **kw):
+        return await bot.send_document(chat_id, document, caption=caption, **kw)
+
+    async def _answer_photo(photo, caption=None, **kw):
+        return await bot.send_photo(chat_id, photo, caption=caption, **kw)
+
+    m.answer = _answer
+    m.answer_document = _answer_document
+    m.answer_photo = _answer_photo
+    return m
+
+
 @dp.message(F.web_app_data)
 async def handle_miniapp_data(m: Message, state: FSMContext):
     """Обрабатывает нажатия в Mini App - каждый пункт меню там при нажатии вызывает
@@ -5947,6 +6132,7 @@ async def handle_miniapp_data(m: Message, state: FSMContext):
         action = (payload.get("action") or "").strip()
     except Exception:
         return
+    m = ensure_answerable(m)
     lang = user_lang(m.from_user.id)
     u = get_user(m.from_user.id)
 
@@ -5990,16 +6176,10 @@ async def handle_miniapp_data(m: Message, state: FSMContext):
             topic=topic, user_text=user_text, extra="", extra_used=0,
             theme_name=payload.get("style") or "default", slides=slides,
             mode="user" if user_text else "ai", content_lang=lang,
+            photo_mode=payload.get("photo_mode") or "ai",
         )
-        await bot.send_message(
-            m.from_user.id,
-            "Приняла из меню. Собираю презентацию в чате, обычно 2–3 минуты. Не закрывай бота.",
-        )
-        if payload.get("photo_mode") == "own":
-            await bot.send_message(m.from_user.id, tr("msg_send_photos_one_by_one", lang, slides=slides), reply_markup=photos_done_kb(lang))
-            await state.set_state(Form.waiting_pres_photos)
-        else:
-            await _build_presentation(m, state)
+        await bot.send_message(m.from_user.id, "Приняла из меню — собираю черновик, покажу план перед полной сборкой.")
+        await process_slides(m, state)
         return
 
     if action == "gen_word":
@@ -6340,6 +6520,34 @@ async def document_upload(m: Message, state: FSMContext):
     await m.answer(tr("msg_upload_what_next", lang, description=description))
 
 
+@dp.message(Form.waiting_pres_clarify)
+async def pres_clarify_handler(m: Message, state: FSMContext):
+    """Ответ на уточняющий вопрос про слайды/стиль/фото. Текст уже расшифрован из
+    голоса outer_middleware'ом, если пришёл голосом. Что не удалось распознать даже
+    здесь - берём по умолчанию: спрашивать бесконечно не нужно, один раз уточнили,
+    дальше разумные значения лучше, чем бесконечный диалог."""
+    lang = user_lang(m.from_user.id)
+    reply_text = (m.text or "").strip()
+    data = await state.get_data()
+    topic = data.get("pres_topic", "")
+
+    slides = extract_slide_count(reply_text) or 8
+    style = extract_style(reply_text) or "default"
+    photo_mode = extract_photo_mode(reply_text) or "ai"
+
+    if not can_afford(m.from_user.id, CREDIT_COSTS["presentation"]):
+        await state.clear()
+        await m.answer(tr("msg_limit", lang))
+        return
+
+    await state.update_data(
+        topic=topic, user_text="", extra="", extra_used=0,
+        theme_name=style, slides=slides, mode="ai", content_lang=lang,
+        photo_mode=photo_mode,
+    )
+    await process_slides(m, state)
+
+
 @dp.message(StateFilter(None), F.text)
 async def free_chat_fallback(m: Message, state: FSMContext):
     """Свободный чат-помощник вне сценариев генерации документов - тот же ответ,
@@ -6366,13 +6574,29 @@ async def free_chat_fallback(m: Message, state: FSMContext):
             if not can_afford(m.from_user.id, CREDIT_COSTS["presentation"]):
                 await m.answer(tr("msg_limit", lang))
                 return
-            slides = detect_slide_count(text, 8)
+            slides = extract_slide_count(text)
+            style = extract_style(text)
+            photo_mode = extract_photo_mode(text)
+            missing = []
+            if slides is None:
+                missing.append("slides")
+            if style is None:
+                missing.append("style")
+            if photo_mode is None:
+                missing.append("photo")
+            if missing:
+                # Чего-то не хватает - один раз уточняем недостающее одним сообщением,
+                # вместо того чтобы молча брать значения по умолчанию.
+                await state.update_data(pres_topic=text)
+                await state.set_state(Form.waiting_pres_clarify)
+                await m.answer(tr("msg_pres_clarify", lang, missing=build_missing_list(missing, lang)))
+                return
             await state.update_data(
                 topic=text, user_text="", extra="", extra_used=0,
-                theme_name="default", slides=slides, mode="ai", content_lang=lang,
+                theme_name=style, slides=slides, mode="ai", content_lang=lang,
+                photo_mode=photo_mode,
             )
-            await m.answer("Собираю презентацию здесь, в чате. Обычно 2–3 минуты.")
-            await _build_presentation(m, state)
+            await process_slides(m, state)
             return
         if fmt == "excel":
             await start_excel(m, state)
