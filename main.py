@@ -3362,6 +3362,9 @@ async def _build_presentation(m: Message, state: FSMContext):
             reply_markup=main_kb(lang, uid=m.from_user.id)
         )
         await state.clear()
+    except Exception as e:
+        print("Ошибка сборки презентации:", repr(e))
+        await m.answer(tr("msg_grok_error", lang), reply_markup=main_kb(lang, uid=uid))
     finally:
         finish_job(uid)
 
@@ -5961,6 +5964,7 @@ async def handle_miniapp_data(m: Message, state: FSMContext):
         await state.update_data(
             topic=topic, user_text=user_text, extra="", extra_used=0,
             theme_name=payload.get("style") or "default", slides=slides,
+            mode="user" if user_text else "ai", content_lang=lang,
         )
         if payload.get("photo_mode") == "own":
             # Та же ветка, что и в обычном сценарии: просим прислать фото по одному,
