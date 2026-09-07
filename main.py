@@ -3,7 +3,9 @@ import asyncio
 import json
 import random
 import html
-from urllib.parse import urlencode
+import hashlib
+import hmac
+from urllib.parse import urlencode, parse_qsl
 import re
 import time
 import colorsys
@@ -16,6 +18,8 @@ from aiogram.types import (Message, FSInputFile, ReplyKeyboardMarkup, KeyboardBu
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.base import StorageKey
+from aiohttp import web
 from openai import AsyncOpenAI
 from docx import Document
 from docx.shared import Pt as DocxPt, Cm, RGBColor as DocxRGB
@@ -192,6 +196,53 @@ elif not MINIAPP_URL.startswith("https://"):
     print("ВНИМАНИЕ: MINIAPP_URL должен начинаться с https:// (у Telegram Mini App это обязательное "
           "требование) — сейчас задан не по HTTPS, кнопка не будет показываться")
     MINIAPP_URL = ""
+
+# Публичный https-адрес ЭТОГО сервиса (тот же хост, что уже принимает health-check
+# на Render) - нужен, чтобы Mini App могла отправлять данные форм через свой HTTP-эндпоинт
+# (/api/action), а не только через Telegram.WebApp.sendData(). Ограничение платформы:
+# sendData работает ТОЛЬКО когда Mini App открыт через кнопку в reply-клавиатуре -
+# при открытии через системную кнопку меню чата (MenuButtonWebApp) или инлайн-кнопку
+# sendData тихо ничего не делает. Без PUBLIC_BASE_URL формы, открытые из системного
+# меню, не смогут отправить данные боту - кнопка "Открыть меню" (клавиатура) продолжит
+# работать как раньше в любом случае.
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+if not PUBLIC_BASE_URL:
+    print("ВНИМАНИЕ: PUBLIC_BASE_URL не задан — формы Mini App, открытого через системную "
+          "кнопку меню, не смогут отправлять данные боту (Telegram.WebApp.sendData не "
+          "поддерживается при таком способе запуска). Укажи публичный https-адрес "
+          "этого сервиса на Render.")
+
+
+def validate_webapp_init_data(init_data: str, max_age_seconds: int = 3600):
+    """Проверяет подпись initData, присланного Mini App через fetch (см. /api/action),
+    по официальной схеме Telegram
+    (https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app).
+    Возвращает dict с данными user при успехе, иначе None - доверять действию от чужого
+    имени без валидной подписи нельзя."""
+    try:
+        pairs = dict(parse_qsl(init_data, strict_parsing=True))
+    except Exception:
+        return None
+    received_hash = pairs.pop("hash", None)
+    if not received_hash:
+        return None
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+    computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(computed_hash, received_hash):
+        return None
+    auth_date = pairs.get("auth_date")
+    if auth_date:
+        try:
+            if time.time() - int(auth_date) > max_age_seconds:
+                return None  # просроченная initData - переоткрыть меню и попробовать снова
+        except ValueError:
+            pass
+    try:
+        return json.loads(pairs.get("user") or "{}")
+    except Exception:
+        return None
+
 
 client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
 # Отдельный клиент на настоящий OpenAI (не xAI) - только для распознавания речи (Whisper),
@@ -2220,7 +2271,7 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
 # изменился, если сама ссылка выглядит одинаково. Добавляя это число в query-параметры,
 # каждая новая версия HTML получает технически другой адрес, и кэш Telegram больше не
 # может ошибочно посчитать её той же самой страницей.
-MINIAPP_VERSION = 2
+MINIAPP_VERSION = 3
 
 
 def build_miniapp_url(u):
@@ -2238,6 +2289,7 @@ def build_miniapp_url(u):
         "mode": u.get("control_mode", "buttons"),
         "history": json.dumps(history_short, ensure_ascii=False),
         "v": MINIAPP_VERSION,
+        "api": PUBLIC_BASE_URL,
     })
     sep = "&" if "?" in MINIAPP_URL else "?"
     return f"{MINIAPP_URL}{sep}{params}"
@@ -6195,6 +6247,50 @@ def ensure_answerable(m: Message):
     return _AnswerableProxy(m, chat_id)
 
 
+class _FakeUser:
+    __slots__ = ("id",)
+
+    def __init__(self, uid):
+        self.id = uid
+
+
+class _FakeChat:
+    __slots__ = ("id",)
+
+    def __init__(self, uid):
+        self.id = uid
+
+
+class _HttpMessageProxy:
+    """Синтетическая замена aiogram Message для запросов, пришедших не через long polling,
+    а напрямую по HTTP из Mini App (см. _miniapp_action_handler) - когда Mini App открыт
+    через системную кнопку меню чата, Telegram.WebApp.sendData() не работает (ограничение
+    платформы, см. комментарий у PUBLIC_BASE_URL), поэтому такие запросы идут в обход
+    Telegram Update, через свой HTTP-эндпоинт. Даёт ровно то, что нужно _handle_miniapp_payload
+    и вложенным обработчикам: from_user.id и chat.id - answer/answer_document/answer_photo
+    достраивает ensure_answerable() поверх этого объекта, как и для обычных web_app_data
+    сообщений."""
+
+    def __init__(self, uid: int):
+        self.from_user = _FakeUser(uid)
+        self.chat = _FakeChat(uid)
+
+
+async def _run_miniapp_action_http(uid: int, action: str, payload: dict):
+    m = _HttpMessageProxy(uid)
+    state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, chat_id=uid, user_id=uid))
+    try:
+        await _handle_miniapp_payload(m, state, payload, action)
+    except Exception as e:
+        print("Ошибка Mini App (HTTP):", repr(e))
+        import traceback
+        traceback.print_exc()
+        try:
+            await bot.send_message(uid, f"Меню дошло, но обработка упала: {type(e).__name__}: {e}")
+        except Exception:
+            pass
+
+
 @dp.message(F.web_app_data)
 async def handle_miniapp_data(m: Message, state: FSMContext):
     """Обрабатывает нажатия в Mini App - каждый пункт меню там при нажатии вызывает
@@ -6679,39 +6775,65 @@ async def global_error_handler(event):
     return True
 
 
-def start_health_check_server():
-    """Render (и подобные платформы) для сервисов типа "Web Service" ждут, что
-    приложение ответит на HTTP-запрос проверки здоровья на порту из переменной
-    окружения PORT - иначе помечает деплой как неудавшийся, даже если сам бот
-    прекрасно работает через long-polling и никакого HTTP на самом деле не требует.
-    Этот сервер не имеет отношения к Mini App (та веб-страница отдельно живёт на
-    GitHub Pages) - он существует только чтобы Render видел "живой" сервис.
-    Работает в отдельном потоке на чистой стандартной библиотеке (без aiohttp),
-    чтобы не тянуть ещё одну внешнюю зависимость поверх и без того шаткого билда."""
-    import threading
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+}
 
-    class _HealthHandler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"OK")
 
-        def log_message(self, format, *args):
-            pass  # не засорять логи бота запросами проверки здоровья
+async def _health_handler(request):
+    return web.Response(text="OK")
 
+
+async def _miniapp_action_options_handler(request):
+    return web.Response(headers=CORS_HEADERS)
+
+
+async def _miniapp_action_handler(request):
+    """HTTP-эндпоинт, которым Mini App отправляет данные форм боту, когда Telegram.WebApp.sendData()
+    недоступен (Mini App открыт через системную кнопку меню чата, а не через кнопку в
+    reply-клавиатуре - см. комментарий у PUBLIC_BASE_URL). Ожидает JSON {"action", "initData", "payload"},
+    проверяет подпись initData и запускает тот же _handle_miniapp_payload, что и обычный web_app_data."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "bad_json"}, status=400, headers=CORS_HEADERS)
+    action = (body.get("action") or "").strip()
+    if not action:
+        return web.json_response({"ok": False, "error": "no_action"}, status=400, headers=CORS_HEADERS)
+    user = validate_webapp_init_data(body.get("initData") or "")
+    if not user or not user.get("id"):
+        return web.json_response({"ok": False, "error": "invalid_init_data"}, status=401, headers=CORS_HEADERS)
+    asyncio.create_task(_run_miniapp_action_http(int(user["id"]), action, body.get("payload") or {}))
+    return web.json_response({"ok": True}, headers=CORS_HEADERS)
+
+
+async def start_web_server():
+    """Render (и подобные платформы) для сервисов типа "Web Service" ждут, что приложение
+    ответит на HTTP-запрос проверки здоровья на порту из переменной окружения PORT - иначе
+    помечает деплой как неудавшийся, даже если сам бот прекрасно работает через long-polling.
+    На том же сервере теперь висит и /api/action - приём действий Mini App, когда
+    Telegram.WebApp.sendData() недоступен (см. комментарий у PUBLIC_BASE_URL). Работает через
+    aiohttp в том же event loop, что и сам бот - раньше health-check был на отдельном потоке
+    (http.server), но /api/action нужно обрабатывать асинхронно в общем цикле событий, поэтому
+    оба эндпоинта теперь на aiohttp."""
+    app = web.Application()
+    app.router.add_get("/", _health_handler)
+    app.router.add_post("/api/action", _miniapp_action_handler)
+    app.router.add_options("/api/action", _miniapp_action_options_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    print(f"Health-check сервер запущен на порту {port}")
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Веб-сервер запущен на порту {port}")
 
 
 async def main():
     print("Бот запущен")
     print("REPLICATE TOKEN:", "YES" if REPLICATE_API_TOKEN else "NO")
-    start_health_check_server()
+    await start_web_server()
     await dp.start_polling(bot)
 
 
