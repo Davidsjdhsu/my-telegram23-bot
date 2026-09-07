@@ -1703,7 +1703,7 @@ STYLE_KEYWORDS = [
     ("технологи", "tech"), ("техно ", "tech"), ("tech", "tech"),
     ("бизнес", "business"), ("делов", "business"),
     ("учебн", "school"), ("школьн", "school"), ("для школы", "school"),
-    ("модны", "fashion"), ("fashion", "fashion"), ("стиль мода", "fashion"),
+    ("модн", "fashion"), ("fashion", "fashion"), ("стиль мода", "fashion"),
     ("спорт", "sport"),
     ("путешеств", "travel"), ("туризм", "travel"),
     ("кулинар", "food"), ("еда", "food"), ("food", "food"),
@@ -6154,6 +6154,32 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
     await bot.send_message(m.from_user.id, reply or tr("msg_chat_error", lang))
 
 
+class _AnswerableProxy:
+    """Обёртка вокруг сообщения из web_app_data - см. ensure_answerable() ниже. Настоящий
+    aiogram Message - замороженная (frozen) pydantic-модель, ей нельзя на лету переопределить
+    методы (первая попытка так и делала - m.answer = ...; в реальном Telegram это падало с
+    pydantic-ошибкой "frozen_instance", хотя в тестах молча работало, потому что тестовый стаб -
+    обычный Python-класс без этого ограничения). Поэтому не трогаем сам m, а оборачиваем его:
+    свои answer/answer_document/answer_photo, всё остальное (from_user, text, chat и т.д.)
+    прозрачно берётся из настоящего сообщения через __getattr__."""
+
+    def __init__(self, message, chat_id):
+        object.__setattr__(self, "_message", message)
+        object.__setattr__(self, "_chat_id", chat_id)
+
+    def __getattr__(self, name):
+        return getattr(self._message, name)
+
+    async def answer(self, text, reply_markup=None, **kw):
+        return await bot.send_message(self._chat_id, text, reply_markup=reply_markup, **kw)
+
+    async def answer_document(self, document, caption=None, **kw):
+        return await bot.send_document(self._chat_id, document, caption=caption, **kw)
+
+    async def answer_photo(self, photo, caption=None, **kw):
+        return await bot.send_photo(self._chat_id, photo, caption=caption, **kw)
+
+
 def ensure_answerable(m: Message):
     """Сообщения, которые приходят от Mini App через web_app_data, эмпирически ведут себя
     иначе, чем обычные текстовые: m.answer()/m.answer_document() у них могут не долетать
@@ -6162,25 +6188,11 @@ def ensure_answerable(m: Message):
     показался в чате). Вместо того чтобы вручную переписывать каждый answer() во всех
     функциях генерации (word_build/excel_build/_build_presentation и т.д. - их за месяцы
     накопилось слишком много, и они используются и обычным чат-сценарием тоже, где
-    m.answer() работает нормально) - подменяем эти три метода ТОЛЬКО на этом конкретном
-    объекте сообщения на прямую отправку через bot.send_* с явно вычисленным chat_id.
-    Дальше объект m ведёт себя как обычно для всего остального кода, который его
-    использует, включая уже существующие функции - им не нужно знать про эту подмену."""
+    m.answer() работает нормально) - возвращаем ОБЁРТКУ (см. _AnswerableProxy), у которой
+    эти три метода уходят через bot.send_* с явно вычисленным chat_id, а всё остальное
+    прозрачно проксируется на настоящее сообщение."""
     chat_id = m.chat.id if getattr(m, "chat", None) else m.from_user.id
-
-    async def _answer(text, reply_markup=None, **kw):
-        return await bot.send_message(chat_id, text, reply_markup=reply_markup, **kw)
-
-    async def _answer_document(document, caption=None, **kw):
-        return await bot.send_document(chat_id, document, caption=caption, **kw)
-
-    async def _answer_photo(photo, caption=None, **kw):
-        return await bot.send_photo(chat_id, photo, caption=caption, **kw)
-
-    m.answer = _answer
-    m.answer_document = _answer_document
-    m.answer_photo = _answer_photo
-    return m
+    return _AnswerableProxy(m, chat_id)
 
 
 @dp.message(F.web_app_data)
