@@ -719,6 +719,11 @@
   const params = new URLSearchParams(window.location.search);
   const name = params.get('name') || (getTg()?.initDataUnsafe?.user?.first_name) || 'Игорь';
   const credits = parseInt(params.get('credits') || '128', 10);
+  // Адрес бэкенда бота - если задан и есть initData, формы отправляются через свой HTTP
+  // (см. sendAction ниже), а не только через Telegram.WebApp.sendData(), который работает
+  // ТОЛЬКО когда Mini App открыта через кнопку в reply-клавиатуре, а не через системную
+  // кнопку меню чата (ограничение платформы, не наш баг).
+  const apiBase = params.get('api') || '';
 
   document.getElementById('greetName').textContent = `Привет, ${name}! 👋`;
   document.getElementById('creditsCount').textContent = `${credits} кредитов`;
@@ -766,26 +771,52 @@
   const launchedFromTelegram = /tgWebAppData|tgWebAppPlatform/.test(location.hash) || /tgWebAppData/.test(location.search);
 
   // --- Отправка действия в бота (закрывает Mini App) ---
-  function sendAction(action, extra, retriesLeft = 10) {
+  async function sendAction(action, extra, retriesLeft = 10) {
     const tg = getTg();
-    if (tg) {
-      tg.HapticFeedback?.impactOccurred('light');
-      tg.sendData(JSON.stringify({ action, ...extra }));
-      tg.close();
-    } else if (retriesLeft > 0) {
-      // Мост ещё не готов (могли нажать очень быстро, пока грузится резервный скрипт) -
-      // подождём немного перед тем, как сдаваться, а не отказывать сразу.
-      setTimeout(() => sendAction(action, extra, retriesLeft - 1), 300);
-    } else if (launchedFromTelegram) {
-      // Мы точно внутри Telegram, но мост telegram-web-app.js не догрузился даже за это
-      // время - честно говорим об этом, а не делаем вид, что действие ушло.
-      alert('Не удалось связаться с Telegram — проверьте связь и откройте меню заново.');
-    } else {
-      // Открыто не из Telegram (например, тестовый просмотр в браузере) - это
-      // ожидаемо, показываем действие как есть, для удобства тестирования.
-      alert('action: ' + action + (extra ? ' ' + JSON.stringify(extra) : ''));
-      document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('open'));
+    if (!tg) {
+      if (retriesLeft > 0) {
+        // Мост ещё не готов (могли нажать очень быстро, пока грузится резервный скрипт) -
+        // подождём немного перед тем, как сдаваться, а не отказывать сразу.
+        setTimeout(() => sendAction(action, extra, retriesLeft - 1), 300);
+        return;
+      }
+      if (launchedFromTelegram) {
+        // Мы точно внутри Telegram, но мост telegram-web-app.js не догрузился даже за это
+        // время - честно говорим об этом, а не делаем вид, что действие ушло.
+        alert('Не удалось связаться с Telegram — проверьте связь и откройте меню заново.');
+      } else {
+        // Открыто не из Telegram (например, тестовый просмотр в браузере) - это
+        // ожидаемо, показываем действие как есть, для удобства тестирования.
+        alert('action: ' + action + (extra ? ' ' + JSON.stringify(extra) : ''));
+        document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('open'));
+      }
+      return;
     }
+    tg.HapticFeedback?.impactOccurred('light');
+    // Через свою HTTP-ручку - работает при ЛЮБОМ способе открытия Mini App, включая
+    // системную кнопку меню чата, где Telegram.WebApp.sendData() платформой не
+    // поддерживается. Если бэкенд не прокинут в ссылку или initData пустая (например,
+    // запуск из кнопки в reply-клавиатуре — там initData не выдаётся вовсе) - откатываемся
+    // на старый sendData, он для этого случая и работает.
+    if (apiBase && tg.initData) {
+      try {
+        const resp = await fetch(apiBase + '/api/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, initData: tg.initData, payload: extra || {} }),
+        });
+        if (!resp.ok) throw new Error('http ' + resp.status);
+        tg.close();
+        return;
+      } catch (e) {
+        console.error('Ошибка отправки действия на сервер:', e);
+        const msg = 'Не удалось отправить запрос. Проверьте связь и попробуйте ещё раз.';
+        if (tg.showAlert) tg.showAlert(msg); else alert(msg);
+        return;
+      }
+    }
+    tg.sendData(JSON.stringify({ action, ...extra }));
+    tg.close();
   }
 
   function showSoon() {
