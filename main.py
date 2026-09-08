@@ -3,6 +3,7 @@ import asyncio
 import json
 import random
 import html
+import base64
 from urllib.parse import urlencode
 import re
 import time
@@ -176,7 +177,19 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # Если не задан, кнопка "Открыть меню" просто не показывается - остальной бот
 # работает как обычно на текстовых кнопках, ничего не ломается.
 MINIAPP_URL = os.getenv("MINIAPP_URL", "").strip()
-ADMIN_IDS = [909828109]
+# Можно задать несколько id через запятую в ADMIN_IDS, иначе остаётся владелец по умолчанию.
+_admin_raw = os.getenv("ADMIN_IDS", "909828109")
+ADMIN_IDS = []
+for _part in _admin_raw.split(","):
+    _part = _part.strip()
+    if _part.isdigit():
+        ADMIN_IDS.append(int(_part))
+if not ADMIN_IDS:
+    ADMIN_IDS = [909828109]
+
+MAX_UPLOAD_BYTES = 19 * 1024 * 1024  # Telegram Bot API и так режет ~20 МБ
+MAX_VOICE_SECONDS = 120
+MAX_SOURCE_TEXT_CHARS = 24000
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан в переменных окружения")
@@ -194,7 +207,7 @@ elif not MINIAPP_URL.startswith("https://"):
     MINIAPP_URL = ""
 
 
-client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
+client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1", timeout=90.0)
 # Отдельный клиент на настоящий OpenAI (не xAI) - только для распознавания речи (Whisper),
 # у Grok такой возможности нет. None, если ключ не настроен - тогда голосовые просто не
 # будут распознаваться, остальной бот при этом продолжает работать как обычно.
@@ -212,7 +225,7 @@ PLAN_LIMITS = {"premium": 15}
 # формат. PLAN_LIMITS выше оставлен как есть (на него по-прежнему смотрит
 # статистика /grant и старая логика), но реальный допуск к генерации теперь
 # решает can_afford() ниже, а не can_generate().
-CREDIT_COSTS = {"presentation": 10, "word": 5, "excel": 5, "template": 0, "image": 10}
+CREDIT_COSTS = {"presentation": 10, "word": 5, "excel": 5, "template": 0, "image": 10, "vision": 3}
 STARTING_CREDITS = 50  # стартовый баланс для новых пользователей - подобрать под реальную экономику отдельно
 
 
@@ -1197,6 +1210,9 @@ async def transcribe_voice(voice, uid) -> str | None:
     аккуратно откатиться на "текст не получен", а не падать с исключением."""
     if not whisper_client or not voice:
         return None
+    if getattr(voice, "duration", 0) and voice.duration > MAX_VOICE_SECONDS:
+        print("Голосовое слишком длинное:", voice.duration)
+        return None
     local_path = f"/tmp/voice_{uid}_{random.randint(1000, 9999)}.ogg"
     try:
         file_info = await bot.get_file(voice.file_id)
@@ -1270,7 +1286,8 @@ def spend_credits(uid, action):
     генерации не должна списывать кредиты."""
     u = get_user(uid)
     cost = CREDIT_COSTS.get(action, 0)
-    u["credits"] = max(0, u.get("credits", 0) - cost)
+    u["credits"] = max(0, int(u.get("credits") or 0) - cost)
+    save_users()
     return u["credits"]
 
 
@@ -1534,21 +1551,176 @@ def content_gen_lang(data: dict, interface_lang: str, mode_key: str = "mode"):
     return None
 
 
-async def ask_grok(prompt: str, max_tokens: int = 4000) -> str:
+VISION_MODEL = os.getenv("XAI_VISION_MODEL", "grok-2-vision-1212")
+IMAGE_UPLOAD_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "heic"}
+
+
+def _prepare_vision_image(path: str, max_side: int = 1600) -> tuple[str, str]:
+    """Сжимает фото перед отправкой в vision, чтобы не упираться в лимит payload."""
+    from PIL import Image
+    ext = (path.rsplit(".", 1)[-1] if "." in path else "jpg").lower()
+    mime = {"png": "image/png", "webp": "image/webp", "gif": "image/gif"}.get(ext, "image/jpeg")
+    out = path
     try:
-        r = await client.chat.completions.create(
-            model="grok-3",
-            messages=[
-                {"role": "system", "content": "Ты арт-директор презентаций. Пиши как живой сильный автор, не как нейросеть, и так, чтобы текст не триггерил детекторы ИИ-генерации: без канцелярита и шаблонных фраз («в современном мире», «является», «следует отметить», «данный», «невозможно переоценить», «таким образом», «подводя итог»), без идеально симметричной структуры абзацев и слишком гладких переходов. Чередуй короткие и длинные предложения неравномерно. Заголовки живые. Каждый ответ уникален. Исправляй ошибки. Только русский."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.95,
-            max_tokens=max_tokens
-        )
-        return r.choices[0].message.content
+        im = Image.open(path)
+        if im.mode not in ("RGB", "L"):
+            im = im.convert("RGB")
+            mime = "image/jpeg"
+        w, h = im.size
+        if max(w, h) > max_side:
+            scale = max_side / max(w, h)
+            im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+        out = f"{path}.vis.jpg"
+        im.save(out, format="JPEG", quality=85, optimize=True)
+        mime = "image/jpeg"
     except Exception as e:
-        print("Grok API error:", e)
+        print("Не удалось сжать фото для vision:", e)
+        out = path
+    with open(out, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    if out != path:
+        try:
+            os.remove(out)
+        except Exception:
+            pass
+    return b64, mime
+
+
+async def ask_grok_vision(image_path: str, prompt: str, max_tokens: int = 2500) -> str:
+    """Распознаёт печатный и рукописный текст на фото и отвечает по задаче."""
+    last_err = None
+    try:
+        b64, mime = _prepare_vision_image(image_path)
+    except Exception as e:
         return f"{GROK_ERROR_PREFIX}{e}"
+    models = [VISION_MODEL, "grok-2-vision-1212", "grok-4"]
+    seen = []
+    for model in models:
+        if model in seen:
+            continue
+        seen.append(model)
+        try:
+            r = await client.chat.completions.create(
+                model=model,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+                        {"type": "text", "text": prompt},
+                    ],
+                }],
+                temperature=0.2,
+                max_tokens=max_tokens,
+            )
+            content = (r.choices[0].message.content or "").strip()
+            if content:
+                return content
+            last_err = "empty vision content"
+        except Exception as e:
+            last_err = e
+            print(f"Grok vision error ({model}):", e)
+    return f"{GROK_ERROR_PREFIX}{last_err}"
+
+
+VISION_SOLVE_PROMPT = (
+    "Ты школьный и вузовский репетитор. На фото может быть:\n"
+    "- скриншот теста, задания из учебника или приложения;\n"
+    "- фото тетради или доски с рукописным текстом;\n"
+    "- таблица, график, условие задачи, тест с вариантами.\n\n"
+    "Сделай по порядку:\n"
+    "1) Аккуратно распознай весь видимый текст (печатный и рукописный).\n"
+    "2) Если это задача / тест / пример — реши его. Покажи ход, не только ответ.\n"
+    "3) Если вариантов ответа несколько — выбери верный и коротко объясни почему.\n"
+    "4) Если это не задача, а просто текст/конспект — перепиши разборчиво и кратко скажи, о чём он.\n"
+    "5) Если фото плохое и ничего не разобрать — честно напиши, чего не хватает.\n"
+    "Не выдумывай условие, которого нет на фото. Отвечай на языке задания, если язык смешанный — на русском.\n"
+)
+
+
+async def analyze_user_image(path: str, caption: str, lang: str) -> str:
+    extra = ""
+    if caption:
+        extra = f"\n\nДополнительная просьба пользователя: {caption.strip()[:800]}"
+    lang_bit = grok_lang_instruction(lang)
+    return await ask_grok_vision(path, VISION_SOLVE_PROMPT + extra + lang_bit)
+
+
+async def handle_vision_upload(m: Message, local_path: str, caption: str):
+    """Общий путь для фото из галереи и картинки, присланной как документ."""
+    lang = user_lang(m.from_user.id)
+    uid = m.from_user.id
+    if not can_afford(uid, CREDIT_COSTS["vision"]):
+        await m.answer(tr("msg_limit", lang))
+        return
+    ok, reason = start_job(uid)
+    if not ok:
+        await m.answer(reason)
+        return
+    wait_text = {
+        "ru": "Смотрю фото: распознаю текст и разберу задание…",
+        "en": "Looking at the photo: reading the text and solving it…",
+        "de": "Ich schaue mir das Foto an…",
+        "es": "Estoy leyendo la foto…",
+        "fr": "Je lis la photo…",
+        "zh": "正在识别图片…",
+        "ar": "أقرأ الصورة…",
+    }.get(lang, "Смотрю фото…")
+    await m.answer(wait_text)
+    try:
+        result = await analyze_user_image(local_path, caption, lang)
+        if grok_failed(result) or not (result or "").strip():
+            fail = {
+                "ru": "Не получилось разобрать фото. Пришлите снимок крупнее и без сильного размытия.",
+                "en": "Could not read the photo. Send a sharper, closer shot.",
+            }.get(lang, "Не получилось разобрать фото.")
+            await m.answer(fail)
+            return
+        title = {
+            "ru": "Разбор фото",
+            "en": "Photo solution",
+        }.get(lang, "Разбор фото")
+        await send_draft(m, result, title=title, reply_markup=main_kb(lang, uid=uid))
+        spend_credits(uid, "vision")
+        u = get_user(uid)
+        u["generations"] += 1
+        u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — разбор фото")
+        save_users()
+        note_success(uid)
+    except Exception as e:
+        print("Ошибка разбора фото:", e)
+        await m.answer({
+            "ru": "Не получилось разобрать фото. Попробуйте ещё раз.",
+            "en": "Could not read the photo. Try again.",
+        }.get(lang, "Не получилось разобрать фото."))
+    finally:
+        finish_job(uid)
+
+
+async def ask_grok(prompt: str, max_tokens: int = 4000) -> str:
+    """Запрос к Grok с коротким повтором при сетевом сбое — одна ошибка API
+    больше не роняет всю сборку документа с первой попытки."""
+    last_err = None
+    for attempt in range(3):
+        try:
+            r = await client.chat.completions.create(
+                model="grok-3",
+                messages=[
+                    {"role": "system", "content": "Ты арт-директор презентаций. Пиши как живой сильный автор, не как нейросеть, и так, чтобы текст не триггерил детекторы ИИ-генерации: без канцелярита и шаблонных фраз («в современном мире», «является», «следует отметить», «данный», «невозможно переоценить», «таким образом», «подводя итог»), без идеально симметричной структуры абзацев и слишком гладких переходов. Чередуй короткие и длинные предложения неравномерно. Заголовки живые. Каждый ответ уникален. Исправляй ошибки. Только русский."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.95,
+                max_tokens=max_tokens
+            )
+            content = (r.choices[0].message.content or "").strip()
+            if content:
+                return content
+            last_err = "empty content"
+        except Exception as e:
+            last_err = e
+            print(f"Grok API error (попытка {attempt + 1}/3):", e)
+        if attempt < 2:
+            await asyncio.sleep(1.2 * (attempt + 1))
+    return f"{GROK_ERROR_PREFIX}{last_err}"
 
 
 def extract_text_from_docx(path: str) -> str:
@@ -6684,6 +6856,31 @@ async def file_instruction_followup(m: Message, state: FSMContext):
     await dispatch_upload_generation(m, state, source_text, instruction)
 
 
+@dp.message(StateFilter(None), F.photo)
+async def photo_upload(m: Message, state: FSMContext):
+    """Фото вне сценария презентации: скрин теста, снимок тетради, любой кадр с текстом."""
+    photo = m.photo[-1]
+    uid = m.from_user.id
+    local_path = f"/tmp/photo_{uid}_{random.randint(1000, 9999)}.jpg"
+    try:
+        file_info = await bot.get_file(photo.file_id)
+        await bot.download_file(file_info.file_path, local_path)
+        await handle_vision_upload(m, local_path, m.caption or "")
+    except Exception as e:
+        print("Ошибка скачивания фото:", e)
+        lang = user_lang(uid)
+        await m.answer({
+            "ru": "Не удалось скачать фото. Пришлите его ещё раз.",
+            "en": "Could not download the photo. Please send it again.",
+        }.get(lang, "Не удалось скачать фото."))
+    finally:
+        try:
+            if os.path.exists(local_path):
+                os.remove(local_path)
+        except Exception:
+            pass
+
+
 @dp.message(StateFilter(None), F.document)
 async def document_upload(m: Message, state: FSMContext):
     """Человек прислал файл (PDF/DOCX/PPTX). Если подпись уже содержит задачу
@@ -6694,8 +6891,12 @@ async def document_upload(m: Message, state: FSMContext):
     uid = m.from_user.id
     caption = (m.caption or "").strip()
 
-    filename = m.document.file_name or "file"
-    local_path = f"/tmp/upload_{uid}_{random.randint(1000, 9999)}_{filename}"
+    filename = os.path.basename(m.document.file_name or "file") or "file"
+    if m.document.file_size and m.document.file_size > MAX_UPLOAD_BYTES:
+        await m.answer("Файл слишком большой — пришлите документ до 19 МБ.")
+        return
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", filename)[:80]
+    local_path = f"/tmp/upload_{uid}_{random.randint(1000, 9999)}_{safe_name}"
     try:
         file_info = await bot.get_file(m.document.file_id)
         await bot.download_file(file_info.file_path, local_path)
@@ -6705,7 +6906,19 @@ async def document_upload(m: Message, state: FSMContext):
         return
 
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+    if ext in IMAGE_UPLOAD_EXTS:
+        try:
+            await handle_vision_upload(m, local_path, caption)
+        finally:
+            try:
+                if os.path.exists(local_path):
+                    os.remove(local_path)
+            except Exception:
+                pass
+        return
     source_text, err = extract_text_from_upload(local_path, filename)
+    if source_text and len(source_text) > MAX_SOURCE_TEXT_CHARS:
+        source_text = source_text[:MAX_SOURCE_TEXT_CHARS]
     try:
         if os.path.exists(local_path):
             os.remove(local_path)
