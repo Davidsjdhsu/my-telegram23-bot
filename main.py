@@ -3,9 +3,7 @@ import asyncio
 import json
 import random
 import html
-import hashlib
-import hmac
-from urllib.parse import urlencode, parse_qsl
+from urllib.parse import urlencode
 import re
 import time
 import colorsys
@@ -18,8 +16,6 @@ from aiogram.types import (Message, FSInputFile, ReplyKeyboardMarkup, KeyboardBu
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.storage.base import StorageKey
-from aiohttp import web
 from openai import AsyncOpenAI
 from docx import Document
 from docx.shared import Pt as DocxPt, Cm, RGBColor as DocxRGB
@@ -196,52 +192,6 @@ elif not MINIAPP_URL.startswith("https://"):
     print("ВНИМАНИЕ: MINIAPP_URL должен начинаться с https:// (у Telegram Mini App это обязательное "
           "требование) — сейчас задан не по HTTPS, кнопка не будет показываться")
     MINIAPP_URL = ""
-
-# Публичный https-адрес ЭТОГО сервиса (тот же хост, что уже принимает health-check
-# на Render) - нужен, чтобы Mini App могла отправлять данные форм через свой HTTP-эндпоинт
-# (/api/action), а не только через Telegram.WebApp.sendData(). Ограничение платформы:
-# sendData работает ТОЛЬКО когда Mini App открыт через кнопку в reply-клавиатуре -
-# при открытии через системную кнопку меню чата (MenuButtonWebApp) или инлайн-кнопку
-# sendData тихо ничего не делает. Без PUBLIC_BASE_URL формы, открытые из системного
-# меню, не смогут отправить данные боту - кнопка "Открыть меню" (клавиатура) продолжит
-# работать как раньше в любом случае.
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
-if not PUBLIC_BASE_URL:
-    print("ВНИМАНИЕ: PUBLIC_BASE_URL не задан — формы Mini App, открытого через системную "
-          "кнопку меню, не смогут отправлять данные боту (Telegram.WebApp.sendData не "
-          "поддерживается при таком способе запуска). Укажи публичный https-адрес "
-          "этого сервиса на Render.")
-
-
-def validate_webapp_init_data(init_data: str, max_age_seconds: int = 3600):
-    """Проверяет подпись initData, присланного Mini App через fetch (см. /api/action),
-    по официальной схеме Telegram
-    (https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app).
-    Возвращает dict с данными user при успехе, иначе None - доверять действию от чужого
-    имени без валидной подписи нельзя."""
-    try:
-        pairs = dict(parse_qsl(init_data, strict_parsing=True))
-    except Exception:
-        return None
-    received_hash = pairs.pop("hash", None)
-    if not received_hash:
-        return None
-    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
-    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
-    computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(computed_hash, received_hash):
-        return None
-    auth_date = pairs.get("auth_date")
-    if auth_date:
-        try:
-            if time.time() - int(auth_date) > max_age_seconds:
-                return None  # просроченная initData - переоткрыть меню и попробовать снова
-        except ValueError:
-            pass
-    try:
-        return json.loads(pairs.get("user") or "{}")
-    except Exception:
-        return None
 
 
 client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
@@ -2271,7 +2221,7 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
 # изменился, если сама ссылка выглядит одинаково. Добавляя это число в query-параметры,
 # каждая новая версия HTML получает технически другой адрес, и кэш Telegram больше не
 # может ошибочно посчитать её той же самой страницей.
-MINIAPP_VERSION = 3
+MINIAPP_VERSION = 8
 
 
 def build_miniapp_url(u):
@@ -2288,8 +2238,8 @@ def build_miniapp_url(u):
         "credits": u.get("credits", STARTING_CREDITS),
         "mode": u.get("control_mode", "buttons"),
         "history": json.dumps(history_short, ensure_ascii=False),
+        "lang": u.get("lang", "ru"),
         "v": MINIAPP_VERSION,
-        "api": PUBLIC_BASE_URL,
     })
     sep = "&" if "?" in MINIAPP_URL else "?"
     return f"{MINIAPP_URL}{sep}{params}"
@@ -2737,23 +2687,20 @@ def _usage_bar(credits, full_reference=200, width=12):
 
 async def sync_menu_button(chat_id: int, u: dict, lang: str):
     """Настраивает нативную кнопку меню Telegram (та, что сидит слева от поля ввода
-    сообщения, а не внутри Mini App) - именно так это выглядит у GigaChat и других
-    ботов с Mini App. В отличие от кнопки в reply-клавиатуре (main_kb), эта кнопка
-    системная и не пропадает даже когда бот показывает ReplyKeyboardRemove или
-    пользователь свернул клавиатуру. Вызывается из send_welcome(), т.е. на каждый
-    /start, смену языка и смену режима управления - ссылка на Mini App внутри неё
-    несёт актуальные на тот момент кредиты/историю, но не обновляется на лету при
-    каждой генерации (Telegram не даёт события "открыли меню", чтобы пересчитать
-    её непосредственно перед открытием)."""
-    miniapp_url = build_miniapp_url(u)
+    сообщения, а не внутри Mini App).
+
+    ОТКЛЮЧЕНО НАМЕРЕННО: системная кнопка меню запускает Mini App способом, при
+    котором Telegram.WebApp.sendData() не работает (это ограничение платформы,
+    sendData поддерживается только при запуске через кнопку в reply-клавиатуре -
+    см. main_kb/btn_open_miniapp). У бота нет публичного HTTP-адреса (сервис на
+    Render типа Background Worker, без входящего трафика), значит обходной путь
+    через свой API тоже недоступен без миграции хостинга. Поэтому кнопка меню
+    всегда ставится в MenuButtonDefault (список команд бота), а единственный
+    рабочий вход в Mini App - кнопка "✨ Открыть меню" в обычной клавиатуре
+    (см. main_kb), которая запускает Mini App как раз тем способом, где
+    sendData исправно работает."""
     try:
-        if miniapp_url:
-            await bot.set_chat_menu_button(
-                chat_id=chat_id,
-                menu_button=MenuButtonWebApp(text=tr("btn_menu_short", lang), web_app=WebAppInfo(url=miniapp_url))
-            )
-        else:
-            await bot.set_chat_menu_button(chat_id=chat_id, menu_button=MenuButtonDefault())
+        await bot.set_chat_menu_button(chat_id=chat_id, menu_button=MenuButtonDefault())
     except Exception as e:
         print("Не удалось установить кнопку меню чата:", chat_id, e)
 
@@ -3703,17 +3650,60 @@ def _student_title_page(doc, kind_label, title, meta):
     doc.add_page_break()
 
 
-def _set_cell_borders(cell):
-    """Тонкая чёрная рамка у ячейки таблицы - python-docx не даёт это напрямую, только через XML."""
+def _set_cell_borders(cell, color="000000", size="4"):
+    """Рамка у ячейки таблицы - python-docx не даёт это напрямую, только через XML.
+    Цвет и толщина параметризованы: обычные таблицы документа (перечни товаров и т.п.)
+    используют чёрную тонкую рамку по умолчанию, а карточка резюме - более мягкую серую."""
     tcPr = cell._tc.get_or_add_tcPr()
     borders = OxmlElement("w:tcBorders")
     for edge in ("top", "left", "bottom", "right"):
         el = OxmlElement(f"w:{edge}")
         el.set(qn("w:val"), "single")
-        el.set(qn("w:sz"), "4")
-        el.set(qn("w:color"), "000000")
+        el.set(qn("w:sz"), size)
+        el.set(qn("w:color"), color)
         borders.append(el)
     tcPr.append(borders)
+
+
+def _set_cell_margins(cell, top=120, bottom=120, left=180, right=180):
+    """Внутренние отступы ячейки (в двадцатых долях пункта, dxa) - без этого текст
+    в закрашенной ячейке (боковая колонка резюме) липнет к краям и рамке, из-за чего
+    серый блок не читается как отдельная "карточка", а выглядит как случайно залитая
+    таблица. python-docx не даёт это напрямую, только через XML (w:tcMar)."""
+    tcPr = cell._tc.get_or_add_tcPr()
+    mar = OxmlElement("w:tcMar")
+    for edge, val in (("top", top), ("left", left), ("bottom", bottom), ("right", right)):
+        node = OxmlElement(f"w:{edge}")
+        node.set(qn("w:w"), str(val))
+        node.set(qn("w:type"), "dxa")
+        mar.append(node)
+    tcPr.append(mar)
+
+
+def _shade_cell(cell, hex_color):
+    """Заливка фона ячейки цветом (без рамок) - для боковой колонки резюме, python-docx
+    не даёт это напрямую, только через XML."""
+    tcPr = cell._tc.get_or_add_tcPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), hex_color)
+    tcPr.append(shd)
+
+
+def _cell_p(cell, text, size=11, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT, before=0, after=6):
+    """Абзац внутри ячейки таблицы (для двухколоночной вёрстки резюме) - переиспользует
+    пустой первый параграф, который Word сам создаёт в новой ячейке, вместо того чтобы
+    плодить лишний пустой абзац сверху при каждом вызове."""
+    if len(cell.paragraphs) == 1 and not cell.paragraphs[0].runs:
+        p = cell.paragraphs[0]
+    else:
+        p = cell.add_paragraph()
+    p.alignment = align
+    p.paragraph_format.space_before = DocxPt(before)
+    p.paragraph_format.space_after = DocxPt(after)
+    _run(p, text, size, bold)
+    return p
 
 
 def _add_table(doc, table_data, size=11):
@@ -3847,6 +3837,9 @@ META_SCHEMAS = {
     "essay": '{"school":"[учебное заведение]","discipline":"[предмет/дисциплина]","group":"[номер группы]","author":"[ФИО]","teacher":"[должность и/или ФИО преподавателя]"}',
     "notes": '{}',
     "dkp": '{"city":"[город]","date":"«___» __________ 20___ г."}',
+    "dkp_car": '{"city":"[город]","date":"«___» __________ 20___ г."}',
+    "dkp_realty": '{"city":"[город]","date":"«___» __________ 20___ г."}',
+    "resume": '{"name":"[ФИО]","position":"[желаемая должность]","phone":"[телефон]","email":"[email]","city":"[город]"}',
     "rent": '{"city":"[город]","date":"«___» __________ 20___ г."}',
     "offer": '{"number":"[номер КП]"}',
     "act": '{"city":"[город]","date":"«___» __________ 20___ г.","basis":"[договор №/основание]","from_party":"[передающая сторона, ФИО/наименование]","to_party":"[принимающая сторона, ФИО/наименование]"}',
@@ -3882,10 +3875,13 @@ WORD_KIND_DESC = {
     "notes": "конспект. Без титульного листа. Сжатое изложение материала по пунктам и подпунктам, ключевые определения выделены, без художественных отступлений — удобно для повторения перед экзаменом.",
     "coursework": "курсовая работа. Титульный лист, содержание, введение (актуальность темы, объект и предмет, цель и задачи исследования), 2-3 главы с подразделами (например 1.1, 1.2 и 2.1, 2.2) — теоретическая и практическая часть, заключение с самостоятельными выводами по каждой задаче (не пересказ содержания глав), список литературы не менее 5 источников. Это черновик-каркас под доработку с научным руководителем, а не финальная работа.",
     "dkp": "договор купли-продажи: предмет договора, цена и порядок расчётов, права и обязанности сторон, порядок передачи товара, ответственность сторон, срок действия и заключительные положения",
+    "dkp_car": "договор купли-продажи транспортного средства: ФИО и паспортные данные продавца и покупателя, точные данные автомобиля (марка, модель, год выпуска, VIN/номер кузова, гос. номер, цвет, реквизиты ПТС/СТС), цена цифрами и прописью, порядок и срок оплаты, порядок передачи автомобиля и документов (ПТС, СТС, ключи, комплект резины), состояние ТС на момент передачи и заявление продавца об отсутствии обременений (не в залоге, не в розыске, не под арестом), ответственность сторон за недостоверность сведений",
+    "dkp_realty": "договор купли-продажи недвижимости: ФИО и паспортные данные продавца и покупателя, точное описание объекта (тип - квартира/дом/участок, адрес, площадь, кадастровый номер, этаж/этажность если применимо), реквизиты правоустанавливающего документа продавца, цена цифрами и прописью, порядок расчётов (в т.ч. если через аккредитив/ипотеку), заявление продавца об отсутствии обременений, залогов, арестов и прав третьих лиц на объект, порядок и срок передачи объекта и ключей (акт приёма-передачи), обязанность сторон по регистрации перехода права собственности в Росреестре",
+    "resume": "резюме для устройства на работу: желаемая должность, краткий профессиональный профиль (2-3 предложения о ценности кандидата), опыт работы в обратном хронологическом порядке (компания, должность, период, ключевые обязанности и измеримые достижения), образование, ключевые навыки (списком), при наличии - курсы/сертификаты и владение языками. Без вводных фраз и без раздела 'Введение' - это не эссе, а структурированный документ.",
     "rent": "договор аренды: предмет аренды с точным описанием, срок аренды, размер и порядок внесения арендной платы, права и обязанности сторон, порядок передачи и возврата имущества, ответственность сторон",
     "offer": "коммерческое предложение уровня 2026 года: заголовок с конкретной выгодой или болью клиента (не 'КП от компании'), короткое описание сути в 1-2 абзаца, о компании, что именно входит в предложение, стоимость и условия оплаты, сроки и этапы, почему стоит выбрать именно нас (доказательства, кейсы), контакты и призыв к действию с дедлайном",
     "act": "акт приёма-передачи: дата и место составления, номер и основание (реквизиты договора), полные данные передающей и принимающей стороны, подробный перечень передаваемого имущества/товара/документов с количеством и состоянием, отметка об отсутствии претензий, место для подписей обеих сторон",
-    "statement": "заявление",
+    "statement": "заявление: кому адресовано (должность и/или ФИО руководителя, наименование организации), от кого (должность/статус, ФИО заявителя), чёткая формулировка сути просьбы или требования с самого начала текста (одним-двумя предложениями, без долгих предисловий), при необходимости - краткое обоснование или ссылка на документ/норму, на основании которой подаётся заявление, дата подачи",
     "proxy": "доверенность: кто выдаёт (доверитель), кому (представитель), точный перечень полномочий, срок действия",
     "loan": "расписка / договор займа: заимодавец и заёмщик (ФИО, паспортные данные), сумма займа цифрами и прописью, срок возврата, проценты (если есть) или указание на беспроцентный заём, порядок возврата, ответственность за просрочку (неустойка/пени)",
     "claim": "досудебная претензия: реквизиты адресата и заявителя, описание нарушения со ссылкой на договор/закон, конкретное требование (сумма, срок исполнения), срок для добровольного удовлетворения, предупреждение об обращении в суд",
@@ -3910,7 +3906,7 @@ WORD_KIND_DESC = {
 
 def template_sections_for(kind):
     """Плейсхолдер-структура документа для режима 'Скачать шаблон' (без ИИ)."""
-    if kind in ("dkp", "rent") or kind in CONTRACT_FAMILY:
+    if kind in ("dkp", "dkp_car", "dkp_realty", "rent") or kind in CONTRACT_FAMILY:
         return [
             {"title": "Предмет договора", "content": "[точное описание предмета договора]"},
             {"title": "Цена и порядок расчётов", "content": "[сумма, порядок и сроки оплаты]"},
@@ -3934,8 +3930,9 @@ def template_sections_for(kind):
     return [{"title": "", "content": "[текст документа]"}]
 
 
-def build_word(path, title, sections, kind="doc", meta=None):
+def build_word(path, title, sections, kind="doc", meta=None, extra_data=None):
     meta = meta or {}
+    extra_data = extra_data or {}
     doc = Document()
     sec = doc.sections[0]
     sec.top_margin = Cm(2)
@@ -3991,18 +3988,66 @@ def build_word(path, title, sections, kind="doc", meta=None):
         _p(doc, title, 18, True, WD_ALIGN_PARAGRAPH.CENTER, before=4, after=14)
         _body(doc, sections, indent=False, head_center=False)
 
-    elif kind in ("dkp", "rent"):
-        cap = "ДОГОВОР КУПЛИ-ПРОДАЖИ" if kind == "dkp" else "ДОГОВОР АРЕНДЫ"
+    elif kind in ("dkp", "dkp_car", "dkp_realty", "rent"):
+        is_dkp = kind in ("dkp", "dkp_car", "dkp_realty")
+        cap = "ДОГОВОР КУПЛИ-ПРОДАЖИ" if is_dkp else "ДОГОВОР АРЕНДЫ"
         _p(doc, cap, 16, True, WD_ALIGN_PARAGRAPH.CENTER, after=2)
         _p(doc, title if title not in (cap, "Документ") else "№ ______", 12, align=WD_ALIGN_PARAGRAPH.CENTER, after=10)
         p = doc.add_paragraph()
         p.paragraph_format.tab_stops.add_tab_stop(Cm(16), WD_TAB_ALIGNMENT.RIGHT)
         _run(p, f"{meta.get('city') or 'г. _______________'}\t{meta.get('date') or '«___» __________ 20___ г.'}", 12)
         _body(doc, sections, indent=True, head_center=False)
-        left = "ПРОДАВЕЦ" if kind == "dkp" else "АРЕНДОДАТЕЛЬ"
-        right = "ПОКУПАТЕЛЬ" if kind == "dkp" else "АРЕНДАТОР"
+        left = "ПРОДАВЕЦ" if is_dkp else "АРЕНДОДАТЕЛЬ"
+        right = "ПОКУПАТЕЛЬ" if is_dkp else "АРЕНДАТОР"
         _p(doc, f"{left}                    {right}", 12, True, before=18)
         _p(doc, "__________ / [ФИО] /          __________ / [ФИО] /", 12)
+
+    elif kind == "resume":
+        # Двухколоночная вёрстка как в популярных CV-шаблонах: слева - затенённая узкая
+        # колонка с контактами/навыками/языками, справа - основной текст (о себе, опыт,
+        # образование). Реализовано через безрамочную таблицу 1x2 - у docx нет отдельного
+        # понятия "боковая панель", таблица - стандартный обходной путь.
+        name = meta.get("name") or (title if title != "Документ" else "Резюме")
+        _p(doc, name, 22, True, WD_ALIGN_PARAGRAPH.LEFT, after=2)
+        if meta.get("position"):
+            _p(doc, meta.get("position"), 13, align=WD_ALIGN_PARAGRAPH.LEFT, after=12)
+
+        table = doc.add_table(rows=1, cols=2)
+        table.autofit = False
+        left_w, right_w = Cm(5.5), Cm(11.5)
+        left_cell, right_cell = table.rows[0].cells
+        table.columns[0].width = left_w
+        table.columns[1].width = right_w
+        left_cell.width = left_w
+        right_cell.width = right_w
+        _shade_cell(left_cell, "F2F3F7")
+        _set_cell_borders(left_cell, color="D9DCE6", size="8")
+        _set_cell_margins(left_cell, top=220, bottom=220, left=220, right=220)
+        _set_cell_margins(right_cell, top=100, bottom=100, left=260, right=100)
+
+        contacts = [c for c in (meta.get("phone"), meta.get("email"), meta.get("city")) if c]
+        if contacts:
+            _cell_p(left_cell, "КОНТАКТЫ", 10, True, after=4)
+            for c in contacts:
+                _cell_p(left_cell, c, 10, after=2)
+        skills = extra_data.get("skills") or []
+        if skills:
+            _cell_p(left_cell, "НАВЫКИ", 10, True, before=10, after=4)
+            for s in skills:
+                _cell_p(left_cell, f"•  {s}", 10, after=3)
+        languages = extra_data.get("languages") or []
+        if languages:
+            _cell_p(left_cell, "ЯЗЫКИ", 10, True, before=10, after=4)
+            for lg in languages:
+                _cell_p(left_cell, lg, 10, after=3)
+
+        for block in sections or []:
+            head = (block.get("title") or "").strip()
+            body = block.get("content") or ""
+            if head:
+                _cell_p(right_cell, head.upper(), 12, True, before=8, after=4)
+            for para in [x.strip() for x in body.split("\n") if x.strip()]:
+                _cell_p(right_cell, para, 11, after=6)
 
     elif kind == "offer":
         _p(doc, "КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ", 11, True, after=0)
@@ -5916,9 +5961,16 @@ async def word_build(m: Message, state: FSMContext):
     # доверенности, КП поля вроде "кому"/"от кого" не заполнялись моделью
     # и в документе оставались заглушки, даже если пользователь их указал.
     meta_schema = META_SCHEMAS.get(kind, META_SCHEMAS["doc"])
-    style_rule = ANTI_AI_DETECTOR_STYLE if kind in STUDY_KINDS else (
-        "Пиши формальным юридическим/деловым языком, грамотно и точно по формулировкам ГК РФ, где применимо."
-    )
+    if kind in STUDY_KINDS:
+        style_rule = ANTI_AI_DETECTOR_STYLE
+    elif kind == "resume":
+        style_rule = (
+            "Пиши деловым, но живым языком резюме: короткие пункты вместо сплошных абзацев, "
+            "конкретные обязанности и измеримые достижения (цифры, проценты, результаты), "
+            "без канцелярита и без юридических оборотов - это не договор."
+        )
+    else:
+        style_rule = "Пиши формальным юридическим/деловым языком, грамотно и точно по формулировкам ГК РФ, где применимо."
     # Финальная сборка — это не короткий черновик-план, а весь текст документа целиком,
     # поэтому фиксированного лимита в 4000 токенов не хватало на курсовую/реферат с
     # "полным раскрытием темы" (там нужно 6000-10000+ слов), и модель тихо обрезала
@@ -5973,6 +6025,21 @@ async def word_build(m: Message, state: FSMContext):
             "правдоподобные иллюстративные значения, если реальных нет под рукой (как и с остальным текстом "
             "черновика). Это требование не выполняется текстовым описанием цифр вместо таблицы."
         )
+    # Схема примера JSON в конце промпта - для резюме отдельная (с skills/languages
+    # на верхнем уровне и без "table" в примере, это не нужно для CV), собирается
+    # заранее обычной строкой, а не внутри f-string, чтобы не городить тройную
+    # вложенность кавычек/фигурных скобок в одном литерале.
+    if kind == "resume":
+        json_example = (
+            '{"title":"...","meta":' + meta_schema + ',"skills":["...","..."],"languages":["..."],'
+            '"sections":[{"title":"О себе","content":"..."},{"title":"Опыт работы","content":"..."},'
+            '{"title":"Образование","content":"..."}]}'
+        )
+    else:
+        json_example = (
+            '{"title":"...","meta":' + meta_schema + ',"sections":[{"title":"Введение","content":"абзац1\\n\\nабзац2"},'
+            '{"title":"...","content":"...","table":{"headers":["...","..."],"rows":[["...","..."]]}}]}'
+        )
     raw = await ask_grok(f"""Собери Word: {kind_name}.
 Данные: {data.get('topic')}
 Текст пользователя: {data.get('user_text')}
@@ -5987,15 +6054,16 @@ async def word_build(m: Message, state: FSMContext):
 тему конкретно и по существу, без воды и общих фраз.
 Не создавай в sections отдельный раздел «Титульный лист» - обложка (организация, учебное заведение, ФИО
 автора и руководителя, город, год) формируется отдельно из title и meta и так уже попадёт в документ;
-первым разделом в sections должно идти «Введение» (или «Содержание», если оно есть в структуре документа).
+{"Это резюме - не создавай раздел «Введение». Раздел «Навыки»/«Языки» тоже НЕ создавай в sections - они уходят в отдельные поля skills/languages (см. схему JSON ниже) и рендерятся в боковую колонку резюме отдельно от основного текста. Первым разделом в sections должен идти «О себе» (короткий профессиональный профиль на 2-3 предложения), дальше «Опыт работы» (в обратном хронологическом порядке, с измеримыми достижениями) и «Образование»." if kind == "resume" else "первым разделом в sections должно идти «Введение» (или «Содержание», если оно есть в структуре документа)."}
 Если в разделе уместна таблица (перечень товаров/имущества с ценой и количеством в договоре/акте, статистика
 или практические данные в курсовой/реферате) - добавь в объект этого раздела ключ "table":
 {{"headers":["...","..."],"rows":[["...","..."],["...","..."]]}}. Не выдумывай реальные официальные цифры
 (даты, номера, суммы) для юридических документов - только то, что дал пользователь; для курсовых/рефератов
 данные в таблице могут быть иллюстративными для черновика, как и остальной текст. Таблицы уместны не в каждом
 разделе - добавляй только там, где это реально яснее текста, не в каждый раздел подряд.
+{'Дополнительно верни на верхнем уровне JSON поле "skills" - список из 6-10 коротких формулировок навыков (каждая отдельной строкой, без вводных слов), и, если в данных пользователя упомянуты языки, поле "languages" - список строк вида "Английский — B2". Если языки не упомянуты, верни пустой список.' if kind == "resume" else ""}
 Только JSON:
-{{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\n\nабзац2"}},{{"title":"...","content":"...","table":{{"headers":["...","..."],"rows":[["...","..."]]}}}}]}}{lang_instr}""", max_tokens=gen_max_tokens)
+{json_example}{lang_instr}""", max_tokens=gen_max_tokens)
     try:
         content = extract_json(raw)
         if not isinstance(content.get("sections"), list) or not content["sections"]:
@@ -6072,7 +6140,8 @@ async def word_build(m: Message, state: FSMContext):
             content.get("title", "Документ"),
             content.get("sections", []),
             kind,
-            content.get("meta") or {}
+            content.get("meta") or {},
+            extra_data={"skills": content.get("skills"), "languages": content.get("languages")}
         )
 
         pdf_path = f"/tmp/doc_{uid}.pdf"
@@ -6245,50 +6314,6 @@ def ensure_answerable(m: Message):
     прозрачно проксируется на настоящее сообщение."""
     chat_id = m.chat.id if getattr(m, "chat", None) else m.from_user.id
     return _AnswerableProxy(m, chat_id)
-
-
-class _FakeUser:
-    __slots__ = ("id",)
-
-    def __init__(self, uid):
-        self.id = uid
-
-
-class _FakeChat:
-    __slots__ = ("id",)
-
-    def __init__(self, uid):
-        self.id = uid
-
-
-class _HttpMessageProxy:
-    """Синтетическая замена aiogram Message для запросов, пришедших не через long polling,
-    а напрямую по HTTP из Mini App (см. _miniapp_action_handler) - когда Mini App открыт
-    через системную кнопку меню чата, Telegram.WebApp.sendData() не работает (ограничение
-    платформы, см. комментарий у PUBLIC_BASE_URL), поэтому такие запросы идут в обход
-    Telegram Update, через свой HTTP-эндпоинт. Даёт ровно то, что нужно _handle_miniapp_payload
-    и вложенным обработчикам: from_user.id и chat.id - answer/answer_document/answer_photo
-    достраивает ensure_answerable() поверх этого объекта, как и для обычных web_app_data
-    сообщений."""
-
-    def __init__(self, uid: int):
-        self.from_user = _FakeUser(uid)
-        self.chat = _FakeChat(uid)
-
-
-async def _run_miniapp_action_http(uid: int, action: str, payload: dict):
-    m = _HttpMessageProxy(uid)
-    state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, chat_id=uid, user_id=uid))
-    try:
-        await _handle_miniapp_payload(m, state, payload, action)
-    except Exception as e:
-        print("Ошибка Mini App (HTTP):", repr(e))
-        import traceback
-        traceback.print_exc()
-        try:
-            await bot.send_message(uid, f"Меню дошло, но обработка упала: {type(e).__name__}: {e}")
-        except Exception:
-            pass
 
 
 @dp.message(F.web_app_data)
@@ -6775,65 +6800,39 @@ async def global_error_handler(event):
     return True
 
 
-CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-}
+def start_health_check_server():
+    """Render (и подобные платформы) для сервисов типа "Web Service" ждут, что
+    приложение ответит на HTTP-запрос проверки здоровья на порту из переменной
+    окружения PORT - иначе помечает деплой как неудавшийся, даже если сам бот
+    прекрасно работает через long-polling и никакого HTTP на самом деле не требует.
+    Этот сервер не имеет отношения к Mini App (та веб-страница отдельно живёт на
+    GitHub Pages) - он существует только чтобы Render видел "живой" сервис.
+    Работает в отдельном потоке на чистой стандартной библиотеке (без aiohttp),
+    чтобы не тянуть ещё одну внешнюю зависимость поверх и без того шаткого билда."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
 
+    class _HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"OK")
 
-async def _health_handler(request):
-    return web.Response(text="OK")
+        def log_message(self, format, *args):
+            pass  # не засорять логи бота запросами проверки здоровья
 
-
-async def _miniapp_action_options_handler(request):
-    return web.Response(headers=CORS_HEADERS)
-
-
-async def _miniapp_action_handler(request):
-    """HTTP-эндпоинт, которым Mini App отправляет данные форм боту, когда Telegram.WebApp.sendData()
-    недоступен (Mini App открыт через системную кнопку меню чата, а не через кнопку в
-    reply-клавиатуре - см. комментарий у PUBLIC_BASE_URL). Ожидает JSON {"action", "initData", "payload"},
-    проверяет подпись initData и запускает тот же _handle_miniapp_payload, что и обычный web_app_data."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"ok": False, "error": "bad_json"}, status=400, headers=CORS_HEADERS)
-    action = (body.get("action") or "").strip()
-    if not action:
-        return web.json_response({"ok": False, "error": "no_action"}, status=400, headers=CORS_HEADERS)
-    user = validate_webapp_init_data(body.get("initData") or "")
-    if not user or not user.get("id"):
-        return web.json_response({"ok": False, "error": "invalid_init_data"}, status=401, headers=CORS_HEADERS)
-    asyncio.create_task(_run_miniapp_action_http(int(user["id"]), action, body.get("payload") or {}))
-    return web.json_response({"ok": True}, headers=CORS_HEADERS)
-
-
-async def start_web_server():
-    """Render (и подобные платформы) для сервисов типа "Web Service" ждут, что приложение
-    ответит на HTTP-запрос проверки здоровья на порту из переменной окружения PORT - иначе
-    помечает деплой как неудавшийся, даже если сам бот прекрасно работает через long-polling.
-    На том же сервере теперь висит и /api/action - приём действий Mini App, когда
-    Telegram.WebApp.sendData() недоступен (см. комментарий у PUBLIC_BASE_URL). Работает через
-    aiohttp в том же event loop, что и сам бот - раньше health-check был на отдельном потоке
-    (http.server), но /api/action нужно обрабатывать асинхронно в общем цикле событий, поэтому
-    оба эндпоинта теперь на aiohttp."""
-    app = web.Application()
-    app.router.add_get("/", _health_handler)
-    app.router.add_post("/api/action", _miniapp_action_handler)
-    app.router.add_options("/api/action", _miniapp_action_options_handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
     port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    print(f"Веб-сервер запущен на порту {port}")
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"Health-check сервер запущен на порту {port}")
 
 
 async def main():
     print("Бот запущен")
     print("REPLICATE TOKEN:", "YES" if REPLICATE_API_TOKEN else "NO")
-    await start_web_server()
+    start_health_check_server()
     await dp.start_polling(bot)
 
 
