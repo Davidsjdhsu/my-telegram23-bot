@@ -2221,7 +2221,7 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
 # изменился, если сама ссылка выглядит одинаково. Добавляя это число в query-параметры,
 # каждая новая версия HTML получает технически другой адрес, и кэш Telegram больше не
 # может ошибочно посчитать её той же самой страницей.
-MINIAPP_VERSION = 8
+MINIAPP_VERSION = 10
 
 
 def build_miniapp_url(u):
