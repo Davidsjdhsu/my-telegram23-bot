@@ -286,6 +286,59 @@
   .folder-chevron { color: #9d97b0; transform: rotate(90deg); transition: transform .3s ease; }
   .folder-chevron svg { width: 16px; height: 16px; stroke-width: 2; fill: none; }
 
+  /* --- Портфолио: крупные карточки-превью на экране "Старт" --- */
+  .portfolio-card {
+    border-radius: 22px; overflow: hidden; margin-bottom: 16px; cursor: pointer;
+    transition: transform .15s ease;
+  }
+  .portfolio-card:active { transform: scale(0.97); }
+  .portfolio-preview {
+    height: 168px; position: relative; padding: 18px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .portfolio-info { padding: 13px 16px 15px; display: flex; align-items: center; justify-content: space-between; }
+  .portfolio-title { font-size: 14.5px; font-weight: 600; margin: 0 0 2px; }
+  .portfolio-sub { font-size: 11.5px; color: #9d97b0; margin: 0; }
+  .portfolio-arrow { color: #9d97b0; }
+  .portfolio-arrow svg { width: 18px; height: 18px; stroke-width: 2; fill: none; }
+
+  /* Мини-макет резюме: тёмная "боковая колонка" слева + скелетон-строки справа - как в
+     реальном .docx, который собирает бот (двухколоночная вёрстка с серой панелью). */
+  .portfolio-preview.pv-resume { background: linear-gradient(135deg, rgba(139,92,246,0.16), rgba(34,211,238,0.10)); }
+  .mini-resume { width: 100%; max-width: 230px; height: 128px; background: #fff; border-radius: 10px; display: flex; overflow: hidden; box-shadow: 0 10px 28px rgba(0,0,0,0.35); }
+  .mini-resume-side { width: 34%; background: #eef0f6; padding: 12px 9px; display: flex; flex-direction: column; gap: 7px; }
+  .mini-resume-main { flex: 1; padding: 12px 12px; display: flex; flex-direction: column; gap: 7px; }
+  .mini-line { height: 6px; border-radius: 3px; background: #d7dae4; }
+  .mini-resume-main .mini-line { background: #dfe1ea; }
+  .mini-resume-main .mini-line.title { height: 9px; width: 60%; background: linear-gradient(90deg, #8b5cf6, #22d3ee); }
+  .mini-line.w40 { width: 40%; } .mini-line.w55 { width: 55%; } .mini-line.w70 { width: 70%; } .mini-line.w85 { width: 85%; } .mini-line.w95 { width: 95%; }
+
+  /* Мини-макет презентации: фото на весь кадр + плашка с заголовком снизу - точная
+     копия логики обложки в _build_presentation() (cover_style "band"). */
+  .portfolio-preview.pv-pres { padding: 0; }
+  .mini-slide {
+    width: 100%; height: 100%; border-radius: 0; position: relative; overflow: hidden;
+    background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 45%, #22d3ee 100%);
+  }
+  .mini-slide::before {
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(circle at 30% 25%, rgba(255,255,255,0.25), transparent 55%);
+  }
+  .mini-slide-bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 16px 12px; background: linear-gradient(0deg, rgba(13,11,20,0.85), transparent); }
+  .mini-slide-bar .mini-line { background: rgba(255,255,255,0.92); height: 8px; margin-bottom: 6px; }
+  .mini-slide-bar .mini-line:last-child { background: rgba(255,255,255,0.55); height: 5px; margin-bottom: 0; width: 40%; }
+
+  /* Мини-макет Excel: цветная шапка-градиент + зебра-строки - как в build_excel_items()
+     (акцентная заливка шапки, чередующиеся строки, денежная колонка справа). */
+  .portfolio-preview.pv-excel { background: linear-gradient(135deg, rgba(34,197,94,0.14), rgba(34,211,238,0.10)); }
+  .mini-table { width: 100%; max-width: 230px; border-radius: 10px; overflow: hidden; box-shadow: 0 10px 28px rgba(0,0,0,0.35); }
+  .mini-table-row { display: grid; grid-template-columns: 2.2fr 1fr 1fr; gap: 8px; padding: 8px 12px; background: #fff; align-items: center; }
+  .mini-table-row.mt-head { background: linear-gradient(90deg, #22c55e, #22d3ee); }
+  .mini-table-row.mt-head span { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.9); }
+  .mini-table-row.mt-alt { background: #f3f6f2; }
+  .mini-table-row span { height: 6px; border-radius: 3px; background: #dfe6dc; }
+  .mini-table-row span:last-child { background: #b8dfc4; }
+
   .section-label { font-size: 13px; font-weight: 600; color: #b8b3c7; margin: 0 0 12px; }
 
   /* --- Модальное окно папки --- */
@@ -346,6 +399,9 @@
     <g id="i-users"><circle cx="8.5" cy="8" r="3"/><path d="M2.5 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="8.3" r="2.4"/><path d="M15.7 14.1c2.4.4 4.3 2.5 4.3 5.9"/></g>
     <g id="i-home"><path d="M3 11l9-7 9 7"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></g>
     <g id="i-folder"><path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></g>
+    <g id="i-contract"><path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/><path d="M8.5 13.5l1.8 1.8L14 11.5"/></g>
+    <g id="i-resume"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="10" r="2.2"/><path d="M5.3 16c.5-2 2-3 3.2-3s2.7 1 3.2 3"/><path d="M14.5 8.5h4M14.5 11.5h4M14.5 14.5h2.5"/></g>
+    <g id="i-car"><path d="M3.5 13.5l1.6-4.3A2 2 0 0 1 7 8h10a2 2 0 0 1 1.9 1.2l1.6 4.3"/><rect x="2.5" y="13.5" width="19" height="5" rx="2"/><circle cx="7" cy="18.5" r="1.5"/><circle cx="17" cy="18.5" r="1.5"/></g>
     <g id="i-user"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3"/><path d="M6.3 19a6 6 0 0 1 11.4 0"/></g>
     <g id="i-chevron"><path d="M9 6l6 6-6 6"/></g>
     <g id="i-crown"><path d="M3 8l4 3 5-6 5 6 4-3-2 10H5z"/></g>
@@ -372,33 +428,79 @@
 
   <div class="wrap">
 
-    <!-- ===== ЭКРАН: ЧАТ (главный, бесплатный) ===== -->
-    <div class="screen active" id="screen-chat">
-      <div class="chat-header">
-        <p class="greeting display" style="margin:0" id="greetName">Привет, Игорь! 👋</p>
-        <span class="chat-badge-free">БЕСПЛАТНО</span>
-      </div>
-      <p class="chat-sub">Я помощник бота — спросите что угодно, помогу разобраться или подскажу, что сделать</p>
+    <!-- ===== ЭКРАН: БЫСТРЫЙ СТАРТ (главный) ===== -->
+    <div class="screen active" id="screen-quickstart">
+      <p class="greeting display" style="margin:0 0 4px" id="greetName">Привет, Игорь! 👋</p>
+      <p class="chat-sub" data-i18n="quickstartSub">Вот что бот умеет делать — нажмите на пример, чтобы собрать свой</p>
 
-      <div class="chat-bubble chat-bubble-assist glass">
-        Здравствуйте! Я на связи и могу подсказать по любому вопросу — не обязательно по документам. Например, помогу составить план или просто отвечу на вопрос. Что вас интересует?
+      <div class="portfolio-card glass" data-qs="resume">
+        <div class="portfolio-preview pv-resume">
+          <div class="mini-resume">
+            <div class="mini-resume-side">
+              <div class="mini-line w40"></div>
+              <div class="mini-line w70"></div>
+              <div class="mini-line w55"></div>
+              <div class="mini-line w40" style="margin-top:6px"></div>
+              <div class="mini-line w85"></div>
+              <div class="mini-line w70"></div>
+            </div>
+            <div class="mini-resume-main">
+              <div class="mini-line title"></div>
+              <div class="mini-line w95" style="margin-top:4px"></div>
+              <div class="mini-line w85"></div>
+              <div class="mini-line w55"></div>
+            </div>
+          </div>
+        </div>
+        <div class="portfolio-info">
+          <div>
+            <p class="portfolio-title" data-i18n="qsResumeTitle">Резюме</p>
+            <p class="portfolio-sub" data-i18n="qsResumeSub">Например: менеджер по продажам</p>
+          </div>
+          <div class="portfolio-arrow"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron" xlink:href="#i-chevron"/></svg></div>
+        </div>
       </div>
 
-      <div class="voice-hint glass">
-        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-mic" xlink:href="#i-mic"/></svg>
-        <span>Можно не печатать — просто пришлите голосовое сообщение прямо в чат, я его расшифрую</span>
+      <div class="portfolio-card glass" data-qs="pres">
+        <div class="portfolio-preview pv-pres">
+          <div class="mini-slide">
+            <div class="mini-slide-bar">
+              <div class="mini-line w70"></div>
+              <div class="mini-line w40"></div>
+            </div>
+          </div>
+        </div>
+        <div class="portfolio-info">
+          <div>
+            <p class="portfolio-title" data-i18n="qsPresTitle">Презентация</p>
+            <p class="portfolio-sub" data-i18n="qsPresSub">Например: история кофе</p>
+          </div>
+          <div class="portfolio-arrow"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron" xlink:href="#i-chevron"/></svg></div>
+        </div>
       </div>
 
-      <div class="chat-suggestions">
-        <div class="chat-chip" data-fill="Как написать деловое письмо?">Как написать деловое письмо?</div>
-        <div class="chat-chip" data-fill="Помоги составить план проекта">Составить план проекта</div>
-        <div class="chat-chip" data-fill="Что ты умеешь?">Что ты умеешь?</div>
+      <div class="portfolio-card glass" data-qs="smeta">
+        <div class="portfolio-preview pv-excel">
+          <div class="mini-table">
+            <div class="mini-table-row mt-head"><span></span><span></span><span></span></div>
+            <div class="mini-table-row"><span></span><span></span><span></span></div>
+            <div class="mini-table-row mt-alt"><span></span><span></span><span></span></div>
+            <div class="mini-table-row"><span></span><span></span><span></span></div>
+          </div>
+        </div>
+        <div class="portfolio-info">
+          <div>
+            <p class="portfolio-title" data-i18n="qsSmetaTitle">Смета</p>
+            <p class="portfolio-sub" data-i18n="qsSmetaSub">Например: ремонт кухни</p>
+          </div>
+          <div class="portfolio-arrow"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron" xlink:href="#i-chevron"/></svg></div>
+        </div>
       </div>
     </div>
 
     <!-- ===== ЭКРАН: СОЗДАТЬ (платное) ===== -->
     <div class="screen" id="screen-create">
-      <p class="greeting display">Создать</p>
+      <p class="greeting display" data-i18n="createTitle">Создать</p>
 
       <div class="gauge-widget glass">
         <div class="gauge-row">
@@ -410,20 +512,20 @@
             <div class="num mono" id="gaugeNum">128</div>
           </div>
           <div>
-            <p class="gauge-info-label">Баланс кредитов</p>
+            <p class="gauge-info-label" data-i18n="balanceLabel">Баланс кредитов</p>
             <p class="gauge-info-value mono" id="creditsCount">128 кредитов</p>
             <p class="gauge-info-hint" id="creditsHint">Хватит примерно на <b>12 презентаций</b></p>
           </div>
         </div>
-        <button class="gauge-topup" data-action="topup">Пополнить баланс</button>
+        <button class="gauge-topup" data-action="topup" data-i18n="topupBtn">Пополнить баланс</button>
       </div>
 
-      <p class="section-label">Форматы</p>
+      <p class="section-label" data-i18n="formatsLabel">Форматы</p>
       <div class="folder-card glass" id="folderDocsBtn">
         <div class="folder-icon"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-folder" xlink:href="#i-folder"/></svg></div>
         <div class="folder-text">
-          <p class="folder-title">Документы</p>
-          <p class="folder-sub">Презентация, Word, Excel</p>
+          <p class="folder-title" data-i18n="docsTitle">Документы</p>
+          <p class="folder-sub" data-i18n="docsSub">Презентация, Word, Excel</p>
         </div>
         <div class="folder-chevron"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron" xlink:href="#i-chevron"/></svg></div>
       </div>
@@ -431,8 +533,26 @@
       <div class="folder-card glass" id="folderMediaBtn">
         <div class="folder-icon"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sparkle" xlink:href="#i-sparkle"/></svg></div>
         <div class="folder-text">
-          <p class="folder-title">Медиа</p>
-          <p class="folder-sub">Картинка · музыка и видео скоро</p>
+          <p class="folder-title" data-i18n="mediaTitle">Медиа</p>
+          <p class="folder-sub" data-i18n="mediaSub">Картинка · музыка и видео скоро</p>
+        </div>
+        <div class="folder-chevron"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron" xlink:href="#i-chevron"/></svg></div>
+      </div>
+
+      <div class="folder-card glass" id="folderDkpBtn">
+        <div class="folder-icon"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-contract" xlink:href="#i-contract"/></svg></div>
+        <div class="folder-text">
+          <p class="folder-title" data-i18n="dkpTitle">Договор купли-продажи</p>
+          <p class="folder-sub" data-i18n="dkpSub">Авто или недвижимость</p>
+        </div>
+        <div class="folder-chevron"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron" xlink:href="#i-chevron"/></svg></div>
+      </div>
+
+      <div class="folder-card glass" id="folderResumeBtn">
+        <div class="folder-icon"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-resume" xlink:href="#i-resume"/></svg></div>
+        <div class="folder-text">
+          <p class="folder-title" data-i18n="resumeTitle">Резюме</p>
+          <p class="folder-sub" data-i18n="resumeSub">Опыт, образование, навыки</p>
         </div>
         <div class="folder-chevron"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron" xlink:href="#i-chevron"/></svg></div>
       </div>
@@ -440,37 +560,37 @@
 
     <!-- ===== ЭКРАН: ПРОФИЛЬ ===== -->
     <div class="screen" id="screen-profile">
-      <p class="greeting display">Профиль</p>
+      <p class="greeting display" data-i18n="profileTitle">Профиль</p>
       <div class="profile-row">
         <div class="profile-avatar" id="avatarInitial">?</div>
         <div>
           <p class="profile-name" id="profName">Игорь</p>
-          <p class="profile-sub"><span class="mono" id="profCredits">128</span> кредитов на балансе</p>
+          <p class="profile-sub"><span class="mono" id="profCredits">128</span> <span data-i18n="creditsOnBalance">кредитов на балансе</span></p>
         </div>
       </div>
 
-      <p class="section-label">Способ управления</p>
+      <p class="section-label" data-i18n="controlModeLabel">Способ управления</p>
       <div class="mode-toggle glass">
         <button class="mode-btn active" id="modeButtonsBtn">
-          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-tap" xlink:href="#i-tap"/></svg>Кнопками
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-tap" xlink:href="#i-tap"/></svg><span data-i18n="modeButtons">Кнопками</span>
         </button>
         <button class="mode-btn" id="modeVoiceBtn">
-          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-mic" xlink:href="#i-mic"/></svg>Голосом
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-mic" xlink:href="#i-mic"/></svg><span data-i18n="modeVoice">Голосом</span>
         </button>
       </div>
 
-      <p class="section-label">Последние работы</p>
+      <p class="section-label" data-i18n="recentWorksLabel">Последние работы</p>
       <div class="glass" style="border-radius:16px;padding:4px 14px" id="historyList"></div>
-      <p style="display:none;font-size:12px;color:#726c85;padding:6px 4px" id="historyEmpty">Пока ничего не создавали</p>
+      <p style="display:none;font-size:12px;color:#726c85;padding:6px 4px" id="historyEmpty" data-i18n="historyEmpty">Пока ничего не создавали</p>
 
-      <p class="section-label" style="margin-top:22px">Поддержка</p>
+      <p class="section-label" style="margin-top:22px" data-i18n="supportLabel">Поддержка</p>
       <div class="folder-card glass" data-action="help" style="margin-bottom:12px">
         <div class="folder-icon"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-help" xlink:href="#i-help"/></svg></div>
-        <div class="folder-text"><p class="folder-title" style="font-size:14px">Помощь</p></div>
+        <div class="folder-text"><p class="folder-title" style="font-size:14px" data-i18n="helpTitle">Помощь</p></div>
       </div>
       <div class="folder-card glass" data-action="collab">
         <div class="folder-icon"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users" xlink:href="#i-users"/></svg></div>
-        <div class="folder-text"><p class="folder-title" style="font-size:14px">Сотрудничество</p></div>
+        <div class="folder-text"><p class="folder-title" style="font-size:14px" data-i18n="collabTitle">Сотрудничество</p></div>
       </div>
     </div>
 
@@ -478,21 +598,21 @@
     <div class="screen" id="screen-form-pres">
       <div class="form-header">
         <button class="form-back" data-back-to="create"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <p class="form-title">Презентация</p>
+        <p class="form-title" data-i18n="presFormTitle">Презентация</p>
       </div>
 
       <div class="field-block">
-        <p class="field-label">Тема</p>
-        <input class="field-input" id="presTopic" type="text" placeholder="Например: история кофе">
+        <p class="field-label" data-i18n="topicLabel">Тема</p>
+        <input class="field-input" id="presTopic" type="text" data-i18n-ph="topicPh" placeholder="Например: история кофе">
       </div>
 
       <div class="field-block">
-        <p class="field-label">Свой текст или данные <span class="opt">необязательно</span></p>
-        <textarea class="field-textarea" id="presUserText" placeholder="Если есть готовый текст, тезисы или цифры — вставьте сюда, я использую именно их. Иначе просто напишу по теме сам."></textarea>
+        <p class="field-label" data-i18n="ownTextLabel">Свой текст или данные <span class="opt" data-i18n="optional">необязательно</span></p>
+        <textarea class="field-textarea" id="presUserText" data-i18n-ph="presUserTextPh" placeholder="Если есть готовый текст, тезисы или цифры — вставьте сюда, я использую именно их. Иначе просто напишу по теме сам."></textarea>
       </div>
 
       <div class="field-block">
-        <p class="field-label">Стиль</p>
+        <p class="field-label" data-i18n="styleLabel">Стиль</p>
         <div class="chip-row" id="presStyleChips">
           <div class="field-chip active" data-value="default" data-group="presStyle">Обычный</div>
           <div class="field-chip" data-value="business" data-group="presStyle">Деловой</div>
@@ -512,7 +632,7 @@
       </div>
 
       <div class="field-block">
-        <p class="field-label">Слайдов</p>
+        <p class="field-label" data-i18n="slidesLabel">Слайдов</p>
         <div class="stepper">
           <button class="stepper-btn" id="presSlidesMinus">−</button>
           <span class="stepper-value" id="presSlidesValue">8</span>
@@ -521,35 +641,35 @@
       </div>
 
       <div class="field-block">
-        <p class="field-label">Фото</p>
+        <p class="field-label" data-i18n="photoLabel">Фото</p>
         <div class="chip-row">
           <div class="field-chip active" data-value="ai" data-group="presPhoto">Через ИИ</div>
           <div class="field-chip" data-value="own" data-group="presPhoto">Свои — пришлю после</div>
         </div>
       </div>
 
-      <button class="form-submit" id="presSubmit">Создать презентацию</button>
-      <p class="form-cost">Стоимость: 10 кредитов</p>
+      <button class="form-submit" id="presSubmit" data-i18n="createPresBtn">Создать презентацию</button>
+      <p class="form-cost" data-cost="10">Стоимость: 10 кредитов</p>
     </div>
 
     <!-- ===== ЭКРАН: ФОРМА WORD ===== -->
     <div class="screen" id="screen-form-word">
       <div class="form-header">
         <button class="form-back" data-back-to="create"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <p class="form-title">Word-документ</p>
+        <p class="form-title" data-i18n="wordFormTitle">Word-документ</p>
       </div>
 
       <div class="field-block">
-        <p class="field-label">Тип документа</p>
+        <p class="field-label" data-i18n="docTypeLabel">Тип документа</p>
         <select class="field-select" id="wordKind">
-          <optgroup label="Учебные">
+          <optgroup label="Учебные" data-i18n-label="grpStudy">
             <option value="referat">Реферат</option>
             <option value="coursework">Курсовая работа</option>
             <option value="report">Доклад</option>
             <option value="essay">Эссе</option>
             <option value="notes">Конспект</option>
           </optgroup>
-          <optgroup label="Договоры">
+          <optgroup label="Договоры" data-i18n-label="grpContracts">
             <option value="dkp">Договор купли-продажи</option>
             <option value="rent">Договор аренды</option>
             <option value="services">Договор оказания услуг</option>
@@ -559,7 +679,7 @@
             <option value="loan">Расписка / договор займа</option>
             <option value="marriage_contract">Брачный договор</option>
           </optgroup>
-          <optgroup label="Официальные документы">
+          <optgroup label="Официальные документы" data-i18n-label="grpOfficial">
             <option value="statement">Заявление</option>
             <option value="proxy">Доверенность</option>
             <option value="act">Акт приёма-передачи</option>
@@ -573,36 +693,36 @@
       </div>
 
       <div class="field-block">
-        <p class="field-label">Тема, данные или готовый текст</p>
-        <textarea class="field-textarea" id="wordContent" placeholder="Опишите тему — напишу сам. Или вставьте свой текст/данные — оформлю их."></textarea>
+        <p class="field-label" data-i18n="wordTopicLabel">Тема, данные или готовый текст</p>
+        <textarea class="field-textarea" id="wordContent" data-i18n-ph="wordContentPh" placeholder="Опишите тему — напишу сам. Или вставьте свой текст/данные — оформлю их."></textarea>
       </div>
 
       <div class="field-block">
-        <p class="field-label">Уточнения <span class="opt">необязательно</span></p>
-        <input class="field-input" id="wordExtra" type="text" placeholder="ФИО, даты, детали для подстановки">
+        <p class="field-label" data-i18n="clarifyLabel">Уточнения <span class="opt" data-i18n="optional">необязательно</span></p>
+        <input class="field-input" id="wordExtra" type="text" data-i18n-ph="wordExtraPh" placeholder="ФИО, даты, детали для подстановки">
       </div>
 
       <div class="field-block">
-        <p class="field-label">Объём</p>
+        <p class="field-label" data-i18n="sizeLabel">Объём</p>
         <div class="chip-row">
           <div class="field-chip active" data-value="short" data-group="wordSize">Короче</div>
           <div class="field-chip" data-value="long" data-group="wordSize">Подробнее</div>
         </div>
       </div>
 
-      <button class="form-submit" id="wordSubmit">Создать документ</button>
-      <p class="form-cost">Стоимость: 5 кредитов</p>
+      <button class="form-submit" id="wordSubmit" data-i18n="createDocBtn">Создать документ</button>
+      <p class="form-cost" data-cost="5">Стоимость: 5 кредитов</p>
     </div>
 
     <!-- ===== ЭКРАН: ФОРМА EXCEL ===== -->
     <div class="screen" id="screen-form-excel">
       <div class="form-header">
         <button class="form-back" data-back-to="create"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <p class="form-title">Excel-таблица</p>
+        <p class="form-title" data-i18n="excelFormTitle">Excel-таблица</p>
       </div>
 
       <div class="field-block">
-        <p class="field-label">Тип таблицы</p>
+        <p class="field-label" data-i18n="tableTypeLabel">Тип таблицы</p>
         <select class="field-select" id="excelKind">
           <option value="expense_estimate">Смета расходов</option>
           <option value="family_budget">Семейный бюджет</option>
@@ -614,25 +734,88 @@
       </div>
 
       <div class="field-block">
-        <p class="field-label">Тема или свои данные</p>
-        <textarea class="field-textarea" id="excelContent" placeholder="Опишите тему — посчитаю сам с примерными цифрами. Или вставьте свои реальные данные — посчитаю по ним."></textarea>
+        <p class="field-label" data-i18n="excelTopicLabel">Тема или свои данные</p>
+        <textarea class="field-textarea" id="excelContent" data-i18n-ph="excelContentPh" placeholder="Опишите тему — посчитаю сам с примерными цифрами. Или вставьте свои реальные данные — посчитаю по ним."></textarea>
       </div>
 
       <div class="field-block">
-        <p class="field-label">Уточнения <span class="opt">необязательно</span></p>
-        <input class="field-input" id="excelExtra" type="text" placeholder="Валюта, период, другие детали">
+        <p class="field-label" data-i18n="clarifyLabel">Уточнения <span class="opt" data-i18n="optional">необязательно</span></p>
+        <input class="field-input" id="excelExtra" type="text" data-i18n-ph="excelExtraPh" placeholder="Валюта, период, другие детали">
       </div>
 
       <div class="field-block">
-        <p class="field-label">Данные</p>
+        <p class="field-label" data-i18n="dataLabel">Данные</p>
         <div class="chip-row">
           <div class="field-chip active" data-value="ai" data-group="excelMode">Придумай сам</div>
           <div class="field-chip" data-value="user" data-group="excelMode">Это мои реальные данные</div>
         </div>
       </div>
 
-      <button class="form-submit" id="excelSubmit">Создать таблицу</button>
-      <p class="form-cost">Стоимость: 5 кредитов</p>
+      <button class="form-submit" id="excelSubmit" data-i18n="createTableBtn">Создать таблицу</button>
+      <p class="form-cost" data-cost="5">Стоимость: 5 кредитов</p>
+    </div>
+
+    <!-- ===== ЭКРАН: ДОГОВОР КУПЛИ-ПРОДАЖИ АВТО ===== -->
+    <div class="screen" id="screen-form-dkp-car">
+      <div class="form-header">
+        <button class="form-back" data-back-to="create"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <p class="form-title" data-i18n="dkpCarFormTitle">Продажа автомобиля</p>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label" data-i18n="dealDataLabel">Данные о сделке</p>
+        <textarea class="field-textarea" id="dkpCarContent" data-i18n-ph="dkpCarContentPh" placeholder="Марка, модель, год выпуска, VIN или гос. номер, цена, ФИО и паспортные данные продавца и покупателя"></textarea>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label" data-i18n="clarifyLabel">Уточнения <span class="opt" data-i18n="optional">необязательно</span></p>
+        <input class="field-input" id="dkpCarExtra" type="text" data-i18n-ph="dkpCarExtraPh" placeholder="Город, дата составления, порядок оплаты">
+      </div>
+
+      <button class="form-submit" id="dkpCarSubmit" data-i18n="createContractBtn">Создать договор</button>
+      <p class="form-cost" data-cost="5">Стоимость: 5 кредитов</p>
+    </div>
+
+    <!-- ===== ЭКРАН: ДОГОВОР КУПЛИ-ПРОДАЖИ НЕДВИЖИМОСТИ ===== -->
+    <div class="screen" id="screen-form-dkp-realty">
+      <div class="form-header">
+        <button class="form-back" data-back-to="create"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <p class="form-title" data-i18n="dkpRealtyFormTitle">Продажа недвижимости</p>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label" data-i18n="dealDataLabel">Данные о сделке</p>
+        <textarea class="field-textarea" id="dkpRealtyContent" data-i18n-ph="dkpRealtyContentPh" placeholder="Тип объекта (квартира/дом/участок), адрес, площадь, кадастровый номер, цена, ФИО и паспортные данные продавца и покупателя"></textarea>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label" data-i18n="clarifyLabel">Уточнения <span class="opt" data-i18n="optional">необязательно</span></p>
+        <input class="field-input" id="dkpRealtyExtra" type="text" data-i18n-ph="dkpRealtyExtraPh" placeholder="Город, дата составления, порядок оплаты и передачи ключей">
+      </div>
+
+      <button class="form-submit" id="dkpRealtySubmit" data-i18n="createContractBtn">Создать договор</button>
+      <p class="form-cost" data-cost="5">Стоимость: 5 кредитов</p>
+    </div>
+
+    <!-- ===== ЭКРАН: РЕЗЮМЕ ===== -->
+    <div class="screen" id="screen-form-resume">
+      <div class="form-header">
+        <button class="form-back" data-back-to="create"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <p class="form-title" data-i18n="resumeFormTitle">Резюме</p>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label" data-i18n="aboutMeLabel">О себе и опыт</p>
+        <textarea class="field-textarea" id="resumeContent" data-i18n-ph="resumeContentPh" placeholder="Желаемая должность, опыт работы (компании, должности, годы, обязанности), образование, ключевые навыки, достижения"></textarea>
+      </div>
+
+      <div class="field-block">
+        <p class="field-label" data-i18n="contactsLabel">Контакты <span class="opt" data-i18n="optional">необязательно</span></p>
+        <input class="field-input" id="resumeExtra" type="text" data-i18n-ph="resumeExtraPh" placeholder="ФИО, телефон, email, город">
+      </div>
+
+      <button class="form-submit" id="resumeSubmit" data-i18n="createResumeBtn">Создать резюме</button>
+      <p class="form-cost" data-cost="5">Стоимость: 5 кредитов</p>
     </div>
 
   </div>
@@ -642,26 +825,26 @@
 <div class="modal-overlay" id="modalDocs">
   <div class="modal-sheet">
     <div class="modal-handle"></div>
-    <p class="modal-title">Выберите формат</p>
+    <p class="modal-title" data-i18n="chooseFormat">Выберите формат</p>
     <button class="modal-item" data-open-form="form-pres">
       <div class="modal-icon m-purple"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-presentation" xlink:href="#i-presentation"/></svg></div>
-      <div><div class="modal-item-title">Презентация</div><div class="modal-item-sub">Слайды, фото, графики</div></div>
-      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">10 кр.</span>
+      <div><div class="modal-item-title" data-i18n="presFormTitle">Презентация</div><div class="modal-item-sub" data-i18n="presModalSub">Слайды, фото, графики</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0" data-cost="10">10 кр.</span>
     </button>
     <button class="modal-item" data-open-form="form-word">
       <div class="modal-icon m-blue"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-file" xlink:href="#i-file"/></svg></div>
-      <div><div class="modal-item-title">Word-документ</div><div class="modal-item-sub">Договоры, рефераты, заявления</div></div>
-      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">5 кр.</span>
+      <div><div class="modal-item-title" data-i18n="wordFormTitle">Word-документ</div><div class="modal-item-sub" data-i18n="wordModalSub">Договоры, рефераты, заявления</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0" data-cost="5">5 кр.</span>
     </button>
     <button class="modal-item" data-open-form="form-excel">
       <div class="modal-icon m-green"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chart" xlink:href="#i-chart"/></svg></div>
-      <div><div class="modal-item-title">Excel-таблица</div><div class="modal-item-sub">Сметы, формулы, графики</div></div>
-      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">5 кр.</span>
+      <div><div class="modal-item-title" data-i18n="excelFormTitle">Excel-таблица</div><div class="modal-item-sub" data-i18n="excelModalSub">Сметы, формулы, графики</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0" data-cost="5">5 кр.</span>
     </button>
     <button class="modal-item" data-action="template">
       <div class="modal-icon m-amber"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-download" xlink:href="#i-download"/></svg></div>
-      <div><div class="modal-item-title">Скачать шаблон</div><div class="modal-item-sub">Пустой бланк для заполнения</div></div>
-      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">0 кр.</span>
+      <div><div class="modal-item-title" data-i18n="templateTitle">Скачать шаблон</div><div class="modal-item-sub" data-i18n="templateSub">Пустой бланк для заполнения</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0" data-cost="0">0 кр.</span>
     </button>
   </div>
 </div>
@@ -670,36 +853,47 @@
 <div class="modal-overlay" id="modalMedia">
   <div class="modal-sheet">
     <div class="modal-handle"></div>
-    <p class="modal-title">Выберите формат</p>
+    <p class="modal-title" data-i18n="chooseFormat">Выберите формат</p>
     <button class="modal-item" data-action="music">
       <div class="modal-icon" style="background:rgba(244,114,182,0.2)"><svg viewBox="0 0 24 24" stroke="#fbcfe8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-music" xlink:href="#i-music"/></svg></div>
-      <div><div class="modal-item-title">Музыка</div><div class="modal-item-sub">Скоро</div></div>
-      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">10 кр.</span>
+      <div><div class="modal-item-title" data-i18n="musicTitle">Музыка</div><div class="modal-item-sub" data-i18n="soonLabel">Скоро</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0" data-cost="10">10 кр.</span>
     </button>
     <button class="modal-item" data-action="image">
       <div class="modal-icon m-purple"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-image" xlink:href="#i-image"/></svg></div>
-      <div><div class="modal-item-title">Картинка</div><div class="modal-item-sub">По описанию, любой сюжет</div></div>
-      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">10 кр.</span>
+      <div><div class="modal-item-title" data-i18n="imageTitle">Картинка</div><div class="modal-item-sub" data-i18n="imageSub">По описанию, любой сюжет</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0" data-cost="10">10 кр.</span>
     </button>
     <button class="modal-item" data-action="video">
       <div class="modal-icon" style="background:rgba(34,211,238,0.2)"><svg viewBox="0 0 24 24" stroke="#a5f3fc" stroke-linecap="round" stroke-linejoin="round"><use href="#i-video" xlink:href="#i-video"/></svg></div>
-      <div><div class="modal-item-title">Видео</div><div class="modal-item-sub">Скоро</div></div>
-      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0">20 кр.</span>
+      <div><div class="modal-item-title" data-i18n="videoTitle">Видео</div><div class="modal-item-sub" data-i18n="soonLabel">Скоро</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0" data-cost="20">20 кр.</span>
     </button>
   </div>
 </div>
 
-<!-- Строка ввода — видна только на экране чата -->
-<div class="chat-input-bar glass" id="chatInputBar">
-  <button class="mic-btn" id="micBtn"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-mic" xlink:href="#i-mic"/></svg></button>
-  <input type="text" id="chatInput" placeholder="Напишите сообщение...">
-  <button class="chat-send" id="chatSend"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-send" xlink:href="#i-send"/></svg></button>
+<!-- Модальное окно "Договор купли-продажи": выбор предмета сделки -->
+<div class="modal-overlay" id="modalDkp">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <p class="modal-title" data-i18n="whatSelling">Что продаём?</p>
+    <button class="modal-item" data-open-form="form-dkp-car">
+      <div class="modal-icon m-blue"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-car" xlink:href="#i-car"/></svg></div>
+      <div><div class="modal-item-title" data-i18n="carTitle">Автомобиль</div><div class="modal-item-sub" data-i18n="carSub">Марка, VIN, цена, стороны сделки</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0" data-cost="5">5 кр.</span>
+    </button>
+    <button class="modal-item" data-open-form="form-dkp-realty">
+      <div class="modal-icon m-green"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home" xlink:href="#i-home"/></svg></div>
+      <div><div class="modal-item-title" data-i18n="realtyTitle">Недвижимость</div><div class="modal-item-sub" data-i18n="realtySub">Квартира, дом, участок</div></div>
+      <span class="mono" style="margin-left:auto;font-size:12px;color:#9d97b0" data-cost="5">5 кр.</span>
+    </button>
+  </div>
 </div>
 
 <div class="tabbar-float">
-  <button class="tab-item active" data-tab="chat"><svg viewBox="0 0 24 24" stroke="#fff" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home" xlink:href="#i-home"/></svg><span>Чат</span></button>
-  <button class="tab-item" data-tab="create"><svg viewBox="0 0 24 24" stroke="#8b85a3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-plus" xlink:href="#i-plus"/></svg><span>Создать</span></button>
-  <button class="tab-item" data-tab="profile"><svg viewBox="0 0 24 24" stroke="#8b85a3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-user" xlink:href="#i-user"/></svg><span>Профиль</span></button>
+  <button class="tab-item active" data-tab="quickstart"><svg viewBox="0 0 24 24" stroke="#fff" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sparkle" xlink:href="#i-sparkle"/></svg><span data-i18n="tabQuickstart">Старт</span></button>
+  <button class="tab-item" data-tab="create"><svg viewBox="0 0 24 24" stroke="#8b85a3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-plus" xlink:href="#i-plus"/></svg><span data-i18n="createTitle">Создать</span></button>
+  <button class="tab-item" data-tab="profile"><svg viewBox="0 0 24 24" stroke="#8b85a3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-user" xlink:href="#i-user"/></svg><span data-i18n="profileTitle">Профиль</span></button>
 </div>
 
 <script>
@@ -724,9 +918,100 @@
   // ТОЛЬКО когда Mini App открыта через кнопку в reply-клавиатуре, а не через системную
   // кнопку меню чата (ограничение платформы, не наш баг).
   const apiBase = params.get('api') || '';
+  const uiLang = params.get('lang') || 'ru';
 
-  document.getElementById('greetName').textContent = `Привет, ${name}! 👋`;
-  document.getElementById('creditsCount').textContent = `${credits} кредитов`;
+  // ==================== ЛОКАЛИЗАЦИЯ MINI APP ====================
+  // Полный словарь на 7 языков (совпадают с языками бота: ru/en/de/ar/zh/es/fr).
+  // Язык приходит из query-параметра 'lang', который подставляет build_miniapp_url()
+  // в main.py на основе текущего языка интерфейса пользователя (тот же, что выбирается
+  // кнопкой "🌐 Язык" в чате бота) - т.е. Mini App теперь всегда говорит на том же
+  // языке, что и сам бот, без отдельного переключателя внутри Mini App.
+  const I18N = {"STR":{"createTitle":{"ru":"Создать","en":"Create","de":"Erstellen","ar":"إنشاء","zh":"创建","es":"Crear","fr":"Créer"},"balanceLabel":{"ru":"Баланс кредитов","en":"Credit balance","de":"Guthaben","ar":"رصيد الكريدت","zh":"积分余额","es":"Saldo de créditos","fr":"Solde de crédits"},"topupBtn":{"ru":"Пополнить баланс","en":"Top up balance","de":"Guthaben aufladen","ar":"شحن الرصيد","zh":"充值余额","es":"Recargar saldo","fr":"Recharger le solde"},"formatsLabel":{"ru":"Форматы","en":"Formats","de":"Formate","ar":"الصيغ","zh":"格式","es":"Formatos","fr":"Formats"},"docsTitle":{"ru":"Документы","en":"Documents","de":"Dokumente","ar":"المستندات","zh":"文档","es":"Documentos","fr":"Documents"},"docsSub":{"ru":"Презентация, Word, Excel","en":"Presentation, Word, Excel","de":"Präsentation, Word, Excel","ar":"عرض تقديمي، Word، Excel","zh":"演示文稿、Word、Excel","es":"Presentación, Word, Excel","fr":"Présentation, Word, Excel"},"mediaTitle":{"ru":"Медиа","en":"Media","de":"Medien","ar":"الوسائط","zh":"媒体","es":"Multimedia","fr":"Médias"},"mediaSub":{"ru":"Картинка · музыка и видео скоро","en":"Image · music and video coming soon","de":"Bild · Musik und Video bald","ar":"صورة · الموسيقى والفيديو قريباً","zh":"图片·音乐和视频即将上线","es":"Imagen · música y vídeo próximamente","fr":"Image · musique et vidéo bientôt disponibles"},"dkpTitle":{"ru":"Договор купли-продажи","en":"Sale and purchase agreement","de":"Kaufvertrag","ar":"عقد بيع وشراء","zh":"买卖合同","es":"Contrato de compraventa","fr":"Contrat de vente"},"dkpSub":{"ru":"Авто или недвижимость","en":"Car or real estate","de":"Auto oder Immobilie","ar":"سيارة أو عقار","zh":"汽车或房产","es":"Coche o inmueble","fr":"Voiture ou bien immobilier"},"resumeTitle":{"ru":"Резюме","en":"Resume","de":"Lebenslauf","ar":"السيرة الذاتية","zh":"简历","es":"Currículum","fr":"CV"},"resumeSub":{"ru":"Опыт, образование, навыки","en":"Experience, education, skills","de":"Erfahrung, Ausbildung, Fähigkeiten","ar":"الخبرة، التعليم، المهارات","zh":"经历、教育、技能","es":"Experiencia, formación, habilidades","fr":"Expérience, formation, compétences"},"profileTitle":{"ru":"Профиль","en":"Profile","de":"Profil","ar":"الملف الشخصي","zh":"个人资料","es":"Perfil","fr":"Profil"},"creditsOnBalance":{"ru":"кредитов на балансе","en":"credits on balance","de":"Guthaben","ar":"كريدت في الرصيد","zh":"积分余额","es":"créditos en el saldo","fr":"crédits en solde"},"controlModeLabel":{"ru":"Способ управления","en":"Control method","de":"Steuerungsart","ar":"طريقة التحكم","zh":"操作方式","es":"Modo de control","fr":"Mode de contrôle"},"modeButtons":{"ru":"Кнопками","en":"With buttons","de":"Mit Tasten","ar":"بالأزرار","zh":"用按钮","es":"Con botones","fr":"Avec des boutons"},"modeVoice":{"ru":"Голосом","en":"With voice","de":"Mit Sprache","ar":"بالصوت","zh":"用语音","es":"Con voz","fr":"Avec la voix"},"recentWorksLabel":{"ru":"Последние работы","en":"Recent works","de":"Letzte Arbeiten","ar":"الأعمال الأخيرة","zh":"最近作品","es":"Trabajos recientes","fr":"Travaux récents"},"historyEmpty":{"ru":"Пока ничего не создавали","en":"Nothing created yet","de":"Noch nichts erstellt","ar":"لم يتم إنشاء أي شيء بعد","zh":"还没有创建任何内容","es":"Aún no has creado nada","fr":"Rien n'a encore été créé"},"supportLabel":{"ru":"Поддержка","en":"Support","de":"Support","ar":"الدعم","zh":"支持","es":"Soporte","fr":"Assistance"},"helpTitle":{"ru":"Помощь","en":"Help","de":"Hilfe","ar":"المساعدة","zh":"帮助","es":"Ayuda","fr":"Aide"},"collabTitle":{"ru":"Сотрудничество","en":"Partnership","de":"Zusammenarbeit","ar":"الشراكة","zh":"合作","es":"Colaboración","fr":"Partenariat"},"presFormTitle":{"ru":"Презентация","en":"Presentation","de":"Präsentation","ar":"عرض تقديمي","zh":"演示文稿","es":"Presentación","fr":"Présentation"},"topicLabel":{"ru":"Тема","en":"Topic","de":"Thema","ar":"الموضوع","zh":"主题","es":"Tema","fr":"Sujet"},"topicPh":{"ru":"Например: история кофе","en":"E.g.: history of coffee","de":"Z. B.: Geschichte des Kaffees","ar":"مثال: تاريخ القهوة","zh":"例如：咖啡的历史","es":"Por ejemplo: historia del café","fr":"Par ex. : histoire du café"},"ownTextLabel":{"ru":"Свой текст или данные","en":"Your own text or data","de":"Eigener Text oder Daten","ar":"نصك أو بياناتك الخاصة","zh":"自己的文本或数据","es":"Tu propio texto o datos","fr":"Votre propre texte ou données"},"optional":{"ru":"необязательно","en":"optional","de":"optional","ar":"اختياري","zh":"可选","es":"opcional","fr":"facultatif"},"presUserTextPh":{"ru":"Если есть готовый текст, тезисы или цифры — вставьте сюда, я использую именно их. Иначе просто напишу по теме сам.","en":"If you have ready text, key points or numbers — paste them here, I'll use exactly that. Otherwise I'll write it myself on the topic.","de":"Wenn du fertigen Text, Thesen oder Zahlen hast — füge sie hier ein, ich verwende genau diese. Sonst schreibe ich selbst zum Thema.","ar":"إذا كان لديك نص جاهز أو نقاط أو أرقام - الصقها هنا وسأستخدمها بالضبط. وإلا سأكتب بنفسي حول الموضوع.","zh":"如果你有现成的文本、要点或数字——粘贴到这里，我会直接使用。否则我会自己围绕主题撰写。","es":"Si tienes texto listo, ideas clave o cifras, pégalas aquí, usaré exactamente eso. Si no, escribiré yo mismo sobre el tema.","fr":"Si vous avez un texte prêt, des points clés ou des chiffres, collez-les ici, je les utiliserai tels quels. Sinon, je rédigerai moi-même sur le sujet."},"styleLabel":{"ru":"Стиль","en":"Style","de":"Stil","ar":"النمط","zh":"风格","es":"Estilo","fr":"Style"},"slidesLabel":{"ru":"Слайдов","en":"Slides","de":"Folien","ar":"الشرائح","zh":"幻灯片数","es":"Diapositivas","fr":"Diapositives"},"photoLabel":{"ru":"Фото","en":"Photos","de":"Fotos","ar":"الصور","zh":"图片","es":"Fotos","fr":"Photos"},"createPresBtn":{"ru":"Создать презентацию","en":"Create presentation","de":"Präsentation erstellen","ar":"إنشاء عرض تقديمي","zh":"生成演示文稿","es":"Crear presentación","fr":"Créer la présentation"},"wordFormTitle":{"ru":"Word-документ","en":"Word document","de":"Word-Dokument","ar":"مستند Word","zh":"Word 文档","es":"Documento Word","fr":"Document Word"},"docTypeLabel":{"ru":"Тип документа","en":"Document type","de":"Dokumenttyp","ar":"نوع المستند","zh":"文档类型","es":"Tipo de documento","fr":"Type de document"},"grpStudy":{"ru":"Учебные","en":"Study","de":"Studium","ar":"الدراسة","zh":"学习","es":"Estudios","fr":"Études"},"grpContracts":{"ru":"Договоры","en":"Contracts","de":"Verträge","ar":"العقود","zh":"合同","es":"Contratos","fr":"Contrats"},"grpOfficial":{"ru":"Официальные документы","en":"Official documents","de":"Amtliche Dokumente","ar":"المستندات الرسمية","zh":"官方文件","es":"Documentos oficiales","fr":"Documents officiels"},"wordTopicLabel":{"ru":"Тема, данные или готовый текст","en":"Topic, data or ready text","de":"Thema, Daten oder fertiger Text","ar":"الموضوع أو البيانات أو النص الجاهز","zh":"主题、数据或现成文本","es":"Tema, datos o texto listo","fr":"Sujet, données ou texte prêt"},"wordContentPh":{"ru":"Опишите тему — напишу сам. Или вставьте свой текст/данные — оформлю их.","en":"Describe the topic — I'll write it myself. Or paste your own text/data — I'll format it.","de":"Beschreibe das Thema — ich schreibe es selbst. Oder füge deinen Text/deine Daten ein — ich formatiere sie.","ar":"صف الموضوع - سأكتبه بنفسي. أو الصق نصك/بياناتك - سأنسقها.","zh":"描述主题——我会自己撰写。或粘贴你自己的文本/数据——我会为你排版。","es":"Describe el tema — lo escribiré yo. O pega tu propio texto/datos — les daré formato.","fr":"Décrivez le sujet — je le rédigerai moi-même. Ou collez votre texte/données — je les mettrai en forme."},"clarifyLabel":{"ru":"Уточнения","en":"Clarifications","de":"Ergänzungen","ar":"توضيحات","zh":"补充说明","es":"Aclaraciones","fr":"Précisions"},"wordExtraPh":{"ru":"ФИО, даты, детали для подстановки","en":"Names, dates, details to fill in","de":"Namen, Daten, Details zum Einfügen","ar":"الأسماء، التواريخ، التفاصيل المطلوب إدراجها","zh":"姓名、日期、需要填写的细节","es":"Nombres, fechas, detalles a incluir","fr":"Noms, dates, détails à insérer"},"sizeLabel":{"ru":"Объём","en":"Length","de":"Umfang","ar":"الحجم","zh":"篇幅","es":"Extensión","fr":"Longueur"},"createDocBtn":{"ru":"Создать документ","en":"Create document","de":"Dokument erstellen","ar":"إنشاء المستند","zh":"生成文档","es":"Crear documento","fr":"Créer le document"},"excelFormTitle":{"ru":"Excel-таблица","en":"Excel table","de":"Excel-Tabelle","ar":"جدول Excel","zh":"Excel 表格","es":"Tabla Excel","fr":"Tableau Excel"},"tableTypeLabel":{"ru":"Тип таблицы","en":"Table type","de":"Tabellentyp","ar":"نوع الجدول","zh":"表格类型","es":"Tipo de tabla","fr":"Type de tableau"},"excelTopicLabel":{"ru":"Тема или свои данные","en":"Topic or your own data","de":"Thema oder eigene Daten","ar":"الموضوع أو بياناتك الخاصة","zh":"主题或自己的数据","es":"Tema o tus propios datos","fr":"Sujet ou vos propres données"},"excelContentPh":{"ru":"Опишите тему — посчитаю сам с примерными цифрами. Или вставьте свои реальные данные — посчитаю по ним.","en":"Describe the topic — I'll calculate with sample numbers. Or paste your real data — I'll calculate from it.","de":"Beschreibe das Thema — ich rechne mit Beispielzahlen. Oder füge deine echten Daten ein — ich rechne damit.","ar":"صف الموضوع - سأحسب بأرقام تقريبية. أو الصق بياناتك الحقيقية - سأحسب بناءً عليها.","zh":"描述主题——我会用示例数字计算。或粘贴你的真实数据——我会据此计算。","es":"Describe el tema — calcularé con cifras de ejemplo. O pega tus datos reales — calcularé con ellos.","fr":"Décrivez le sujet — je calculerai avec des chiffres d'exemple. Ou collez vos données réelles — je calculerai avec."},"excelExtraPh":{"ru":"Валюта, период, другие детали","en":"Currency, period, other details","de":"Währung, Zeitraum, weitere Details","ar":"العملة، الفترة، تفاصيل أخرى","zh":"货币、周期、其他细节","es":"Moneda, periodo, otros detalles","fr":"Devise, période, autres détails"},"dataLabel":{"ru":"Данные","en":"Data","de":"Daten","ar":"البيانات","zh":"数据","es":"Datos","fr":"Données"},"createTableBtn":{"ru":"Создать таблицу","en":"Create table","de":"Tabelle erstellen","ar":"إنشاء الجدول","zh":"生成表格","es":"Crear tabla","fr":"Créer le tableau"},"dkpCarFormTitle":{"ru":"Продажа автомобиля","en":"Selling a car","de":"Verkauf eines Autos","ar":"بيع سيارة","zh":"出售汽车","es":"Venta de un coche","fr":"Vente d'une voiture"},"dealDataLabel":{"ru":"Данные о сделке","en":"Deal details","de":"Angaben zum Geschäft","ar":"بيانات الصفقة","zh":"交易信息","es":"Datos de la operación","fr":"Détails de la transaction"},"dkpCarContentPh":{"ru":"Марка, модель, год выпуска, VIN или гос. номер, цена, ФИО и паспортные данные продавца и покупателя","en":"Make, model, year, VIN or plate number, price, seller's and buyer's full names and ID details","de":"Marke, Modell, Baujahr, VIN oder Kennzeichen, Preis, Namen und Ausweisdaten von Verkäufer und Käufer","ar":"الماركة، الموديل، سنة الصنع، رقم الهيكل أو اللوحة، السعر، الاسم الكامل وبيانات هوية البائع والمشتري","zh":"品牌、型号、出厂年份、车架号或车牌号、价格、买卖双方姓名及证件信息","es":"Marca, modelo, año, VIN o matrícula, precio, nombre completo y datos de identificación del vendedor y el comprador","fr":"Marque, modèle, année, VIN ou plaque, prix, noms complets et pièces d'identité du vendeur et de l'acheteur"},"dkpCarExtraPh":{"ru":"Город, дата составления, порядок оплаты","en":"City, date, payment terms","de":"Stadt, Datum, Zahlungsbedingungen","ar":"المدينة، التاريخ، شروط الدفع","zh":"城市、日期、付款方式","es":"Ciudad, fecha, forma de pago","fr":"Ville, date, modalités de paiement"},"createContractBtn":{"ru":"Создать договор","en":"Create contract","de":"Vertrag erstellen","ar":"إنشاء العقد","zh":"生成合同","es":"Crear contrato","fr":"Créer le contrat"},"dkpRealtyFormTitle":{"ru":"Продажа недвижимости","en":"Selling real estate","de":"Verkauf einer Immobilie","ar":"بيع عقار","zh":"出售房产","es":"Venta de un inmueble","fr":"Vente d'un bien immobilier"},"dkpRealtyContentPh":{"ru":"Тип объекта (квартира/дом/участок), адрес, площадь, кадастровый номер, цена, ФИО и паспортные данные продавца и покупателя","en":"Property type (apartment/house/land), address, area, cadastral number, price, seller's and buyer's full names and ID details","de":"Objekttyp (Wohnung/Haus/Grundstück), Adresse, Fläche, Katasternummer, Preis, Namen und Ausweisdaten von Verkäufer und Käufer","ar":"نوع العقار (شقة/منزل/قطعة أرض)، العنوان، المساحة، الرقم العقاري، السعر، الاسم الكامل وبيانات هوية البائع والمشتري","zh":"物业类型（公寓/房屋/地块）、地址、面积、地籍编号、价格、买卖双方姓名及证件信息","es":"Tipo de inmueble (piso/casa/terreno), dirección, superficie, número catastral, precio, nombre completo y datos de identificación del vendedor y el comprador","fr":"Type de bien (appartement/maison/terrain), adresse, surface, numéro cadastral, prix, noms complets et pièces d'identité du vendeur et de l'acheteur"},"dkpRealtyExtraPh":{"ru":"Город, дата составления, порядок оплаты и передачи ключей","en":"City, date, payment and key handover terms","de":"Stadt, Datum, Zahlungs- und Schlüsselübergabebedingungen","ar":"المدينة، التاريخ، شروط الدفع وتسليم المفاتيح","zh":"城市、日期、付款及交钥匙方式","es":"Ciudad, fecha, forma de pago y entrega de llaves","fr":"Ville, date, modalités de paiement et de remise des clés"},"resumeFormTitle":{"ru":"Резюме","en":"Resume","de":"Lebenslauf","ar":"السيرة الذاتية","zh":"简历","es":"Currículum","fr":"CV"},"aboutMeLabel":{"ru":"О себе и опыт","en":"About you and experience","de":"Über dich und Erfahrung","ar":"نبذة عنك والخبرة","zh":"个人简介与经历","es":"Sobre ti y experiencia","fr":"À propos de vous et expérience"},"resumeContentPh":{"ru":"Желаемая должность, опыт работы (компании, должности, годы, обязанности), образование, ключевые навыки, достижения","en":"Desired position, work experience (companies, roles, years, duties), education, key skills, achievements","de":"Gewünschte Position, Berufserfahrung (Firmen, Positionen, Jahre, Aufgaben), Ausbildung, Kernkompetenzen, Erfolge","ar":"الوظيفة المرغوبة، الخبرة العملية (الشركات، المناصب، السنوات، المهام)، التعليم، المهارات الرئيسية، الإنجازات","zh":"期望职位、工作经历（公司、职位、年份、职责）、教育背景、核心技能、成就","es":"Puesto deseado, experiencia laboral (empresas, cargos, años, funciones), educación, habilidades clave, logros","fr":"Poste souhaité, expérience professionnelle (entreprises, postes, années, missions), formation, compétences clés, réalisations"},"contactsLabel":{"ru":"Контакты","en":"Contacts","de":"Kontakte","ar":"معلومات التواصل","zh":"联系方式","es":"Contactos","fr":"Contacts"},"resumeExtraPh":{"ru":"ФИО, телефон, email, город","en":"Full name, phone, email, city","de":"Name, Telefon, E-Mail, Stadt","ar":"الاسم الكامل، الهاتف، البريد الإلكتروني، المدينة","zh":"姓名、电话、邮箱、城市","es":"Nombre completo, teléfono, email, ciudad","fr":"Nom complet, téléphone, e-mail, ville"},"createResumeBtn":{"ru":"Создать резюме","en":"Create resume","de":"Lebenslauf erstellen","ar":"إنشاء السيرة الذاتية","zh":"生成简历","es":"Crear currículum","fr":"Créer le CV"},"chooseFormat":{"ru":"Выберите формат","en":"Choose a format","de":"Format wählen","ar":"اختر الصيغة","zh":"选择格式","es":"Elige un formato","fr":"Choisissez un format"},"presModalSub":{"ru":"Слайды, фото, графики","en":"Slides, photos, charts","de":"Folien, Fotos, Diagramme","ar":"شرائح، صور، رسوم بيانية","zh":"幻灯片、图片、图表","es":"Diapositivas, fotos, gráficos","fr":"Diapositives, photos, graphiques"},"wordModalSub":{"ru":"Договоры, рефераты, заявления","en":"Contracts, papers, applications","de":"Verträge, Referate, Anträge","ar":"عقود، أبحاث، طلبات","zh":"合同、论文、申请书","es":"Contratos, trabajos, solicitudes","fr":"Contrats, dossiers, demandes"},"excelModalSub":{"ru":"Сметы, формулы, графики","en":"Estimates, formulas, charts","de":"Kostenvoranschläge, Formeln, Diagramme","ar":"تقديرات، معادلات، رسوم بيانية","zh":"预算、公式、图表","es":"Presupuestos, fórmulas, gráficos","fr":"Devis, formules, graphiques"},"templateTitle":{"ru":"Скачать шаблон","en":"Download template","de":"Vorlage herunterladen","ar":"تنزيل القالب","zh":"下载模板","es":"Descargar plantilla","fr":"Télécharger le modèle"},"templateSub":{"ru":"Пустой бланк для заполнения","en":"Blank form to fill in","de":"Leeres Formular zum Ausfüllen","ar":"نموذج فارغ للتعبئة","zh":"待填写的空白表单","es":"Formulario en blanco para rellenar","fr":"Formulaire vierge à remplir"},"musicTitle":{"ru":"Музыка","en":"Music","de":"Musik","ar":"الموسيقى","zh":"音乐","es":"Música","fr":"Musique"},"soonLabel":{"ru":"Скоро","en":"Coming soon","de":"Bald","ar":"قريباً","zh":"即将上线","es":"Próximamente","fr":"Bientôt"},"imageTitle":{"ru":"Картинка","en":"Image","de":"Bild","ar":"صورة","zh":"图片","es":"Imagen","fr":"Image"},"imageSub":{"ru":"По описанию, любой сюжет","en":"From a description, any subject","de":"Nach Beschreibung, jedes Motiv","ar":"من وصف، أي موضوع","zh":"根据描述生成，任意主题","es":"A partir de una descripción, cualquier tema","fr":"À partir d'une description, tout sujet"},"videoTitle":{"ru":"Видео","en":"Video","de":"Video","ar":"فيديو","zh":"视频","es":"Vídeo","fr":"Vidéo"},"whatSelling":{"ru":"Что продаём?","en":"What are you selling?","de":"Was verkaufst du?","ar":"ماذا تبيع؟","zh":"你要出售什么？","es":"¿Qué vendes?","fr":"Que vendez-vous ?"},"carTitle":{"ru":"Автомобиль","en":"Car","de":"Auto","ar":"سيارة","zh":"汽车","es":"Coche","fr":"Voiture"},"carSub":{"ru":"Марка, VIN, цена, стороны сделки","en":"Make, VIN, price, parties","de":"Marke, VIN, Preis, Parteien","ar":"الماركة، رقم الهيكل، السعر، أطراف الصفقة","zh":"品牌、车架号、价格、交易双方","es":"Marca, VIN, precio, partes","fr":"Marque, VIN, prix, parties"},"realtyTitle":{"ru":"Недвижимость","en":"Real estate","de":"Immobilie","ar":"عقار","zh":"房产","es":"Inmueble","fr":"Bien immobilier"},"realtySub":{"ru":"Квартира, дом, участок","en":"Apartment, house, land","de":"Wohnung, Haus, Grundstück","ar":"شقة، منزل، قطعة أرض","zh":"公寓、房屋、地块","es":"Piso, casa, terreno","fr":"Appartement, maison, terrain"},"alertNoTelegram":{"ru":"Не удалось связаться с Telegram — проверьте связь и откройте меню заново.","en":"Couldn't connect to Telegram — check your connection and reopen the menu.","de":"Verbindung zu Telegram fehlgeschlagen — prüfe deine Verbindung und öffne das Menü erneut.","ar":"تعذر الاتصال بتليجرام - تحقق من الاتصال وأعد فتح القائمة.","zh":"无法连接到 Telegram——请检查网络并重新打开菜单。","es":"No se pudo conectar con Telegram — revisa tu conexión y vuelve a abrir el menú.","fr":"Impossible de se connecter à Telegram — vérifiez votre connexion et rouvrez le menu."},"alertSoon":{"ru":"Эта функция ещё в разработке — скоро появится!","en":"This feature is still in development — coming soon!","de":"Diese Funktion wird noch entwickelt — bald verfügbar!","ar":"هذه الميزة لا تزال قيد التطوير - ستتوفر قريباً!","zh":"该功能正在开发中——敬请期待！","es":"Esta función aún está en desarrollo — ¡pronto disponible!","fr":"Cette fonctionnalité est encore en développement — bientôt disponible !"},"tabQuickstart":{"ru":"Старт","en":"Start","de":"Start","ar":"البداية","zh":"开始","es":"Inicio","fr":"Départ"},"quickstartSub":{"ru":"Вот что бот умеет делать — нажмите на пример, чтобы собрать свой","en":"Here's what the bot can do — tap an example to build your own","de":"Das kann der Bot — tippe auf ein Beispiel, um dein eigenes zu erstellen","ar":"هذا ما يستطيع البوت فعله - اضغط على مثال لإنشاء نسختك الخاصة","zh":"这是机器人能做的——点击示例来生成你自己的","es":"Esto es lo que puede hacer el bot — toca un ejemplo para crear el tuyo","fr":"Voici ce que le bot sait faire — appuyez sur un exemple pour créer le vôtre"},"qsPresTitle":{"ru":"Презентация","en":"Presentation","de":"Präsentation","ar":"عرض تقديمي","zh":"演示文稿","es":"Presentación","fr":"Présentation"},"qsPresSub":{"ru":"Например: история кофе","en":"E.g.: history of coffee","de":"Z. B.: Geschichte des Kaffees","ar":"مثال: تاريخ القهوة","zh":"例如：咖啡的历史","es":"Por ejemplo: historia del café","fr":"Par ex. : histoire du café"},"qsPresFill":{"ru":"История кофе","en":"History of coffee","de":"Geschichte des Kaffees","ar":"تاريخ القهوة","zh":"咖啡的历史","es":"Historia del café","fr":"Histoire du café"},"qsSmetaTitle":{"ru":"Смета","en":"Estimate","de":"Kostenvoranschlag","ar":"تقدير","zh":"预算表","es":"Presupuesto","fr":"Devis"},"qsSmetaSub":{"ru":"Например: ремонт кухни","en":"E.g.: kitchen renovation","de":"Z. B.: Küchenrenovierung","ar":"مثال: تجديد المطبخ","zh":"例如：厨房装修","es":"Por ejemplo: reforma de cocina","fr":"Par ex. : rénovation de cuisine"},"qsSmetaFill":{"ru":"Ремонт кухни","en":"Kitchen renovation","de":"Küchenrenovierung","ar":"تجديد المطبخ","zh":"厨房装修","es":"Reforma de cocina","fr":"Rénovation de cuisine"},"qsResumeTitle":{"ru":"Резюме","en":"Resume","de":"Lebenslauf","ar":"السيرة الذاتية","zh":"简历","es":"Currículum","fr":"CV"},"qsResumeSub":{"ru":"Например: менеджер по продажам","en":"E.g.: sales manager","de":"Z. B.: Vertriebsmitarbeiter","ar":"مثال: مدير مبيعات","zh":"例如：销售经理","es":"Por ejemplo: gerente de ventas","fr":"Par ex. : responsable commercial"},"qsResumeFill":{"ru":"Менеджер по продажам, опыт 5 лет","en":"Sales manager, 5 years of experience","de":"Vertriebsmitarbeiter, 5 Jahre Erfahrung","ar":"مدير مبيعات، خبرة 5 سنوات","zh":"销售经理，5年工作经验","es":"Gerente de ventas, 5 años de experiencia","fr":"Responsable commercial, 5 ans d'expérience"}},"TPL":{"greet":{"ru":"Привет, {name}! 👋","en":"Hi, {name}! 👋","de":"Hallo, {name}! 👋","ar":"مرحباً {name}! 👋","zh":"你好，{name}！👋","es":"Hola, {name}! 👋","fr":"Bonjour {name} ! 👋"},"creditsCount":{"ru":"{n} кредитов","en":"{n} credits","de":"{n} Credits","ar":"{n} كريدت","zh":"{n} 积分","es":"{n} créditos","fr":"{n} crédits"},"creditsHintSome":{"ru":"Хватит примерно на <b>{n} презентаций</b>","en":"Enough for about <b>{n} presentations</b>","de":"Reicht für ca. <b>{n} Präsentationen</b>","ar":"يكفي لحوالي <b>{n} عرضاً تقديمياً</b>","zh":"大约可制作 <b>{n} 份演示文稿</b>","es":"Alcanza para unas <b>{n} presentaciones</b>","fr":"Suffisant pour environ <b>{n} présentations</b>"},"creditsHintNone":{"ru":"Кредитов не осталось — пора пополнить","en":"No credits left — time to top up","de":"Keine Credits mehr — Zeit zum Aufladen","ar":"لم يتبقَّ رصيد - حان وقت الشحن","zh":"积分已用完——该充值了","es":"No quedan créditos — es hora de recargar","fr":"Plus de crédits — il est temps de recharger"},"costLabel":{"ru":"Стоимость: {n} кредитов","en":"Cost: {n} credits","de":"Kosten: {n} Credits","ar":"التكلفة: {n} كريدت","zh":"费用：{n} 积分","es":"Coste: {n} créditos","fr":"Coût : {n} crédits"},"costShort":{"ru":"{n} кр.","en":"{n} cr.","de":"{n} Kr.","ar":"{n} كريدت","zh":"{n} 积分","es":"{n} cr.","fr":"{n} cr."}},"PRES_STYLE":{"default":{"ru":"Обычный","en":"Universal","de":"Universell","ar":"عام","zh":"通用","es":"Universal","fr":"Universel"},"business":{"ru":"Деловой","en":"Business","de":"Business","ar":"الأعمال","zh":"商业","es":"Negocios","fr":"Affaires"},"tech":{"ru":"Технологии","en":"Technology","de":"Technologie","ar":"التقنية","zh":"科技","es":"Tecnología","fr":"Technologie"},"nature":{"ru":"Природа","en":"Nature","de":"Natur","ar":"الطبيعة","zh":"自然","es":"Naturaleza","fr":"Nature"},"history":{"ru":"История","en":"History","de":"Geschichte","ar":"التاريخ","zh":"历史","es":"Historia","fr":"Histoire"},"science":{"ru":"Наука","en":"Science","de":"Wissenschaft","ar":"العلوم","zh":"科学","es":"Ciencia","fr":"Science"},"school":{"ru":"Учёба","en":"Study","de":"Studium","ar":"الدراسة","zh":"学习","es":"Estudios","fr":"Études"},"fashion":{"ru":"Мода","en":"Fashion","de":"Mode","ar":"الموضة","zh":"时尚","es":"Moda","fr":"Mode"},"sport":{"ru":"Спорт","en":"Sport","de":"Sport","ar":"الرياضة","zh":"体育","es":"Deporte","fr":"Sport"},"travel":{"ru":"Путешествия","en":"Travel","de":"Reisen","ar":"السفر","zh":"旅行","es":"Viajes","fr":"Voyage"},"food":{"ru":"Еда","en":"Food","de":"Essen","ar":"الطعام","zh":"美食","es":"Comida","fr":"Gastronomie"},"art":{"ru":"Искусство","en":"Art","de":"Kunst","ar":"الفن","zh":"艺术","es":"Arte","fr":"Art"},"eco":{"ru":"Экология","en":"Ecology","de":"Ökologie","ar":"البيئة","zh":"生态","es":"Ecología","fr":"Écologie"},"minimal":{"ru":"Минимализм","en":"Minimalism","de":"Minimalismus","ar":"البساطة","zh":"极简","es":"Minimalismo","fr":"Minimalisme"}},"PRES_PHOTO":{"ai":{"ru":"Через ИИ","en":"Via AI","de":"Per KI","ar":"بالذكاء الاصطناعي","zh":"用AI生成","es":"Con IA","fr":"Via l'IA"},"own":{"ru":"Свои — пришлю после","en":"Mine — I'll send after","de":"Eigene — sende ich danach","ar":"صوري - سأرسلها لاحقاً","zh":"我自己的——之后发送","es":"Mías — las envío después","fr":"Les miennes — je les envoie après"}},"WORD_SIZE":{"short":{"ru":"Короче","en":"Shorter","de":"Kürzer","ar":"أقصر","zh":"更短","es":"Más breve","fr":"Plus court"},"long":{"ru":"Подробнее","en":"More detailed","de":"Ausführlicher","ar":"أكثر تفصيلاً","zh":"更详细","es":"Más detallado","fr":"Plus détaillé"}},"EXCEL_MODE":{"ai":{"ru":"Придумай сам","en":"Make it up yourself","de":"Selbst ausdenken","ar":"ابتكر بنفسك","zh":"自动生成","es":"Invéntalo tú","fr":"Invente toi-même"},"user":{"ru":"Это мои реальные данные","en":"This is my real data","de":"Das sind meine echten Daten","ar":"هذه بياناتي الحقيقية","zh":"这是我的真实数据","es":"Estos son mis datos reales","fr":"Ce sont mes données réelles"}},"WORD_KIND":{"referat":{"ru":"Реферат","en":"Research paper","de":"Referat","ar":"بحث","zh":"学术论文","es":"Trabajo de investigación","fr":"Dossier de recherche"},"coursework":{"ru":"Курсовая работа","en":"Term paper","de":"Hausarbeit","ar":"بحث فصلي","zh":"学期论文","es":"Trabajo de curso","fr":"Dossier de cours"},"report":{"ru":"Доклад","en":"Report","de":"Vortrag","ar":"تقرير","zh":"报告","es":"Exposición","fr":"Exposé"},"essay":{"ru":"Эссе","en":"Essay","de":"Essay","ar":"مقال","zh":"论文/短文","es":"Ensayo","fr":"Essai"},"notes":{"ru":"Конспект","en":"Study notes","de":"Konspekt","ar":"ملخص دراسي","zh":"课堂笔记","es":"Apuntes","fr":"Notes de cours"},"dkp":{"ru":"Договор купли-продажи","en":"Sale and purchase agreement","de":"Kaufvertrag","ar":"عقد بيع","zh":"买卖合同","es":"Contrato de compraventa","fr":"Contrat de vente"},"rent":{"ru":"Договор аренды","en":"Rental agreement","de":"Mietvertrag","ar":"عقد إيجار","zh":"租赁合同","es":"Contrato de alquiler","fr":"Contrat de location"},"services":{"ru":"Договор оказания услуг","en":"Service agreement","de":"Dienstleistungsvertrag","ar":"عقد تقديم خدمات","zh":"服务合同","es":"Contrato de prestación de servicios","fr":"Contrat de prestation de services"},"employment":{"ru":"Трудовой договор","en":"Employment contract","de":"Arbeitsvertrag","ar":"عقد عمل","zh":"劳动合同","es":"Contrato de trabajo","fr":"Contrat de travail"},"supply":{"ru":"Договор поставки","en":"Supply agreement","de":"Liefervertrag","ar":"عقد توريد","zh":"供货合同","es":"Contrato de suministro","fr":"Contrat de fourniture"},"gift":{"ru":"Договор дарения","en":"Gift deed","de":"Schenkungsvertrag","ar":"عقد هبة","zh":"赠与合同","es":"Contrato de donación","fr":"Acte de donation"},"loan":{"ru":"Расписка / договор займа","en":"Promissory note / loan agreement","de":"Schuldschein / Darlehensvertrag","ar":"سند دين / عقد قرض","zh":"借条/借款合同","es":"Pagaré / contrato de préstamo","fr":"Reconnaissance de dette / contrat de prêt"},"marriage_contract":{"ru":"Брачный договор","en":"Prenuptial agreement","de":"Ehevertrag","ar":"عقد زواج (اتفاقية)","zh":"婚前协议","es":"Capitulaciones matrimoniales","fr":"Contrat de mariage"},"statement":{"ru":"Заявление","en":"Application","de":"Antrag","ar":"طلب","zh":"申请书","es":"Solicitud","fr":"Demande"},"proxy":{"ru":"Доверенность","en":"Power of attorney","de":"Vollmacht","ar":"توكيل","zh":"授权委托书","es":"Poder notarial","fr":"Procuration"},"act":{"ru":"Акт приёма-передачи","en":"Handover certificate","de":"Übergabeprotokoll","ar":"محضر تسليم واستلام","zh":"交接单","es":"Acta de entrega","fr":"Procès-verbal de remise"},"claim":{"ru":"Досудебная претензия","en":"Complaint letter","de":"Mängelrüge","ar":"مطالبة","zh":"索赔函","es":"Reclamación","fr":"Réclamation"},"consent":{"ru":"Согласие на выезд ребёнка","en":"Child travel consent","de":"Zustimmung zur Ausreise des Kindes","ar":"موافقة على سفر الطفل","zh":"儿童出境同意书","es":"Autorización de viaje para menores","fr":"Autorisation de voyage pour mineur"},"lawsuit":{"ru":"Исковое заявление","en":"Statement of claim","de":"Klageschrift","ar":"لائحة دعوى","zh":"起诉状","es":"Demanda judicial","fr":"Assignation en justice"},"offer":{"ru":"Коммерческое предложение","en":"Commercial proposal","de":"Geschäftsangebot","ar":"عرض تجاري","zh":"商业提案","es":"Propuesta comercial","fr":"Proposition commerciale"},"doc":{"ru":"Другое / обычный документ","en":"Other / generic document","de":"Sonstiges / Allgemeines Dokument","ar":"أخرى / مستند عام","zh":"其他/普通文档","es":"Otro / documento genérico","fr":"Autre / document générique"}},"EXCEL_KIND":{"expense_estimate":{"ru":"Смета расходов","en":"Expense estimate","de":"Kostenvoranschlag","ar":"تقدير المصروفات","zh":"支出预算表","es":"Presupuesto de gastos","fr":"Devis de dépenses"},"family_budget":{"ru":"Семейный бюджет","en":"Family budget","de":"Familienbudget","ar":"ميزانية الأسرة","zh":"家庭预算","es":"Presupuesto familiar","fr":"Budget familial"},"project_budget":{"ru":"Смета проекта / бизнес-план","en":"Project budget / business plan","de":"Projektbudget / Businessplan","ar":"ميزانية مشروع / خطة عمل","zh":"项目预算/商业计划","es":"Presupuesto de proyecto / plan de negocio","fr":"Budget de projet / plan d'affaires"},"price_list":{"ru":"Прайс-лист","en":"Price list","de":"Preisliste","ar":"قائمة الأسعار","zh":"价目表","es":"Lista de precios","fr":"Liste de prix"},"calc_table":{"ru":"Расчётная таблица к учебной работе","en":"Calculation table for coursework","de":"Berechnungstabelle für die Arbeit","ar":"جدول حسابي للبحث","zh":"作业计算表","es":"Tabla de cálculo para el trabajo","fr":"Tableau de calcul pour le devoir"},"startup_model":{"ru":"Финансовая модель стартапа","en":"Startup financial model","de":"Startup-Finanzmodell","ar":"نموذج مالي لشركة ناشئة","zh":"创业财务模型","es":"Modelo financiero de startup","fr":"Modèle financier de startup"}}};
+  const RTL_LANGS = new Set(["ar"]);
+
+  function t(key, fallback) {
+    const v = I18N.STR[key];
+    if (!v) return fallback || key;
+    return v[uiLang] || v.ru || fallback || key;
+  }
+  function tpl(key, vars) {
+    const v = I18N.TPL[key];
+    let s = (v && (v[uiLang] || v.ru)) || "";
+    for (const k in vars) s = s.split("{" + k + "}").join(vars[k]);
+    return s;
+  }
+  function valueLabel(dict, value) {
+    const v = dict[value];
+    if (!v) return value;
+    return v[uiLang] || v.ru || value;
+  }
+
+  function applyI18n() {
+    // Направление письма и язык документа - для арабского разворачиваем интерфейс в RTL,
+    // это единственный язык бота, который этого требует (см. main.py RTL_LANGS).
+    document.documentElement.lang = uiLang;
+    document.documentElement.dir = RTL_LANGS.has(uiLang) ? "rtl" : "ltr";
+
+    // Обычные текстовые узлы
+    document.querySelectorAll("[data-i18n]").forEach(el => {
+      const key = el.dataset.i18n;
+      if (!I18N.STR[key]) return;
+      el.textContent = t(key);
+    });
+    // Плейсхолдеры полей ввода
+    document.querySelectorAll("[data-i18n-ph]").forEach(el => {
+      const key = el.dataset.i18nPh;
+      if (!I18N.STR[key]) return;
+      el.placeholder = t(key);
+    });
+    // Подписи optgroup (атрибут label, не текстовый узел)
+    document.querySelectorAll("[data-i18n-label]").forEach(el => {
+      const key = el.dataset.i18nLabel;
+      if (!I18N.STR[key]) return;
+      el.label = t(key);
+    });
+
+    // Чипы стилей презентации/фото/объёма/данных - переводим по data-value,
+    // не трогая класс active и остальные атрибуты.
+    document.querySelectorAll('.field-chip[data-group="presStyle"]').forEach(el => {
+      el.textContent = valueLabel(I18N.PRES_STYLE, el.dataset.value);
+    });
+    document.querySelectorAll('.field-chip[data-group="presPhoto"]').forEach(el => {
+      el.textContent = valueLabel(I18N.PRES_PHOTO, el.dataset.value);
+    });
+    document.querySelectorAll('.field-chip[data-group="wordSize"]').forEach(el => {
+      el.textContent = valueLabel(I18N.WORD_SIZE, el.dataset.value);
+    });
+    document.querySelectorAll('.field-chip[data-group="excelMode"]').forEach(el => {
+      el.textContent = valueLabel(I18N.EXCEL_MODE, el.dataset.value);
+    });
+
+    // Виды документов Word (21 штука) и таблиц Excel (6 штук) в выпадающих списках
+    document.querySelectorAll("#wordKind option").forEach(opt => {
+      opt.textContent = valueLabel(I18N.WORD_KIND, opt.value);
+    });
+    document.querySelectorAll("#excelKind option").forEach(opt => {
+      opt.textContent = valueLabel(I18N.EXCEL_KIND, opt.value);
+    });
+
+    // Стоимость в кредитах - короткая форма ("N кр.") в модалках и полная
+    // ("Стоимость: N кредитов") в футере форм. Число берём из data-cost,
+    // проставленного в разметке, текст всегда строим заново из шаблона.
+    document.querySelectorAll("[data-cost]").forEach(el => {
+      const n = el.dataset.cost;
+      if (el.classList.contains("form-cost")) {
+        el.textContent = tpl("costLabel", { n });
+      } else {
+        el.textContent = tpl("costShort", { n });
+      }
+    });
+  }
+
+
+  applyI18n();
+
+  document.getElementById('greetName').textContent = tpl('greet', { name });
+  document.getElementById('creditsCount').textContent = tpl('creditsCount', { n: credits });
   document.getElementById('profName').textContent = name;
   document.getElementById('profCredits').textContent = credits;
   document.getElementById('avatarInitial').textContent = name.trim()[0]?.toUpperCase() || '?';
@@ -762,8 +1047,8 @@
 
   const presCount = Math.floor(credits / 10);
   document.getElementById('creditsHint').innerHTML = presCount > 0
-    ? `Хватит примерно на <b>${presCount} презентаций</b>`
-    : `Кредитов не осталось — пора пополнить`;
+    ? tpl('creditsHintSome', { n: presCount })
+    : tpl('creditsHintNone');
 
   // Реальный признак того, что страницу открыл именно Telegram (а не мы сами тестируем
   // в обычном браузере/артефакте) - Telegram всегда подставляет initData в хэш или
@@ -783,7 +1068,7 @@
       if (launchedFromTelegram) {
         // Мы точно внутри Telegram, но мост telegram-web-app.js не догрузился даже за это
         // время - честно говорим об этом, а не делаем вид, что действие ушло.
-        alert('Не удалось связаться с Telegram — проверьте связь и откройте меню заново.');
+        alert(t('alertNoTelegram'));
       } else {
         // Открыто не из Telegram (например, тестовый просмотр в браузере) - это
         // ожидаемо, показываем действие как есть, для удобства тестирования.
@@ -822,7 +1107,7 @@
   function showSoon() {
     const tg = getTg();
     tg?.HapticFeedback?.notificationOccurred('warning');
-    const msg = 'Эта функция ещё в разработке — скоро появится!';
+    const msg = t('alertSoon');
     if (tg?.showAlert) tg.showAlert(msg); else alert(msg);
   }
 
@@ -838,6 +1123,7 @@
   // --- Папки: открытие/закрытие своих модалок ---
   const modalDocs = document.getElementById('modalDocs');
   const modalMedia = document.getElementById('modalMedia');
+  const modalDkp = document.getElementById('modalDkp');
   document.getElementById('folderDocsBtn').addEventListener('click', () => {
     modalDocs.classList.add('open');
     getTg()?.HapticFeedback?.impactOccurred('light');
@@ -846,12 +1132,21 @@
     modalMedia.classList.add('open');
     getTg()?.HapticFeedback?.impactOccurred('light');
   });
-  [modalDocs, modalMedia].forEach(overlay => {
+  document.getElementById('folderDkpBtn').addEventListener('click', () => {
+    modalDkp.classList.add('open');
+    getTg()?.HapticFeedback?.impactOccurred('light');
+  });
+  // Резюме - один тип документа, без промежуточного выбора (в отличие от договора
+  // купли-продажи, где выбор авто/недвижимость нужен) - сразу открывает форму.
+  document.getElementById('folderResumeBtn').addEventListener('click', () => {
+    showScreen('form-resume');
+    getTg()?.HapticFeedback?.impactOccurred('light');
+  });
+  [modalDocs, modalMedia, modalDkp].forEach(overlay => {
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
   });
 
   // --- Переключение вкладок ---
-  const chatInputBar = document.getElementById('chatInputBar');
   document.querySelectorAll('.tab-item').forEach(t => {
     t.addEventListener('click', () => {
       document.querySelectorAll('.tab-item').forEach(x => { x.classList.remove('active'); x.querySelector('svg').setAttribute('stroke', '#8b85a3'); });
@@ -859,7 +1154,6 @@
       t.querySelector('svg').setAttribute('stroke', '#fff');
       document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
       document.getElementById('screen-' + t.dataset.tab).classList.add('active');
-      chatInputBar.style.display = t.dataset.tab === 'chat' ? 'flex' : 'none';
       window.scrollTo(0, 0);
       getTg()?.HapticFeedback?.selectionChanged();
     });
@@ -879,38 +1173,42 @@
     sendAction('mode_voice');
   });
 
-  // --- Микрофон в чате: запись звука прямо в Mini App невозможна (sendData передаёт только текст) ---
-  document.getElementById('micBtn').addEventListener('click', () => {
-    const tg = getTg();
-    const msg = 'Mini App пока не умеет записывать звук — пришлите голосовое сообщение прямо в чат с ботом, оно расшифруется автоматически';
-    tg?.HapticFeedback?.impactOccurred('light');
-    if (tg?.showAlert) tg.showAlert(msg); else alert(msg);
-  });
-
-  // --- Чат: чипы-подсказки заполняют поле, кнопка отправки уходит в обычный чат бота ---
-  const chatInput = document.getElementById('chatInput');
-  document.querySelectorAll('.chat-chip').forEach(chip => {
-    chip.addEventListener('click', () => { chatInput.value = chip.dataset.fill; chatInput.focus(); });
-  });
-  document.getElementById('chatSend').addEventListener('click', () => {
-    const text = chatInput.value.trim();
-    if (!text) return;
-    sendAction('chat', { text });
-  });
-
   // --- Общая функция переключения на любой экран (не только вкладки таббара) ---
   function showScreen(id) {
     document.querySelectorAll('.tab-item').forEach(x => { x.classList.remove('active'); x.querySelector('svg').setAttribute('stroke', '#8b85a3'); });
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById('screen-' + id).classList.add('active');
-    chatInputBar.style.display = 'none';
     window.scrollTo(0, 0);
   }
 
-  // --- Открытие форм из модалки "Документы" ---
+  // --- "Быстрый старт": тап по примеру заполняет соответствующее поле формы примером
+  // Портфолио: тап по превью заполняет соответствующее поле формы примером и сразу
+  // открывает эту форму - человеку остаётся донастроить и нажать "Создать", а не
+  // печатать тему с нуля. Показываем 3 формата (резюме/презентация/таблица) - самые
+  // наглядные для превью; Word и договор остаются доступны через "Документы"/
+  // "Договор купли-продажи" на экране "Создать".
+  const QUICKSTART_ITEMS = {
+    pres: { screen: 'form-pres', fill: () => { document.getElementById('presTopic').value = t('qsPresFill'); } },
+    smeta: { screen: 'form-excel', fill: () => {
+      document.getElementById('excelKind').value = 'expense_estimate';
+      document.getElementById('excelContent').value = t('qsSmetaFill');
+    } },
+    resume: { screen: 'form-resume', fill: () => { document.getElementById('resumeContent').value = t('qsResumeFill'); } },
+  };
+  document.querySelectorAll('[data-qs]').forEach(el => {
+    el.addEventListener('click', () => {
+      const item = QUICKSTART_ITEMS[el.dataset.qs];
+      if (!item) return;
+      item.fill();
+      showScreen(item.screen);
+      getTg()?.HapticFeedback?.impactOccurred('light');
+    });
+  });
+
+  // --- Открытие форм из модалок ("Документы" и "Договор купли-продажи") ---
   document.querySelectorAll('[data-open-form]').forEach(el => {
     el.addEventListener('click', () => {
-      modalDocs.classList.remove('open');
+      document.querySelectorAll('.modal-overlay.open').forEach(o => o.classList.remove('open'));
       showScreen(el.dataset.openForm);
       getTg()?.HapticFeedback?.impactOccurred('light');
     });
@@ -984,6 +1282,43 @@
       content,
       extra: document.getElementById('excelExtra').value.trim(),
       mode: activeChipValue('excelMode', 'ai'),
+    });
+  });
+
+  // --- Отправка договора купли-продажи автомобиля (kind фиксирован, объём не спрашиваем -
+  // договоры не входят в WORD_SIZE_KINDS на бэкенде, там объём задаётся структурой ГК РФ) ---
+  document.getElementById('dkpCarSubmit').addEventListener('click', () => {
+    const content = document.getElementById('dkpCarContent').value.trim();
+    if (!content) { document.getElementById('dkpCarContent').focus(); return; }
+    sendAction('gen_word', {
+      kind: 'dkp_car',
+      content,
+      extra: document.getElementById('dkpCarExtra').value.trim(),
+      size: 'short',
+    });
+  });
+
+  // --- Отправка договора купли-продажи недвижимости ---
+  document.getElementById('dkpRealtySubmit').addEventListener('click', () => {
+    const content = document.getElementById('dkpRealtyContent').value.trim();
+    if (!content) { document.getElementById('dkpRealtyContent').focus(); return; }
+    sendAction('gen_word', {
+      kind: 'dkp_realty',
+      content,
+      extra: document.getElementById('dkpRealtyExtra').value.trim(),
+      size: 'short',
+    });
+  });
+
+  // --- Отправка резюме ---
+  document.getElementById('resumeSubmit').addEventListener('click', () => {
+    const content = document.getElementById('resumeContent').value.trim();
+    if (!content) { document.getElementById('resumeContent').focus(); return; }
+    sendAction('gen_word', {
+      kind: 'resume',
+      content,
+      extra: document.getElementById('resumeExtra').value.trim(),
+      size: 'short',
     });
   });
 </script>
