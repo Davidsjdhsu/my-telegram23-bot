@@ -480,9 +480,12 @@ async def topup_pending_callback(cq: CallbackQuery):
 @dp.message(Form.waiting_topup_amount)
 async def topup_amount_handler(m: Message, state: FSMContext):
     """Разбирает сумму из свободного текста ("100", "100 руб", "100₽" - всё сойдёт,
-    берём только цифры) и отправляет счёт на эту сумму."""
+    берём только цифры) и отправляет счёт на эту сумму. Состояние ожидания сбрасываем
+    ТОЛЬКО при успешном вводе - если число вне диапазона, остаёмся в том же
+    состоянии и ждём повторную попытку следующим сообщением (раньше сбрасывали
+    состояние ещё до проверки, из-за чего повторный ввод улетал в обычный чат
+    вместо обработки как сумму)."""
     lang = user_lang(m.from_user.id)
-    await state.clear()
     digits = re.sub(r"[^\d]", "", (m.text or ""))
     try:
         amount_rub = int(digits)
@@ -491,6 +494,7 @@ async def topup_amount_handler(m: Message, state: FSMContext):
     if amount_rub < MIN_TOPUP_RUB or amount_rub > MAX_TOPUP_RUB:
         await m.answer(tr("msg_topup_invalid_amount", lang, min=MIN_TOPUP_RUB))
         return
+    await state.clear()
     await send_topup_invoice(m, lang, amount_rub)
 
 
@@ -7186,14 +7190,17 @@ async def dispatch_upload_generation(m: Message, state: FSMContext, source_text:
 
 @dp.message(Form.waiting_image_prompt)
 async def image_prompt_handler(m: Message, state: FSMContext):
-    """Текст уже расшифрован из голоса outer_middleware'ом, если пришёл голосом."""
+    """Текст уже расшифрован из голоса outer_middleware'ом, если пришёл голосом.
+    Сбрасываем состояние только когда получили настоящий текст - если пришло
+    пустое сообщение (например, стикер), остаёмся в режиме ожидания промпта,
+    чтобы следующее сообщение не улетело мимо в обычный чат."""
     lang = user_lang(m.from_user.id)
     uid = m.from_user.id
     prompt = (m.text or "").strip()
-    await state.clear()
     if not prompt:
         await m.answer(tr("msg_didnt_understand", lang), reply_markup=main_kb(lang, uid=uid))
         return
+    await state.clear()
     if not can_afford(uid, CREDIT_COSTS["image"]):
         await m.answer(tr("msg_limit", lang))
         return
@@ -7231,17 +7238,24 @@ async def image_prompt_handler(m: Message, state: FSMContext):
 @dp.message(Form.waiting_file_instruction)
 async def file_instruction_followup(m: Message, state: FSMContext):
     """Ответ на вопрос "что сделать с этим файлом" - текст уже расшифрован из голоса
-    outer_middleware'ом, если пришёл голосом, так что здесь всегда обычный текст."""
+    outer_middleware'ом, если пришёл голосом, так что здесь всегда обычный текст.
+    Состояние сбрасываем только когда реально не с чем работать (данные файла
+    потерялись) или когда инструкция принята к обработке - если человек прислал
+    пустое сообщение, а файл всё ещё на месте, остаёмся в режиме ожидания и не
+    теряем контекст загруженного файла."""
     instruction = (m.text or "").strip()
     data = await state.get_data()
     source_text = data.get("upload_source_text")
     pptx_path = data.get("upload_pptx_path")
-    await state.clear()
-    if not instruction or (not source_text and not pptx_path):
-        lang = user_lang(m.from_user.id)
+    lang = user_lang(m.from_user.id)
+    if not source_text and not pptx_path:
+        await state.clear()
         await m.answer(tr("msg_didnt_understand", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
         return
-    lang = user_lang(m.from_user.id)
+    if not instruction:
+        await m.answer(tr("msg_didnt_understand", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
+        return
+    await state.clear()
     # "Скопируй мой стиль" могли попросить не сразу подписью к файлу, а только сейчас,
     # в ответ на вопрос "что с ним сделать" - для этого сырые байты .pptx были
     # сохранены заранее в document_upload(), а не удалены сразу после извлечения текста.
