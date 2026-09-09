@@ -13,7 +13,9 @@ from datetime import datetime
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.filters import Command, StateFilter
 from aiogram.types import (Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
-                            WebAppInfo, MenuButtonWebApp, MenuButtonDefault)
+                            WebAppInfo, MenuButtonWebApp, MenuButtonDefault,
+                            LabeledPrice, PreCheckoutQuery,
+                            InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -228,7 +230,34 @@ PLAN_LIMITS = {"premium": 15}
 CREDIT_COSTS = {"presentation": 10, "word": 5, "excel": 5, "template": 0, "image": 10, "vision": 3}
 STARTING_CREDITS = 50  # стартовый баланс для новых пользователей - подобрать под реальную экономику отдельно
 
+# Презентация стоит не фиксированную сумму, а по числу слайдов - честнее, чем плоская
+# ставка: 3-слайдовый черновик и 30-слайдовый доклад явно требуют разных ресурсов
+# (текста, ИИ-фото). CREDIT_COSTS["presentation"] выше больше не используется для
+# расчёта реальной стоимости, оставлен только как исторический дефолт для
+# spend_credits() на случай, если где-то забыли передать явную сумму.
+PRESENTATION_CREDITS_PER_SLIDE = 5
+PRESENTATION_MIN_SLIDES = 3  # тот же минимум, что уже валидируется в gen_presentation/detect_slide_count
 
+
+def presentation_cost(slides) -> int:
+    """Стоимость презентации в кредитах по числу слайдов. Не роняется на нечисловом
+    вводе - откатывается на минимум, а не бросает исключение посреди генерации."""
+    try:
+        n = max(PRESENTATION_MIN_SLIDES, int(slides))
+    except (TypeError, ValueError):
+        n = PRESENTATION_MIN_SLIDES
+    return n * PRESENTATION_CREDITS_PER_SLIDE
+
+
+# --- Оплата кредитов через Telegram Payments (провайдер - ЮKassa) ----------------------
+# PAYMENT_PROVIDER_TOKEN получают у @BotFather (Bot Settings -> Payments -> ЮKassa) ПОСЛЕ
+# прохождения модерации в личном кабинете ЮKassa - пока переменная не задана, бот сам
+# откатывается на старое ручное поведение (пересылка запроса админу), ничего не падает.
+PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "").strip()
+PAYMENT_CURRENCY = "RUB"
+
+# Три пакета с прогрессивной скидкой за объём. price_rub - в рублях (не в копейках,
+# перевод в копейки для Telegram Payments происходит в момент отправки инвойса).
 def load_users():
     """Читает users.json после рестарта, чтобы не обнулялись язык, тариф и история."""
     try:
@@ -370,6 +399,134 @@ class Form(StatesGroup):
     waiting_file_instruction = State()
     waiting_image_prompt = State()
     waiting_pres_clarify = State()
+    waiting_topup_amount = State()
+
+
+MIN_TOPUP_RUB = 50  # минимальная сумма пополнения
+MAX_TOPUP_RUB = 9999  # верхняя граница разовой суммы пополнения
+CREDIT_TO_RUB_RATE = 1  # 1 рубль = 1 кредит - без пакетов, любая сумма от минимума
+
+
+async def show_topup_packages(m: Message, lang: str, state: FSMContext, amount_rub=None):
+    """Пополнение баланса - 1 рубль = 1 кредит, сумма свободная (без пакетов).
+    amount_rub может прийти сразу готовым (Mini App - там есть свой выбор суммы
+    чипами/полем ввода на экране "Пополнить") - тогда сразу шлём счёт, минуя
+    вопрос в чате. Без amount_rub (кнопка "Мой тариф", классический чат) -
+    спрашиваем сумму текстом. Спрашиваем сумму и показываем кнопку оплаты
+    ВСЕГДА, даже пока PAYMENT_PROVIDER_TOKEN не подключён (ЮKassa на модерации) -
+    см. send_topup_invoice() ниже про то, что показывается в этом случае вместо
+    настоящего счёта."""
+    if amount_rub is not None and MIN_TOPUP_RUB <= amount_rub <= MAX_TOPUP_RUB:
+        await send_topup_invoice(m, lang, amount_rub)
+        return
+
+    await state.set_state(Form.waiting_topup_amount)
+    await m.answer(tr("msg_topup_ask_amount", lang, min=MIN_TOPUP_RUB))
+
+
+async def send_topup_invoice(m: Message, lang: str, amount_rub: int):
+    """Отправляет настоящий Telegram-инвойс на конкретную (уже провалидированную)
+    сумму в рублях - общий код и для пути через Mini App, и для пути через чат.
+    Пока PAYMENT_PROVIDER_TOKEN не подключён (ЮKassa на модерации) - вместо
+    настоящего инвойса шлём обычное сообщение с такой же кнопкой "Оплатить N ₽"
+    (обычная инлайн-кнопка, не платёжный инвойс). Это НЕ обман пользователя:
+    кнопка настоящая, в настоящем работающем боте, просто платёжный бэкенд ещё
+    не подключён - при нажатии честно говорим об этом, а не притворяемся, что
+    оплата прошла. Одновременно уходит уведомление админу, чтобы можно было
+    обработать заявку вручную, пока автоматика не готова."""
+    credits = amount_rub * CREDIT_TO_RUB_RATE
+    title = tr("tpl_topup_title", lang, credits=credits)
+
+    if PAYMENT_PROVIDER_TOKEN:
+        try:
+            await bot.send_invoice(
+                chat_id=m.from_user.id,
+                title=title,
+                description=title,
+                payload=f"credits:custom:{credits}",
+                provider_token=PAYMENT_PROVIDER_TOKEN,
+                currency=PAYMENT_CURRENCY,
+                prices=[LabeledPrice(label=title, amount=amount_rub * 100)],  # копейки
+            )
+        except Exception as e:
+            print("Не удалось отправить инвойс:", e)
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=tr("tpl_pay_btn", lang, amount=amount_rub), callback_data="topup_pending")
+    ]])
+    await m.answer(f"{title}\n\n{amount_rub} ₽", reply_markup=kb)
+
+    u = get_user(m.from_user.id)
+    uname = f"@{m.from_user.username}" if m.from_user.username else str(m.from_user.id)
+    forward_text = (f"💳 Запрос на пополнение баланса от {u.get('name') or uname} "
+                     f"({uname}, id={m.from_user.id}) на {amount_rub} ₽ ({credits} кредитов).")
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, forward_text)
+        except Exception as e:
+            print("Не удалось переслать запрос на пополнение админу:", admin_id, e)
+
+
+@dp.callback_query(F.data == "topup_pending")
+async def topup_pending_callback(cq: CallbackQuery):
+    """Нажатие на кнопку "Оплатить" до того, как реально подключён платёжный
+    провайдер - честно говорим, что оплата пока не работает, а не делаем вид,
+    что что-то произошло."""
+    lang = user_lang(cq.from_user.id)
+    await cq.answer(tr("msg_topup_not_ready", lang), show_alert=True)
+
+
+@dp.message(Form.waiting_topup_amount)
+async def topup_amount_handler(m: Message, state: FSMContext):
+    """Разбирает сумму из свободного текста ("100", "100 руб", "100₽" - всё сойдёт,
+    берём только цифры) и отправляет счёт на эту сумму."""
+    lang = user_lang(m.from_user.id)
+    await state.clear()
+    digits = re.sub(r"[^\d]", "", (m.text or ""))
+    try:
+        amount_rub = int(digits)
+    except ValueError:
+        amount_rub = 0
+    if amount_rub < MIN_TOPUP_RUB or amount_rub > MAX_TOPUP_RUB:
+        await m.answer(tr("msg_topup_invalid_amount", lang, min=MIN_TOPUP_RUB))
+        return
+    await send_topup_invoice(m, lang, amount_rub)
+
+
+@dp.pre_checkout_query()
+async def pre_checkout_handler(pcq: PreCheckoutQuery):
+    """Telegram требует ответить в течение 10 секунд - подтверждаем всегда, это ещё
+    не списание денег, а просто "да, готовы принять заказ" перед вводом карты."""
+    await bot.answer_pre_checkout_query(pcq.id, ok=True)
+
+
+@dp.message(F.successful_payment)
+async def successful_payment_handler(m: Message):
+    """Деньги реально списаны именно на этом шаге - начисляем кредиты сразу и один
+    раз. Число кредитов берём прямо из payload (а не пересчитываем из суммы платежа),
+    чтобы не завязываться на копейки/курс при разборе."""
+    lang = user_lang(m.from_user.id)
+    payload = m.successful_payment.invoice_payload
+    try:
+        credits_bought = int(payload.split(":")[-1])
+    except (ValueError, IndexError):
+        credits_bought = 0
+    u = get_user(m.from_user.id)
+    u["credits"] = int(u.get("credits") or 0) + credits_bought
+    save_users()
+    await m.answer(tr("msg_payment_success", lang, credits=credits_bought, balance=u["credits"]))
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id,
+                f"💰 Оплата: {m.from_user.id} купил {credits_bought} кредитов за "
+                f"{m.successful_payment.total_amount / 100} {m.successful_payment.currency}."
+            )
+        except Exception:
+            pass
+
+
 
 
 # ==================== ЯЗЫКИ / i18n ====================
@@ -654,6 +811,50 @@ TR = {
         "zh": "未能获取回复，请稍后再试。",
         "es": "No se pudo obtener respuesta, inténtalo de nuevo más tarde.",
         "fr": "Impossible d'obtenir une réponse, réessayez un peu plus tard.",
+    },
+    "msg_topup_ask_amount": {
+        "ru": "На какую сумму пополнить баланс? 1 ₽ = 1 кредит. Минимум {min} ₽, максимум 9999 ₽ — пришлите число.",
+        "en": "How much would you like to top up? 1 ₽ = 1 credit. Minimum {min} ₽, maximum 9999 ₽ — send a number.",
+        "de": "Um welchen Betrag möchtest du aufladen? 1 ₽ = 1 Credit. Minimum {min} ₽, Maximum 9999 ₽ — schick eine Zahl.",
+        "ar": "بأي مبلغ تريد شحن الرصيد؟ 1 ₽ = 1 كريدت. الحد الأدنى {min} ₽، الحد الأقصى 9999 ₽ - أرسل رقماً.",
+        "zh": "想充值多少？1 ₽ = 1 积分。最低 {min} ₽，最高 9999 ₽——请发送数字。",
+        "es": "¿Con qué importe quieres recargar? 1 ₽ = 1 crédito. Mínimo {min} ₽, máximo 9999 ₽ — envía un número.",
+        "fr": "Quel montant souhaitez-vous recharger ? 1 ₽ = 1 crédit. Minimum {min} ₽, maximum 9999 ₽ — envoyez un nombre.",
+    },
+    "msg_topup_invalid_amount": {
+        "ru": "Не понял сумму — пришлите число от {min} до 9999 ₽ (например: 100).",
+        "en": "Couldn't read that amount — send a number from {min} to 9999 ₽ (e.g. 100).",
+        "de": "Betrag nicht erkannt — schick eine Zahl von {min} bis 9999 ₽ (z. B. 100).",
+        "ar": "لم أفهم المبلغ - أرسل رقماً من {min} إلى 9999 ₽ (مثال: 100).",
+        "zh": "无法识别金额——请发送 {min} 到 9999 ₽ 之间的数字（例如：100）。",
+        "es": "No entendí el importe — envía un número de {min} a 9999 ₽ (por ejemplo: 100).",
+        "fr": "Montant non reconnu — envoyez un nombre entre {min} et 9999 ₽ (par ex. : 100).",
+    },
+    "tpl_topup_title": {
+        "ru": "Пополнение на {credits} кредитов", "en": "Top-up for {credits} credits", "de": "Aufladung um {credits} Credits",
+        "ar": "شحن {credits} كريدت", "zh": "充值 {credits} 积分", "es": "Recarga de {credits} créditos", "fr": "Recharge de {credits} crédits",
+    },
+    "msg_payment_success": {
+        "ru": "✅ Оплата прошла — начислено {credits} кредитов. Новый баланс: {balance}.",
+        "en": "✅ Payment successful — {credits} credits added. New balance: {balance}.",
+        "de": "✅ Zahlung erfolgreich — {credits} Credits gutgeschrieben. Neues Guthaben: {balance}.",
+        "ar": "✅ تم الدفع بنجاح - تم إضافة {credits} كريدت. الرصيد الجديد: {balance}.",
+        "zh": "✅ 支付成功——已添加 {credits} 积分。新余额：{balance}。",
+        "es": "✅ Pago realizado — se añadieron {credits} créditos. Nuevo saldo: {balance}.",
+        "fr": "✅ Paiement réussi — {credits} crédits ajoutés. Nouveau solde : {balance}.",
+    },
+    "tpl_pay_btn": {
+        "ru": "💳 Оплатить {amount} ₽", "en": "💳 Pay {amount} ₽", "de": "💳 {amount} ₽ bezahlen",
+        "ar": "💳 ادفع {amount} ₽", "zh": "💳 支付 {amount} ₽", "es": "💳 Pagar {amount} ₽", "fr": "💳 Payer {amount} ₽",
+    },
+    "msg_topup_not_ready": {
+        "ru": "Оплата пока подключается — ваш запрос уже передан, баланс пополним вручную в ближайшее время.",
+        "en": "Payments are still being set up — your request has been sent, we'll top up your balance manually shortly.",
+        "de": "Zahlungen werden noch eingerichtet — deine Anfrage wurde gesendet, wir laden dein Guthaben in Kürze manuell auf.",
+        "ar": "الدفع قيد الإعداد بعد - تم إرسال طلبك، سنشحن رصيدك يدوياً قريباً.",
+        "zh": "支付功能还在接入中——已收到你的请求，我们会尽快手动为你充值。",
+        "es": "Los pagos aún se están configurando — tu solicitud ya se envió, recargaremos tu saldo manualmente en breve.",
+        "fr": "Les paiements sont encore en cours de configuration — votre demande a été envoyée, nous rechargerons votre solde manuellement sous peu.",
     },
     "msg_topup_notice": {
         "ru": "Автоматическая оплата кредитов пока подключается 🛠 Я передал ваш запрос — пополним баланс вручную и напишем вам сюда, как только всё будет готово.",
@@ -983,13 +1184,13 @@ TR = {
                              "zh": "没能理解。请用下方按钮选择操作，或输入 /cancel 重新开始。",
                              "es": "No entendí. Elige una acción con el botón de abajo, o escribe /cancel para empezar de nuevo.",
                              "fr": "Je n'ai pas compris. Choisis une action avec le bouton ci-dessous, ou tape /cancel pour recommencer."},
-    "msg_plan_info": {"ru": "💳 Баланс: {credits} кредитов\nПрезентация — 10 кр. · Word/Excel — 5 кр. · шаблон бесплатно",
-                      "en": "💳 Balance: {credits} credits\nPresentation — 10 cr. · Word/Excel — 5 cr. · template is free",
-                      "de": "💳 Guthaben: {credits} Credits\nPräsentation — 10 Cr. · Word/Excel — 5 Cr. · Vorlage kostenlos",
-                      "ar": "💳 الرصيد: {credits} كريدت\nعرض تقديمي — 10 · وورد/إكسل — 5 · القالب مجاني",
-                      "zh": "💳 余额：{credits} 积分\n演示文稿 — 10 积分 · Word/Excel — 5 积分 · 模板免费",
-                      "es": "💳 Saldo: {credits} créditos\nPresentación — 10 cr. · Word/Excel — 5 cr. · plantilla gratis",
-                      "fr": "💳 Solde : {credits} crédits\nPrésentation — 10 cr. · Word/Excel — 5 cr. · modèle gratuit"},
+    "msg_plan_info": {"ru": "💳 Баланс: {credits} кредитов\nПрезентация — 5 кр./слайд · Word/Excel — 5 кр. · распознавание фото — 3 кр. · шаблон бесплатно",
+                      "en": "💳 Balance: {credits} credits\nPresentation — 5 cr./slide · Word/Excel — 5 cr. · photo recognition — 3 cr. · template is free",
+                      "de": "💳 Guthaben: {credits} Credits\nPräsentation — 5 Cr./Folie · Word/Excel — 5 Cr. · Fotoerkennung — 3 Cr. · Vorlage kostenlos",
+                      "ar": "💳 الرصيد: {credits} كريدت\nعرض تقديمي — 5 لكل شريحة · وورد/إكسل — 5 · التعرف على الصور — 3 · القالب مجاني",
+                      "zh": "💳 余额：{credits} 积分\n演示文稿 — 每页5积分 · Word/Excel — 5 积分 · 图片识别 — 3 积分 · 模板免费",
+                      "es": "💳 Saldo: {credits} créditos\nPresentación — 5 cr./diapositiva · Word/Excel — 5 cr. · reconocimiento de fotos — 3 cr. · plantilla gratis",
+                      "fr": "💳 Solde : {credits} crédits\nPrésentation — 5 cr./diapositive · Word/Excel — 5 cr. · reconnaissance photo — 3 cr. · modèle gratuit"},
     "msg_pptx_ready": {
         "ru": "Готово ✅\n\nОткрывай именно PPTX в PowerPoint, Keynote или Google Презентациях.\n\nЕсли на телефоне все фото одинаковые, это не ошибка файла. Так бывает в предпросмотре Telegram, WPS и встроенных «Документах». Открой тот же файл на другом устройстве или в нормальном редакторе презентаций.",
         "en": "Done ✅\n\nOpen the PPTX file specifically in PowerPoint, Keynote, or Google Slides.\n\nIf all the photos look the same on your phone, that's not a file error. This happens in Telegram's preview, WPS, and built-in \"Files\" apps. Open the same file on another device or in a proper presentation editor.",
@@ -1396,12 +1597,14 @@ def can_afford(uid, cost):
     return get_user(uid).get("credits", 0) >= cost
 
 
-def spend_credits(uid, action):
+def spend_credits(uid, action, amount=None):
     """Списывает стоимость завершённой генерации. Вызывать один раз, сразу после
     того как результат уже отправлен пользователю - до этого момента ошибка
-    генерации не должна списывать кредиты."""
+    генерации не должна списывать кредиты. amount - явная сумма (используется для
+    презентаций, где цена зависит от числа слайдов, см. presentation_cost());
+    если не передана - берётся фиксированная ставка из CREDIT_COSTS."""
     u = get_user(uid)
-    cost = CREDIT_COSTS.get(action, 0)
+    cost = amount if amount is not None else CREDIT_COSTS.get(action, 0)
     u["credits"] = max(0, int(u.get("credits") or 0) - cost)
     save_users()
     return u["credits"]
@@ -2520,7 +2723,7 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
 # изменился, если сама ссылка выглядит одинаково. Добавляя это число в query-параметры,
 # каждая новая версия HTML получает технически другой адрес, и кэш Telegram больше не
 # может ошибочно посчитать её той же самой страницей.
-MINIAPP_VERSION = 10
+MINIAPP_VERSION = 14
 
 
 def build_miniapp_url(u):
@@ -3120,7 +3323,7 @@ async def to_main_menu(m: Message, state: FSMContext):
 @dp.message(F.text.in_(ALL_BTN_PRES_LABELS))
 async def start_pres(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
-    if not can_afford(m.from_user.id, CREDIT_COSTS["presentation"]):
+    if not can_afford(m.from_user.id, presentation_cost(PRESENTATION_MIN_SLIDES)):
         await m.answer(tr("msg_limit", lang))
         return
     await m.answer(tr("msg_how_build_pres", lang), reply_markup=mode_kb(lang=lang))
@@ -3860,7 +4063,10 @@ async def _build_presentation(m: Message, state: FSMContext):
         await bot.send_document(chat_id, FSInputFile(pptx_path, filename=f"{pres_fname}.pptx"), caption=tr("msg_pptx_caption", lang))
         await bot.send_document(chat_id, FSInputFile(pdf_path, filename=f"{pres_fname}.pdf"), caption=tr("msg_pptx_pdf_caption", lang))
         u["generations"] += 1
-        spend_credits(uid, "presentation")
+        # Списываем по фактическому числу слайдов в готовой презентации (не по тому,
+        # сколько просили) - если модель собрала слайдов меньше/больше запрошенного,
+        # пользователь платит за то, что реально получил, а не за обещание.
+        spend_credits(uid, "presentation", amount=presentation_cost(len(content.get("slides") or [])))
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
         note_success(uid)
         for p in (cover_src, cover_own, cover_img, cover_panel_img, pptx_path, pdf_path, *raw_sources, *user_photo_originals, *[f for pair in images if pair for f in pair]):
@@ -6531,10 +6737,11 @@ async def history(m: Message):
 
 
 @dp.message(F.text.in_(ALL_BTN_PLAN_LABELS))
-async def my_plan(m: Message):
+async def my_plan(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     u = get_user(m.from_user.id)
     await m.answer(tr("msg_plan_info", lang, credits=u.get("credits", STARTING_CREDITS)))
+    await show_topup_packages(m, lang, state)
 
 
 @dp.message(F.text.in_(ALL_BTN_HELP_LABELS))
@@ -6559,7 +6766,7 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
     if looks_like_document_request(text):
         fmt = detect_requested_format(text)
         if fmt == "presentation":
-            if not can_afford(m.from_user.id, CREDIT_COSTS["presentation"]):
+            if not can_afford(m.from_user.id, presentation_cost(PRESENTATION_MIN_SLIDES)):
                 await bot.send_message(m.from_user.id, tr("msg_limit", lang))
                 return
             slides = extract_slide_count(text)
@@ -6682,23 +6889,15 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         return
 
     if action == "topup":
-        # Автоматической оплаты пока нет - пересылаем запрос админу тем же способом,
-        # что и "Сотрудничество", и честно предупреждаем пользователя, что это ручной процесс.
-        uname = f"@{m.from_user.username}" if m.from_user.username else str(m.from_user.id)
-        forward_text = (f"💳 Запрос на пополнение баланса от {u.get('name') or uname} "
-                         f"({uname}, id={m.from_user.id}). Текущий баланс: {u.get('credits', STARTING_CREDITS)} кредитов.")
-        for admin_id in ADMIN_IDS:
-            try:
-                await bot.send_message(admin_id, forward_text)
-            except Exception as e:
-                print("Не удалось переслать запрос на пополнение админу:", admin_id, e)
-        await m.answer(tr("msg_topup_notice", lang))
+        raw_amount = payload.get("amount")
+        try:
+            amount_rub = int(raw_amount) if raw_amount is not None else None
+        except (TypeError, ValueError):
+            amount_rub = None
+        await show_topup_packages(m, lang, state, amount_rub=amount_rub)
         return
 
     if action == "gen_presentation":
-        if not can_afford(m.from_user.id, CREDIT_COSTS["presentation"]):
-            await bot.send_message(m.from_user.id, tr("msg_limit", lang))
-            return
         topic = (payload.get("topic") or "").strip()
         if not topic:
             await bot.send_message(m.from_user.id, "Не вижу тему презентации. Напиши её в чат или открой меню с клавиатуры «Открыть меню».")
@@ -6709,6 +6908,9 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
             slides = max(3, min(30, int(slides)))
         except (TypeError, ValueError):
             slides = 8
+        if not can_afford(m.from_user.id, presentation_cost(slides)):
+            await bot.send_message(m.from_user.id, tr("msg_limit", lang))
+            return
         await state.update_data(
             topic=topic, user_text=user_text, extra="", extra_used=0,
             theme_name=payload.get("style") or "default", slides=slides,
@@ -6903,7 +7105,8 @@ async def build_presentation_with_copied_style(m: Message, state: FSMContext, pp
     и шрифт берутся из реального файла через extract_pptx_style()."""
     lang = user_lang(m.from_user.id)
     uid = m.from_user.id
-    if not can_afford(uid, CREDIT_COSTS["presentation"]):
+    slides = detect_slide_count(instruction)
+    if not can_afford(uid, presentation_cost(slides)):
         await m.answer(tr("msg_limit", lang))
         try:
             os.remove(pptx_path)
@@ -6923,7 +7126,7 @@ async def build_presentation_with_copied_style(m: Message, state: FSMContext, pp
     topic = re.sub(r"\s{2,}", " ", topic).strip(" ,.-—") or instruction
     await state.update_data(
         mode="ai", user_text="", extra="", topic=topic,
-        slides=detect_slide_count(instruction), content_lang=lang,
+        slides=slides, content_lang=lang,
         custom_colors=custom_colors, photo_mode="ai",
     )
     await _build_presentation(m, state)
@@ -6932,7 +7135,8 @@ async def build_presentation_with_copied_style(m: Message, state: FSMContext, pp
 async def build_presentation_from_upload(m: Message, state: FSMContext, source_text: str, instruction: str):
     lang = user_lang(m.from_user.id)
     uid = m.from_user.id
-    if not can_afford(uid, CREDIT_COSTS["presentation"]):
+    slides = detect_slide_count(instruction)
+    if not can_afford(uid, presentation_cost(slides)):
         await m.answer(tr("msg_limit", lang))
         return
     # Переиспользуем существующий сборщик презентаций целиком (тот же, что и в обычном
@@ -6941,7 +7145,7 @@ async def build_presentation_from_upload(m: Message, state: FSMContext, source_t
     # фото и графиков ещё раз здесь.
     await state.update_data(
         mode="user", user_text=source_text, extra=instruction,
-        slides=detect_slide_count(instruction), topic=instruction[:200],
+        slides=slides, topic=instruction[:200],
     )
     await _build_presentation(m, state)
 
@@ -7186,7 +7390,7 @@ async def pres_clarify_handler(m: Message, state: FSMContext):
     style = extract_style(reply_text) or "default"
     photo_mode = extract_photo_mode(reply_text) or "ai"
 
-    if not can_afford(m.from_user.id, CREDIT_COSTS["presentation"]):
+    if not can_afford(m.from_user.id, presentation_cost(slides)):
         await state.clear()
         await m.answer(tr("msg_limit", lang))
         return
