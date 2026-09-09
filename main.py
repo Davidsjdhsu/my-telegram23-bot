@@ -466,22 +466,22 @@ TR = {
                      "zh": "完成！从现在起界面和文档都将使用该语言。👇", "es": "¡Listo! A partir de ahora la interfaz y los documentos estarán en este idioma. 👇",
                      "fr": "C'est fait ! Désormais l'interface et les documents seront dans cette langue. 👇"},
     "msg_welcome_intro": {
-        "ru": "Привет, {name} 👋\n\nЯ умею две вещи:\n\n💬 Отвечать на вопросы и помогать с текстом — просто напишите сюда или пришлите голосовое, расшифрую сам 🎙\n📁 Собирать презентации, документы Word и таблицы Excel — с оформлением, под вашу тему или данные\n\nЗа документами и таблицами — в меню (кнопка «Меню» слева от поля ввода). Обо всём остальном — прямо здесь, в чате.",
-        "en": "Hi, {name} 👋\n\nI can do two things:\n\n💬 Answer questions and help with writing — just type here or send a voice message, I'll transcribe it myself 🎙\n📁 Put together presentations, Word documents and Excel tables — styled, from your topic or your data\n\nFor documents and tables — open the menu (the \"Menu\" button to the left of the message field). For everything else — right here in chat.",
-        "de": "Hallo, {name} 👋\n\nIch kann zwei Dinge:\n\n💬 Fragen beantworten und beim Schreiben helfen — einfach hier tippen oder eine Sprachnachricht senden, ich transkribiere sie selbst 🎙\n📁 Präsentationen, Word-Dokumente und Excel-Tabellen erstellen — mit Gestaltung, zu deinem Thema oder aus deinen Daten\n\nFür Dokumente und Tabellen — öffne das Menü (Button „Menü“ links neben dem Textfeld). Für alles andere — einfach hier im Chat.",
-        "ar": "مرحباً {name} 👋\n\nأستطيع فعل شيئين:\n\n💬 الإجابة على الأسئلة والمساعدة في الكتابة — فقط اكتب هنا أو أرسل رسالة صوتية، سأقوم بتحويلها بنفسي 🎙\n📁 إعداد عروض تقديمية ومستندات Word وجداول Excel أنيقة — بناءً على موضوعك أو بياناتك\n\nللمستندات والجداول — افتح القائمة (زر «القائمة» يسار حقل الرسالة). لكل شيء آخر — هنا في المحادثة مباشرة.",
-        "zh": "你好，{name} 👋\n\n我能做两件事：\n\n💬 回答问题、帮你写文字——直接在这里打字，或发语音消息，我会自动转成文字 🎙\n📁 制作精美的演示文稿、Word文档和Excel表格——根据你的主题或数据\n\n需要文档和表格——请打开菜单（消息框左侧的「菜单」按钮）。其他任何问题——直接在这里聊就行。",
-        "es": "Hola, {name} 👋\n\nPuedo hacer dos cosas:\n\n💬 Responder preguntas y ayudar a escribir — escribe aquí o envía un audio, yo lo transcribo 🎙\n📁 Crear presentaciones, documentos Word y tablas Excel cuidados — a partir de tu tema o tus datos\n\nPara documentos y tablas — abre el menú (botón «Menú» a la izquierda del campo de mensaje). Para todo lo demás — aquí mismo, en el chat.",
-        "fr": "Bonjour {name} 👋\n\nJe sais faire deux choses :\n\n💬 Répondre à vos questions et aider à rédiger — écrivez ici ou envoyez un message vocal, je le transcris moi-même 🎙\n📁 Créer des présentations, documents Word et tableaux Excel soignés — selon votre sujet ou vos données\n\nPour les documents et tableaux — ouvrez le menu (bouton « Menu » à gauche du champ de message). Pour tout le reste — directement ici, dans le chat.",
+        "ru": "Привет, {name} 👋\n\nКоротко, что я умею:\n\n💬 Отвечаю на любые вопросы и помогаю с текстом — пишите или присылайте голосовое, расшифрую сам 🎙\n📸 Решаю задачи по фото — сфотографируйте тест, тетрадь или скриншот, разберу и отвечу\n📁 Собираю презентации, Word-документы и Excel-таблицы под вашу тему или данные\n📝 Резюме и договоры купли-продажи (авто, недвижимость) — тоже быстро сделаю\n🎨 Могу скопировать стиль вашей презентации и нарисовать новую в этом же оформлении\n\nГотовые примеры и формы — в меню (кнопка «✨ Открыть меню» ниже). Обо всём остальном пишите прямо сюда.",
+        "en": "Hi, {name} 👋\n\nQuick rundown of what I can do:\n\n💬 Answer any question and help with writing — type here or send a voice message, I'll transcribe it myself 🎙\n📸 Solve problems from photos — snap a test, notebook page or screenshot, and I'll work it out and answer\n📁 Put together presentations, Word documents and Excel tables from your topic or data\n📝 Resumes and sale contracts (car, real estate) too — quick to make\n🎨 I can copy the style of your presentation and draw a new one in the same look\n\nReady-made examples and forms are in the menu (the \"✨ Open menu\" button below). For everything else — just write here.",
+        "de": "Hallo, {name} 👋\n\nKurz, was ich kann:\n\n💬 Fragen beantworten und beim Schreiben helfen — tippe hier oder sende eine Sprachnachricht, ich transkribiere sie selbst 🎙\n📸 Aufgaben anhand von Fotos lösen — fotografiere einen Test, ein Heft oder einen Screenshot, ich löse es und antworte\n📁 Präsentationen, Word-Dokumente und Excel-Tabellen zu deinem Thema oder deinen Daten erstellen\n📝 Auch Lebensläufe und Kaufverträge (Auto, Immobilie) mache ich schnell\n🎨 Ich kann den Stil deiner Präsentation kopieren und eine neue im gleichen Look zeichnen\n\nFertige Beispiele und Formulare findest du im Menü (Button „✨ Menü öffnen\" unten). Für alles andere schreib einfach hier.",
+        "ar": "مرحباً {name} 👋\n\nباختصار، ما أستطيع فعله:\n\n💬 الإجابة على أي سؤال والمساعدة في الكتابة - اكتب هنا أو أرسل رسالة صوتية، سأحوّلها بنفسي 🎙\n📸 حل المسائل من الصور - صوّر اختباراً أو دفتراً أو لقطة شاشة، وسأحلّلها وأجيب\n📁 إعداد عروض تقديمية ومستندات Word وجداول Excel حسب موضوعك أو بياناتك\n📝 كذلك سيرة ذاتية وعقود بيع (سيارة، عقار) - بسرعة\n🎨 يمكنني نسخ نمط عرضك التقديمي ورسم عرض جديد بنفس الشكل\n\nالأمثلة الجاهزة والنماذج - في القائمة (زر «✨ فتح القائمة» أدناه). لكل شيء آخر - اكتب هنا مباشرة.",
+        "zh": "你好，{name} 👋\n\n简单说说我能做什么：\n\n💬 回答任何问题、帮你写文字——直接打字或发语音消息，我会自动转成文字 🎙\n📸 拍照解题——拍下试卷、笔记本或截图，我会分析并解答\n📁 根据你的主题或数据制作演示文稿、Word文档和Excel表格\n📝 简历和买卖合同（汽车、房产）也能快速搞定\n🎨 可以复制你演示文稿的风格，用同样的外观画一份新的\n\n现成的示例和表单都在菜单里（下方「✨ 打开菜单」按钮）。其他任何问题，直接在这里聊。",
+        "es": "Hola, {name} 👋\n\nUn resumen rápido de lo que puedo hacer:\n\n💬 Responder cualquier pregunta y ayudarte a escribir — escribe aquí o envía un audio, yo lo transcribo 🎙\n📸 Resolver ejercicios a partir de fotos — fotografía un examen, un cuaderno o una captura, y lo resuelvo y respondo\n📁 Crear presentaciones, documentos Word y tablas Excel según tu tema o tus datos\n📝 También hago currículums y contratos de compraventa (coche, inmueble) rápidamente\n🎨 Puedo copiar el estilo de tu presentación y dibujar una nueva con el mismo aspecto\n\nLos ejemplos listos y los formularios están en el menú (botón «✨ Abrir menú» abajo). Para todo lo demás, escribe aquí mismo.",
+        "fr": "Bonjour {name} 👋\n\nEn bref, voici ce que je sais faire :\n\n💬 Répondre à toute question et aider à rédiger — écrivez ici ou envoyez un message vocal, je le transcris moi-même 🎙\n📸 Résoudre des exercices à partir de photos — prenez en photo un contrôle, un cahier ou une capture d'écran, je l'analyse et je réponds\n📁 Créer des présentations, documents Word et tableaux Excel selon votre sujet ou vos données\n📝 Aussi des CV et des contrats de vente (voiture, bien immobilier) — rapidement\n🎨 Je peux copier le style de votre présentation et en dessiner une nouvelle dans le même esprit\n\nLes exemples prêts à l'emploi et les formulaires sont dans le menu (bouton « ✨ Ouvrir le menu » ci-dessous). Pour tout le reste, écrivez directement ici.",
     },
     "msg_welcome": {
-        "ru": "Здравствуйте, <b>{name}</b> 👋\n\nЧто будем делать сегодня?",
-        "en": "Hello, <b>{name}</b> 👋\n\nWhat shall we do today?",
+        "ru": "Привет, <b>{name}</b> 👋\n\nЧто делаем сегодня?",
+        "en": "Hi, <b>{name}</b> 👋\n\nWhat are we making today?",
         "de": "Hallo, <b>{name}</b> 👋\n\nWas machen wir heute?",
-        "ar": "مرحباً <b>{name}</b> 👋\n\nما الذي سنفعله اليوم؟",
-        "zh": "您好，<b>{name}</b> 👋\n\n今天我们做点什么？",
-        "es": "Hola, <b>{name}</b> 👋\n\n¿Qué hacemos hoy?",
-        "fr": "Bonjour <b>{name}</b> 👋\n\nQue fait-on aujourd'hui ?",
+        "ar": "مرحباً <b>{name}</b> 👋\n\nماذا نصنع اليوم؟",
+        "zh": "你好，<b>{name}</b> 👋\n\n今天做点什么？",
+        "es": "Hola, <b>{name}</b> 👋\n\n¿Qué creamos hoy?",
+        "fr": "Salut <b>{name}</b> 👋\n\nQu'est-ce qu'on fait aujourd'hui ?",
     },
     "msg_welcome_plan_line": {
         "ru": "💳 Баланс: {credits} кредитов",
@@ -667,8 +667,8 @@ TR = {
     "msg_cancelled": {"ru": "Отменил текущее действие. Начнём заново 👇", "en": "Cancelled the current action. Let's start over 👇",
                       "de": "Aktuelle Aktion abgebrochen. Fangen wir neu an 👇", "ar": "تم إلغاء الإجراء الحالي. لنبدأ من جديد 👇",
                       "zh": "已取消当前操作。重新开始吧 👇", "es": "Acción actual cancelada. Empecemos de nuevo 👇", "fr": "Action en cours annulée. Recommençons 👇"},
-    "msg_limit": {"ru": "Лимит генераций закончился.", "en": "Generation limit reached.", "de": "Generierungslimit erreicht.",
-                  "ar": "انتهى حد الإنشاء.", "zh": "生成次数已用完。", "es": "Se agotó el límite de generaciones.", "fr": "Limite de générations atteinte."},
+    "msg_limit": {"ru": "Кредиты закончились — загляните в «Мой тариф», чтобы пополнить баланс.", "en": "You're out of credits — check \"My plan\" to top up your balance.", "de": "Deine Credits sind aufgebraucht — schau unter „Mein Tarif“ nach, um aufzuladen.",
+                  "ar": "نفد رصيدك من الكريدت - راجع «خطتي» لشحن الرصيد.", "zh": "积分已用完——请在「我的套餐」中充值。", "es": "Se te acabaron los créditos — consulta «Mi plan» para recargar saldo.", "fr": "Vous n'avez plus de crédits — consultez « Mon forfait » pour recharger votre solde."},
     "msg_table_ready": {"ru": "Таблица готова ✅", "en": "Table ready ✅", "de": "Tabelle fertig ✅", "ar": "الجدول جاهز ✅",
                         "zh": "表格已完成 ✅", "es": "Tabla lista ✅", "fr": "Tableau prêt ✅"},
     "msg_doc_ready": {"ru": "Документ готов ✅", "en": "Document ready ✅", "de": "Dokument fertig ✅", "ar": "المستند جاهز ✅",
@@ -822,8 +822,8 @@ TR = {
                           "zh": "正在生成Word文件，通常比演示文稿更快。",
                           "es": "Creando el archivo Word. Suele ser más rápido que una presentación.",
                           "fr": "Création du fichier Word. C'est généralement plus rapide qu'une présentation."},
-    "msg_history_empty": {"ru": "История пустая.", "en": "History is empty.", "de": "Verlauf ist leer.",
-                          "ar": "السجل فارغ.", "zh": "历史记录为空。", "es": "El historial está vacío.", "fr": "L'historique est vide."},
+    "msg_history_empty": {"ru": "Пока пусто — здесь появятся ваши готовые файлы.", "en": "Nothing here yet — your finished files will show up here.", "de": "Noch nichts hier — deine fertigen Dateien landen hier.",
+                          "ar": "لا شيء هنا بعد - ستظهر ملفاتك الجاهزة هنا.", "zh": "暂时还没有内容——生成的文件会出现在这里。", "es": "Aún no hay nada — aquí aparecerán tus archivos listos.", "fr": "Rien pour l'instant — vos fichiers terminés apparaîtront ici."},
     "msg_history_title": {"ru": "📁 История:\n\n", "en": "📁 History:\n\n", "de": "📁 Verlauf:\n\n",
                           "ar": "📁 السجل:\n\n", "zh": "📁 历史记录：\n\n", "es": "📁 Historial:\n\n", "fr": "📁 Historique :\n\n"},
     "msg_start_pres_again": {"ru": "Сделать презентацию", "en": "Create a presentation", "de": "Präsentation erstellen",
@@ -849,13 +849,13 @@ TR = {
                             "zh": "🎨 适合该文本的风格：{style}。\n保留还是选择其他？",
                             "es": "🎨 Para este texto encaja el estilo: {style}.\n¿Lo mantenemos o eliges otro?",
                             "fr": "🎨 Ce style convient au texte : {style}.\nOn le garde ou tu en choisis un autre ?"},
-    "msg_grok_error": {"ru": "Не получилось получить ответ от нейросети. Попробуй ещё раз через минуту.",
-                       "en": "Couldn't get a response from the AI. Try again in a minute.",
-                       "de": "Keine Antwort von der KI erhalten. Versuche es in einer Minute erneut.",
-                       "ar": "تعذر الحصول على رد من الذكاء الاصطناعي. حاول مرة أخرى بعد دقيقة.",
-                       "zh": "未能获得AI的回复，请一分钟后再试。",
-                       "es": "No se pudo obtener respuesta de la IA. Inténtalo de nuevo en un minuto.",
-                       "fr": "Impossible d'obtenir une réponse de l'IA. Réessaie dans une minute."},
+    "msg_grok_error": {"ru": "Что-то не собралось с первого раза — дело не в вас, попробуйте ещё раз через минуту.",
+                       "en": "Something didn't come together on the first try — not on you, try again in a minute.",
+                       "de": "Beim ersten Versuch hat's nicht geklappt — liegt nicht an dir, versuch's in einer Minute nochmal.",
+                       "ar": "لم تنجح المحاولة الأولى - الأمر ليس منك، جرّب مرة أخرى بعد دقيقة.",
+                       "zh": "第一次没成功——不是你的问题，一分钟后再试一次。",
+                       "es": "Algo no salió bien en el primer intento — no es cosa tuya, prueba de nuevo en un minuto.",
+                       "fr": "Ça n'a pas marché du premier coup — ce n'est pas de votre faute, réessayez dans une minute."},
     "msg_draft_ready_pres": {"ru": "Черновик готов ✅\n\n{sample}\n\nСтиль: {style}\n\nЕсли всё ок — собираем полную версию.",
                              "en": "Draft ready ✅\n\n{sample}\n\nStyle: {style}\n\nIf it looks good, let's build the full version.",
                              "de": "Entwurf fertig ✅\n\n{sample}\n\nStil: {style}\n\nWenn alles passt, erstellen wir die vollständige Version.",
@@ -1184,6 +1184,122 @@ def pick_theme(topic: str):
         if any(k in t for k in keys):
             return name, THEMES[name]
     return "default", THEMES["default"]
+
+
+# --- Копирование стиля из загруженного .pptx ("скопируй мой стиль") -------------------
+# Отдельная ветка от обычной загрузки файла (extract_text_from_pptx достаёт только
+# текст) - здесь вместо текста вытаскиваются реальные цвета и шрифт темы файла,
+# чтобы новая презентация была визуально похожа на исходную, а не рисовалась одной
+# из 14 встроенных тем THEMES.
+from pptx.opc.constants import RELATIONSHIP_TYPE as _RT
+from pptx.oxml.ns import qn as _pptx_qn
+from pptx.oxml import parse_xml as pptx_parse_xml
+
+
+def _hex_to_rgb(hex_str: str):
+    hex_str = (hex_str or "").strip().lstrip("#")
+    if len(hex_str) != 6:
+        return None
+    try:
+        return tuple(int(hex_str[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return None
+
+
+def _blend_colors(c1, c2, t: float):
+    """Линейная интерполяция между двумя RGB-цветами (t=0 -> c1, t=1 -> c2) -
+    используется, чтобы получить промежуточные "mid"/"mute" оттенки темы, раз в
+    самой .pptx-теме таких градаций нет, есть только основные/акцентные цвета."""
+    return tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
+
+
+def _relative_luminance(rgb):
+    r, g, b = (c / 255 for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def extract_pptx_style(path: str):
+    """Извлекает реальные цвета цветовой схемы и шрифт заголовков из .pptx, чтобы
+    построить словарь в формате THEMES (bg/ink/mid/mute/line/photo/heading_font).
+    Источник - тема презентации (clrScheme/fontScheme в theme1.xml мастер-слайда),
+    та же схема, что PowerPoint показывает в панели "Варианты темы". Каждый шаг
+    обёрнут в try/except: если в конкретном файле что-то не получилось прочитать
+    (нестандартный экспорт, отсутствующие поля) - тихо откатываемся на разумные
+    значения по умолчанию, а не роняем всю генерацию из-за одного не найденного тега."""
+    fallback = dict(THEMES["default"])
+    try:
+        prs = Presentation(path)
+        master = prs.slide_masters[0]
+        theme_part = master.part.part_related_by(_RT.THEME)
+        # В этой версии python-pptx part_related_by() отдаёт обычный Part без
+        # распарсенного XML (нет .element/._element) - парсим сырые байты сами.
+        theme_el = pptx_parse_xml(theme_part.blob)
+        clr_scheme = theme_el.find(f".//{_pptx_qn('a:clrScheme')}")
+        colors = {}
+        if clr_scheme is not None:
+            for child in clr_scheme:
+                tag = child.tag.split("}")[-1]  # dk1, lt1, dk2, lt2, accent1..accent6
+                srgb = child.find(_pptx_qn("a:srgbClr"))
+                sys_clr = child.find(_pptx_qn("a:sysClr"))
+                val = None
+                if srgb is not None:
+                    val = _hex_to_rgb(srgb.get("val"))
+                elif sys_clr is not None:
+                    # sysClr (окна/системные цвета) несёт lastClr - реальный итоговый цвет
+                    val = _hex_to_rgb(sys_clr.get("lastClr"))
+                if val:
+                    colors[tag] = val
+
+        dark = colors.get("dk1") or colors.get("tx1") or (30, 30, 32)
+        light = colors.get("lt1") or colors.get("bg1") or (250, 250, 250)
+        accent = colors.get("accent1") or colors.get("dk2") or dark
+
+        # На тёмном фоне текст должен быть светлым и наоборот - если dk1/lt1 в файле
+        # заданы "наоборот" (бывает у тёмных экспортов), меняем местами по яркости,
+        # а не доверяем слепо именам тегов.
+        if _relative_luminance(dark) > _relative_luminance(light):
+            dark, light = light, dark
+
+        bg = light
+        ink = dark
+        line = accent if accent != dark else dark
+        mid = _blend_colors(ink, bg, 0.35)
+        mute = _blend_colors(ink, bg, 0.58)
+
+        heading_font = None
+        font_scheme = theme_el.find(f".//{_pptx_qn('a:fontScheme')}")
+        if font_scheme is not None:
+            major = font_scheme.find(f"{_pptx_qn('a:majorFont')}/{_pptx_qn('a:latin')}")
+            if major is not None and major.get("typeface") and major.get("typeface") != "+mn-lt":
+                heading_font = major.get("typeface")
+
+        is_dark_theme = _relative_luminance(bg) < 0.5
+        photo_hint = (
+            "cinematic photography, moody dramatic lighting, no text, no watermark" if is_dark_theme
+            else "cinematic photorealistic photography, bright natural light, no text, no watermark"
+        )
+
+        return {
+            "bg": bg, "ink": ink, "mid": mid, "mute": mute, "line": line,
+            "photo": photo_hint,
+            "heading_font": heading_font or fallback["heading_font"],
+        }
+    except Exception as e:
+        print("Не удалось извлечь стиль презентации, использую тему по умолчанию:", e)
+        return fallback
+
+
+STYLE_COPY_KEYWORDS = [
+    "скопируй стиль", "скопируй мой стиль", "мой стиль", "такой же стиль", "тот же стиль",
+    "в этом стиле", "в моём стиле", "сохрани стиль", "сохрани оформление", "как в файле",
+    "тот же дизайн", "такой же дизайн", "copy my style", "copy the style", "same style",
+    "in this style", "keep the style", "keep the design",
+]
+
+
+def wants_style_copy(text: str) -> bool:
+    t = (text or "").lower()
+    return any(kw in t for kw in STYLE_COPY_KEYWORDS)
 
 
 def get_user(uid):
@@ -2009,6 +2125,17 @@ async def ask_grok_chat(user_text: str, lang: str = "ru") -> str:
                     "Без канцелярита, без «конечно! с радостью помогу», без списков «вот несколько вариантов», "
                     "без фраз вроде «как языковая модель». Пиши как нормальный знакомый в мессенджере. "
                     "Суть вопроса не теряй. "
+                    "Пиши так, чтобы не читалось как текст нейросети: не ставь тире («—») почти в каждом "
+                    "предложении - это первое, что выдаёт ИИ-текст, используй его редко и только когда без него "
+                    "правда не обойтись, обычно достаточно запятой, точки или союза. Не начинай ответ со слов "
+                    "«Конечно», «Вот», «Итак», «Отлично», не заканчивай дежурными фразами вроде «Надеюсь, это "
+                    "поможет!» или «Дай знать, если что-то ещё нужно». Не используй конструкцию «дело не в X, а в Y» "
+                    "и не выравнивай предложения в один и тот же ритм - живая речь сбивчивая, разной длины. "
+                    "Если просят исправить/отредактировать/причесать присланный текст: правь орфографию, "
+                    "пунктуацию, явные ошибки и корявые обороты, но сохраняй голос и стиль автора - не переписывай "
+                    "текст набело в свою манеру, не добавляй фразы и мысли, которых не было, не делай его более "
+                    "формальным или более гладким, чем просили. Верни просто исправленный текст без вступлений "
+                    "вроде «Вот исправленный вариант:» и без разбора ошибок, если явно не попросили объяснить правки. "
                     "Если просят совет или мнение по политике, религии или личным финансам "
                     "(куда вложить, какую крипту купить, как голосовать, какая вера правильная) — "
                     "коротко откажись: в чате этими темами не занимаешься. Без лекции и без спора. "
@@ -2888,7 +3015,27 @@ async def send_welcome(m: Message, u: dict, lang: str, first_time: bool = False)
     intro_key = "msg_welcome_intro" if first_time else "msg_welcome"
     text = tr(intro_key, lang, name=name_safe)
     text += "\n\n" + tr("msg_welcome_plan_line", lang, credits=credits)
-    await m.answer(text, parse_mode="HTML", reply_markup=main_kb(lang, uid=m.from_user.id))
+    kb = main_kb(lang, uid=m.from_user.id)
+    # Приветственный баннер (видео/gif) - необязательный: если рядом со скриптом лежит
+    # welcome.mp4 или welcome.gif, показываем его с текстом в подписи вместо обычного
+    # сообщения. Файла может не быть - тогда просто отправляем текст как раньше, ничего
+    # не ломается. caption обрезан до 1024 символов - это жёсткий лимит Telegram для
+    # подписи к медиа (у обычных текстовых сообщений лимит намного больше).
+    banner = None
+    for name in ("welcome.mp4", "welcome.gif"):
+        path = os.path.join(BASE_DIR, name)
+        if os.path.exists(path):
+            banner = path
+            break
+    if banner:
+        await m.answer_animation(
+            FSInputFile(banner),
+            caption=text[:1024],
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
+    else:
+        await m.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
 @dp.message(Command("start"))
@@ -3325,7 +3472,10 @@ async def _build_presentation(m: Message, state: FSMContext):
     try:
 
         theme_name = data.get("theme_name") or pick_theme(data.get("topic", ""))[0]
-        colors = THEMES.get(theme_name, THEMES["default"])
+        # Если пользователь попросил "скопировать стиль" из своего файла - здесь лежит
+        # словарь с реально извлечёнными из .pptx цветами/шрифтом (см. extract_pptx_style),
+        # он приоритетнее любой из 14 встроенных тем.
+        colors = data.get("custom_colors") or THEMES.get(theme_name, THEMES["default"])
         angle = data.get("angle") or random.choice(ANGLES)
         cgl = content_gen_lang(data, lang)
 
@@ -6744,6 +6894,41 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
             pass
 
 
+async def build_presentation_with_copied_style(m: Message, state: FSMContext, pptx_path: str, instruction: str):
+    """"Скопируй мой стиль" - пользователь прислал .pptx и явно попросил сохранить
+    оформление, но обычно с НОВОЙ темой (не пересказать содержимое исходного файла,
+    а нарисовать про другое, тем же по духу оформлением). Поэтому, в отличие от
+    build_presentation_from_upload() (там режим "user" - переиспользуем ЧУЖОЙ текст),
+    здесь режим "ai" - контент придумывает модель по теме из instruction, а вот цвета
+    и шрифт берутся из реального файла через extract_pptx_style()."""
+    lang = user_lang(m.from_user.id)
+    uid = m.from_user.id
+    if not can_afford(uid, CREDIT_COSTS["presentation"]):
+        await m.answer(tr("msg_limit", lang))
+        try:
+            os.remove(pptx_path)
+        except Exception:
+            pass
+        return
+    custom_colors = extract_pptx_style(pptx_path)
+    try:
+        os.remove(pptx_path)
+    except Exception:
+        pass
+    # Тема для генерации текста - сама инструкция без служебных слов про "стиль/оформление",
+    # чтобы модель не пыталась писать слайд про копирование стиля, а раскрывала реальную тему.
+    topic = instruction
+    for kw in STYLE_COPY_KEYWORDS:
+        topic = re.sub(re.escape(kw), "", topic, flags=re.IGNORECASE)
+    topic = re.sub(r"\s{2,}", " ", topic).strip(" ,.-—") or instruction
+    await state.update_data(
+        mode="ai", user_text="", extra="", topic=topic,
+        slides=detect_slide_count(instruction), content_lang=lang,
+        custom_colors=custom_colors, photo_mode="ai",
+    )
+    await _build_presentation(m, state)
+
+
 async def build_presentation_from_upload(m: Message, state: FSMContext, source_text: str, instruction: str):
     lang = user_lang(m.from_user.id)
     uid = m.from_user.id
@@ -6846,12 +7031,30 @@ async def file_instruction_followup(m: Message, state: FSMContext):
     instruction = (m.text or "").strip()
     data = await state.get_data()
     source_text = data.get("upload_source_text")
+    pptx_path = data.get("upload_pptx_path")
     await state.clear()
-    if not instruction or not source_text:
+    if not instruction or (not source_text and not pptx_path):
         lang = user_lang(m.from_user.id)
         await m.answer(tr("msg_didnt_understand", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
         return
     lang = user_lang(m.from_user.id)
+    # "Скопируй мой стиль" могли попросить не сразу подписью к файлу, а только сейчас,
+    # в ответ на вопрос "что с ним сделать" - для этого сырые байты .pptx были
+    # сохранены заранее в document_upload(), а не удалены сразу после извлечения текста.
+    if pptx_path and wants_style_copy(instruction):
+        await m.answer(tr("msg_upload_processing", lang))
+        await build_presentation_with_copied_style(m, state, pptx_path, instruction)
+        return
+    if pptx_path:
+        # Стиль копировать не попросили - файл больше не нужен, подчищаем за собой.
+        try:
+            if os.path.exists(pptx_path):
+                os.remove(pptx_path)
+        except Exception:
+            pass
+    if not source_text:
+        await m.answer(tr("msg_didnt_understand", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
+        return
     await m.answer(tr("msg_upload_processing", lang))
     await dispatch_upload_generation(m, state, source_text, instruction)
 
@@ -6916,27 +7119,54 @@ async def document_upload(m: Message, state: FSMContext):
             except Exception:
                 pass
         return
+
+    # "Скопируй мой стиль" - отдельная ветка для .pptx с явной подписью об этом сразу
+    # при отправке файла: текст файла нам тут не нужен вовсе (контент по новой теме
+    # пишет модель), нужны только реальные цвета/шрифт, поэтому extract_text_from_upload
+    # даже не вызываем - сразу уходим в build_presentation_with_copied_style().
+    if ext == "pptx" and caption and wants_style_copy(caption):
+        await m.answer(tr("msg_upload_processing", lang))
+        await build_presentation_with_copied_style(m, state, local_path, caption)
+        return
+
     source_text, err = extract_text_from_upload(local_path, filename)
     if source_text and len(source_text) > MAX_SOURCE_TEXT_CHARS:
         source_text = source_text[:MAX_SOURCE_TEXT_CHARS]
-    try:
-        if os.path.exists(local_path):
-            os.remove(local_path)
-    except Exception:
-        pass
 
     if err:
+        try:
+            if os.path.exists(local_path):
+                os.remove(local_path)
+        except Exception:
+            pass
         await m.answer(tr(f"msg_upload_{err}", lang))
         return
 
     if caption:
+        try:
+            if os.path.exists(local_path):
+                os.remove(local_path)
+        except Exception:
+            pass
         await m.answer(tr("msg_upload_processing", lang))
         await dispatch_upload_generation(m, state, source_text, caption)
         return
 
     # Подписи нет - коротко описываем файл и ждём инструкцию следующим сообщением.
+    # Для .pptx сам файл пока НЕ удаляем: вдруг в ответе попросят "скопировать стиль" -
+    # тогда потребуются его реальные байты (цвета/шрифт темы), а не только извлечённый
+    # текст, который уже лежит в source_text (см. file_instruction_followup).
     description = await describe_upload_briefly(source_text, ext, lang)
-    await state.update_data(upload_source_text=source_text)
+    state_update = {"upload_source_text": source_text}
+    if ext == "pptx":
+        state_update["upload_pptx_path"] = local_path
+    else:
+        try:
+            if os.path.exists(local_path):
+                os.remove(local_path)
+        except Exception:
+            pass
+    await state.update_data(**state_update)
     await state.set_state(Form.waiting_file_instruction)
     await m.answer(tr("msg_upload_what_next", lang, description=description))
 
@@ -7046,6 +7276,21 @@ async def main():
     print("Бот запущен")
     print("REPLICATE TOKEN:", "YES" if REPLICATE_API_TOKEN else "NO")
     start_health_check_server()
+    # Текст на экране бота ДО нажатия Start (карточка профиля бота в Telegram) -
+    # выставляется один раз при каждом запуске, обёрнуто в try/except, потому что
+    # это не критичная для работы бота вещь: если Telegram сейчас недоступен для
+    # этого вызова, не должны падать и не запускать сам бот из-за этого.
+    try:
+        await bot.set_my_short_description(
+            "AlixDoc — презентации, Word, Excel и разбор фото задач."
+        )
+        await bot.set_my_description(
+            "AlixDoc собирает презентации, документы Word и таблицы Excel "
+            "и разбирает скрины тестов и фото тетради.\n\n"
+            "Нажмите Start, чтобы открыть меню."
+        )
+    except Exception as e:
+        print("Не удалось обновить описание бота:", e)
     await dp.start_polling(bot)
 
 
