@@ -7,6 +7,7 @@ import base64
 from urllib.parse import urlencode
 import re
 import time
+import threading
 import colorsys
 from collections import deque
 from datetime import datetime
@@ -30,6 +31,7 @@ from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
 import openpyxl
@@ -297,6 +299,7 @@ def _build_users_payload():
             "control_mode": u.get("control_mode") or "buttons",
             "control_mode_chosen": bool(u.get("control_mode_chosen")),
             "credits": int(u.get("credits") if u.get("credits") is not None else STARTING_CREDITS),
+            "chat_history": list(u.get("chat_history") or [])[-30:],
         }
     return payload
 
@@ -405,6 +408,17 @@ class Form(StatesGroup):
 MIN_TOPUP_RUB = 50  # минимальная сумма пополнения
 MAX_TOPUP_RUB = 9999  # верхняя граница разовой суммы пополнения
 CREDIT_TO_RUB_RATE = 1  # 1 рубль = 1 кредит - без пакетов, любая сумма от минимума
+
+
+async def send_no_credits_notice(m: Message, state: FSMContext, lang: str):
+    """Единая точка для "кредитов не хватает" по всему боту - вместо того чтобы просто
+    сказать об этом и отправить человека самого искать, где пополнить, сразу же
+    предлагаем это сделать (текст + тут же спрашиваем сумму пополнения/показываем
+    кнопку оплаты, в зависимости от того, подключён ли PAYMENT_PROVIDER_TOKEN -
+    см. show_topup_packages). Одно место вместо копирования одной и той же пары
+    строк в 18+ местах кода, где идёт проверка can_afford()."""
+    await m.answer(tr("msg_limit", lang))
+    await show_topup_packages(m, lang, state)
 
 
 async def show_topup_packages(m: Message, lang: str, state: FSMContext, amount_rub=None):
@@ -690,6 +704,15 @@ TR = {
         "es": "No pude reconocer el mensaje de voz 🙁 Inténtalo de nuevo o escríbelo.",
         "fr": "Impossible de reconnaître le message vocal 🙁 Réessayez ou tapez le texte.",
     },
+    "msg_voice_too_long": {
+        "ru": "Голосовое длиннее 2 минут — обрежь его или напиши текстом.",
+        "en": "Voice message is longer than 2 minutes — shorten it or type instead.",
+        "de": "Die Sprachnachricht ist länger als 2 Minuten — kürze sie oder tippe den Text.",
+        "ar": "الرسالة الصوتية أطول من دقيقتين — اختصرها أو اكتب نصاً.",
+        "zh": "语音超过2分钟——请缩短或改用文字。",
+        "es": "El audio dura más de 2 minutos — acórtalo o escríbelo.",
+        "fr": "Le message vocal dépasse 2 minutes — raccourcissez-le ou tapez le texte.",
+    },
     "msg_help": {
         "ru": "❓ <b>Помощь</b>\n\nЯ делаю презентации, документы Word и таблицы Excel по вашей теме или данным.\n\n1. Выберите раздел в меню\n2. Опишите тему своими словами (текстом или голосом)\n3. Получите готовый файл через 1-2 минуты\n\nЕсли что-то пошло не так — напишите сюда своими словами, что случилось, разберёмся.",
         "en": "❓ <b>Help</b>\n\nI create presentations, Word documents and Excel tables from your topic or data.\n\n1. Pick a section from the menu\n2. Describe the topic in your own words (text or voice)\n3. Get the finished file in 1-2 minutes\n\nIf something went wrong, just describe it here and we'll sort it out.",
@@ -761,6 +784,15 @@ TR = {
         "zh": "生成图片失败——请换个描述方式，或稍后再试。",
         "es": "No se pudo generar la imagen — intenta describirla de otra forma o vuelve a intentarlo más tarde.",
         "fr": "Impossible de générer l'image — essayez une autre description ou réessayez plus tard.",
+    },
+    "msg_request_accepted": {
+        "ru": "Принял, собираю — это может занять минуту-две ⏳",
+        "en": "Got it, working on it — this may take a minute or two ⏳",
+        "de": "Verstanden, ich erstelle es — das kann ein bis zwei Minuten dauern ⏳",
+        "ar": "تم الاستلام، جارٍ الإعداد - قد يستغرق هذا دقيقة أو دقيقتين ⏳",
+        "zh": "收到，正在生成——可能需要一两分钟 ⏳",
+        "es": "Recibido, preparándolo — puede tardar uno o dos minutos ⏳",
+        "fr": "C'est noté, je m'en occupe — cela peut prendre une à deux minutes ⏳",
     },
     "msg_upload_processing": {
         "ru": "Читаю файл и собираю документ по нему — это может занять минуту-две ⏳",
@@ -1339,7 +1371,53 @@ THEMES = {
     "minimal": {"bg": (250, 250, 250), "ink": (18, 18, 18), "mid": (70, 70, 70), "mute": (140, 140, 140), "line": (18, 18, 18),
                 "photo": "minimalist photography, clean composition, negative space, no text", "heading_font": "Calibri"},
     "default": {"bg": (248, 246, 241), "ink": (22, 22, 24), "mid": (70, 70, 74), "mute": (130, 128, 124), "line": (22, 22, 24),
-                "photo": "cinematic photorealistic photo, no text, no watermark", "heading_font": "Calibri"}
+                "photo": "cinematic photorealistic photo, no text, no watermark", "heading_font": "Calibri"},
+
+    # --- Расширение палитры: ещё 22 темы (было 14, теперь 36) ---
+    "ocean": {"bg": (240, 248, 250), "ink": (10, 40, 60), "mid": (40, 80, 100), "mute": (110, 140, 155), "line": (20, 120, 170),
+              "photo": "ocean and underwater photography, cinematic blue tones, no text, no watermark", "heading_font": "Trebuchet MS"},
+    "space": {"bg": (10, 8, 24), "ink": (235, 235, 250), "mid": (170, 170, 200), "mute": (110, 110, 140), "line": (140, 90, 230),
+              "photo": "space photography, galaxies, nebulae, cinematic, no text, no watermark", "heading_font": "Trebuchet MS"},
+    "medicine": {"bg": (246, 250, 249), "ink": (20, 40, 38), "mid": (60, 90, 86), "mute": (120, 145, 140), "line": (20, 150, 140),
+                 "photo": "clean medical and healthcare photography, bright, no text, no watermark", "heading_font": "Calibri"},
+    "finance": {"bg": (20, 22, 24), "ink": (245, 244, 240), "mid": (190, 188, 180), "mute": (120, 118, 112), "line": (200, 165, 80),
+                "photo": "corporate finance photography, skyscrapers, cinematic, no text, no watermark", "heading_font": "Georgia"},
+    "luxury": {"bg": (14, 12, 10), "ink": (248, 244, 235), "mid": (200, 190, 170), "mute": (130, 120, 105), "line": (212, 175, 90),
+               "photo": "luxury premium photography, elegant, cinematic lighting, no text, no watermark", "heading_font": "Georgia"},
+    "pastel": {"bg": (252, 246, 250), "ink": (60, 40, 60), "mid": (110, 90, 110), "mute": (160, 145, 160), "line": (210, 140, 190),
+               "photo": "soft pastel photography, dreamy, gentle light, no text, no watermark", "heading_font": "Georgia"},
+    "neon": {"bg": (8, 8, 10), "ink": (240, 255, 250), "mid": (150, 220, 210), "mute": (90, 140, 135), "line": (60, 240, 200),
+             "photo": "neon cyberpunk photography, night city lights, cinematic, no text, no watermark", "heading_font": "Trebuchet MS"},
+    "monochrome": {"bg": (255, 255, 255), "ink": (15, 15, 15), "mid": (70, 70, 70), "mute": (150, 150, 150), "line": (15, 15, 15),
+                   "photo": "black and white photography, high contrast, no text, no watermark", "heading_font": "Calibri"},
+    "autumn": {"bg": (250, 244, 235), "ink": (50, 30, 15), "mid": (100, 65, 35), "mute": (150, 120, 90), "line": (190, 90, 30),
+               "photo": "autumn photography, fall foliage, warm light, cinematic, no text, no watermark", "heading_font": "Georgia"},
+    "winter": {"bg": (245, 248, 252), "ink": (20, 30, 45), "mid": (60, 80, 100), "mute": (130, 145, 160), "line": (70, 130, 190),
+               "photo": "winter photography, snow, ice, crisp cold light, no text, no watermark", "heading_font": "Trebuchet MS"},
+    "spring": {"bg": (248, 250, 240), "ink": (30, 45, 20), "mid": (70, 95, 50), "mute": (130, 150, 110), "line": (120, 175, 60),
+               "photo": "spring photography, blossoms, fresh greenery, bright, no text, no watermark", "heading_font": "Trebuchet MS"},
+    "coffee": {"bg": (247, 240, 230), "ink": (45, 30, 20), "mid": (90, 65, 48), "mute": (140, 115, 95), "line": (110, 70, 40),
+               "photo": "coffee and cafe photography, warm cozy light, no text, no watermark", "heading_font": "Georgia"},
+    "wine": {"bg": (24, 10, 14), "ink": (245, 235, 235), "mid": (200, 170, 170), "mute": (130, 105, 105), "line": (150, 30, 50),
+             "photo": "wine and vineyard photography, moody rich tones, cinematic, no text, no watermark", "heading_font": "Georgia"},
+    "forest_dark": {"bg": (12, 20, 16), "ink": (235, 245, 235), "mid": (170, 195, 170), "mute": (105, 130, 105), "line": (60, 150, 90),
+                    "photo": "dark forest photography, deep woods, moody light, cinematic, no text, no watermark", "heading_font": "Georgia"},
+    "sunset": {"bg": (252, 238, 225), "ink": (60, 30, 25), "mid": (120, 70, 55), "mute": (165, 120, 100), "line": (230, 110, 60),
+               "photo": "sunset and golden hour photography, warm sky, cinematic, no text, no watermark", "heading_font": "Georgia"},
+    "arctic": {"bg": (248, 250, 252), "ink": (25, 35, 45), "mid": (70, 90, 105), "mute": (140, 155, 165), "line": (50, 150, 200),
+               "photo": "arctic and glacier photography, ice, cold pristine light, no text, no watermark", "heading_font": "Trebuchet MS"},
+    "urban": {"bg": (24, 24, 26), "ink": (240, 240, 242), "mid": (180, 180, 184), "mute": (115, 115, 120), "line": (230, 80, 50),
+              "photo": "urban city photography, streets, concrete architecture, cinematic, no text, no watermark", "heading_font": "Trebuchet MS"},
+    "vintage": {"bg": (244, 235, 218), "ink": (55, 42, 28), "mid": (100, 80, 58), "mute": (150, 130, 105), "line": (140, 100, 55),
+                "photo": "vintage sepia photography, old paper texture feel, nostalgic, no text, no watermark", "heading_font": "Georgia"},
+    "cyberpunk": {"bg": (12, 6, 20), "ink": (240, 235, 250), "mid": (200, 150, 220), "mute": (120, 95, 140), "line": (220, 40, 200),
+                  "photo": "cyberpunk photography, neon magenta and cyan lights, night, cinematic, no text, no watermark", "heading_font": "Trebuchet MS"},
+    "floral": {"bg": (250, 246, 244), "ink": (45, 35, 38), "mid": (95, 75, 80), "mute": (150, 130, 132), "line": (200, 110, 130),
+               "photo": "floral photography, flowers, soft natural light, no text, no watermark", "heading_font": "Georgia"},
+    "royal": {"bg": (16, 12, 28), "ink": (245, 240, 250), "mid": (195, 180, 210), "mute": (125, 112, 140), "line": (190, 155, 60),
+              "photo": "royal palace and regal photography, opulent, cinematic, no text, no watermark", "heading_font": "Georgia"},
+    "desert": {"bg": (248, 238, 220), "ink": (60, 42, 25), "mid": (115, 85, 55), "mute": (160, 135, 105), "line": (200, 120, 50),
+               "photo": "desert photography, dunes, warm sand tones, cinematic, no text, no watermark", "heading_font": "Georgia"},
 }
 
 THEME_LABELS_I18N = {
@@ -1357,6 +1435,28 @@ THEME_LABELS_I18N = {
     "eco": {"ru": "Экология", "en": "Ecology", "de": "Ökologie", "ar": "البيئة", "zh": "生态", "es": "Ecología", "fr": "Écologie"},
     "minimal": {"ru": "Минимализм", "en": "Minimalism", "de": "Minimalismus", "ar": "البساطة", "zh": "极简", "es": "Minimalismo", "fr": "Minimalisme"},
     "default": {"ru": "Универсальный", "en": "Universal", "de": "Universell", "ar": "عام", "zh": "通用", "es": "Universal", "fr": "Universel"},
+    "ocean": {"ru": "Океан", "en": "Ocean", "de": "Ozean", "ar": "المحيط", "zh": "海洋", "es": "Océano", "fr": "Océan"},
+    "space": {"ru": "Космос", "en": "Space", "de": "Weltraum", "ar": "الفضاء", "zh": "太空", "es": "Espacio", "fr": "Espace"},
+    "medicine": {"ru": "Медицина", "en": "Medicine", "de": "Medizin", "ar": "الطب", "zh": "医学", "es": "Medicina", "fr": "Médecine"},
+    "finance": {"ru": "Финансы", "en": "Finance", "de": "Finanzen", "ar": "المالية", "zh": "金融", "es": "Finanzas", "fr": "Finance"},
+    "luxury": {"ru": "Люкс", "en": "Luxury", "de": "Luxus", "ar": "فاخر", "zh": "奢华", "es": "Lujo", "fr": "Luxe"},
+    "pastel": {"ru": "Пастель", "en": "Pastel", "de": "Pastell", "ar": "باستيل", "zh": "粉彩", "es": "Pastel", "fr": "Pastel"},
+    "neon": {"ru": "Неон", "en": "Neon", "de": "Neon", "ar": "نيون", "zh": "霓虹", "es": "Neón", "fr": "Néon"},
+    "monochrome": {"ru": "Монохром", "en": "Monochrome", "de": "Monochrom", "ar": "أحادي اللون", "zh": "单色", "es": "Monocromo", "fr": "Monochrome"},
+    "autumn": {"ru": "Осень", "en": "Autumn", "de": "Herbst", "ar": "الخريف", "zh": "秋季", "es": "Otoño", "fr": "Automne"},
+    "winter": {"ru": "Зима", "en": "Winter", "de": "Winter", "ar": "الشتاء", "zh": "冬季", "es": "Invierno", "fr": "Hiver"},
+    "spring": {"ru": "Весна", "en": "Spring", "de": "Frühling", "ar": "الربيع", "zh": "春季", "es": "Primavera", "fr": "Printemps"},
+    "coffee": {"ru": "Кофе", "en": "Coffee", "de": "Kaffee", "ar": "القهوة", "zh": "咖啡", "es": "Café", "fr": "Café"},
+    "wine": {"ru": "Вино", "en": "Wine", "de": "Wein", "ar": "النبيذ", "zh": "红酒", "es": "Vino", "fr": "Vin"},
+    "forest_dark": {"ru": "Тёмный лес", "en": "Dark Forest", "de": "Dunkler Wald", "ar": "غابة داكنة", "zh": "幽暗森林", "es": "Bosque oscuro", "fr": "Forêt sombre"},
+    "sunset": {"ru": "Закат", "en": "Sunset", "de": "Sonnenuntergang", "ar": "الغروب", "zh": "日落", "es": "Atardecer", "fr": "Coucher de soleil"},
+    "arctic": {"ru": "Арктика", "en": "Arctic", "de": "Arktis", "ar": "القطب الشمالي", "zh": "北极", "es": "Ártico", "fr": "Arctique"},
+    "urban": {"ru": "Урбан", "en": "Urban", "de": "Urban", "ar": "حضري", "zh": "都市", "es": "Urbano", "fr": "Urbain"},
+    "vintage": {"ru": "Винтаж", "en": "Vintage", "de": "Vintage", "ar": "عتيق", "zh": "复古", "es": "Vintage", "fr": "Vintage"},
+    "cyberpunk": {"ru": "Киберпанк", "en": "Cyberpunk", "de": "Cyberpunk", "ar": "سايبربانك", "zh": "赛博朋克", "es": "Cyberpunk", "fr": "Cyberpunk"},
+    "floral": {"ru": "Цветы", "en": "Floral", "de": "Blumig", "ar": "زهري", "zh": "花卉", "es": "Floral", "fr": "Floral"},
+    "royal": {"ru": "Королевский", "en": "Royal", "de": "Königlich", "ar": "ملكي", "zh": "皇家", "es": "Real", "fr": "Royal"},
+    "desert": {"ru": "Пустыня", "en": "Desert", "de": "Wüste", "ar": "الصحراء", "zh": "沙漠", "es": "Desierto", "fr": "Désert"},
 }
 THEME_LABELS = {k: v["ru"] for k, v in THEME_LABELS_I18N.items()}  # обратная совместимость
 
@@ -1377,12 +1477,23 @@ def pick_theme(topic: str):
         ("school", ["школ", "универ", "урок", "студент", "доклад", "класс"]),
         ("fashion", ["мод", "стиль", "бренд", "одежд"]),
         ("history", ["истори", "войн", "древн", "импери", "век"]),
-        ("science", ["наук", "физик", "хими", "космос", "медицин", "биологи"]),
+        ("space", ["космос", "вселенн", "галактик", "планет", "астроном"]),
+        ("medicine", ["медицин", "больниц", "врач", "лечен", "пациент"]),
+        ("science", ["наук", "физик", "хими", "биологи"]),
         ("sport", ["спорт", "футбол", "тренир", "олимп", "матч"]),
         ("travel", ["путешеств", "город", "страна", "туризм", "поездк"]),
         ("food", ["еда", "кухн", "рецепт", "ресторан", "блюд"]),
         ("art", ["искусств", "живопис", "музей", "театр", "музык"]),
         ("eco", ["эколог", "климат", "мусор", "переработ"]),
+        ("finance", ["банк", "биржа", "кредит", "акци"]),
+        ("wine", ["вино", "виноград", "винодел"]),
+        ("coffee", ["кофе", "кофейн"]),
+        ("desert", ["пустын", "бархан"]),
+        ("royal", ["короли", "монарх", "дворец", "царск"]),
+        ("arctic", ["арктик", "ледник", "полюс"]),
+        ("vintage", ["винтаж", "ретро", "старин"]),
+        ("cyberpunk", ["киберпанк", "антиутопи"]),
+        ("luxury", ["роскош", "люкс", "элитн"]),
         ("minimal", ["минимал", "чисто", "просто"]),
     ]
     for name, keys in rules:
@@ -1507,6 +1618,73 @@ def wants_style_copy(text: str) -> bool:
     return any(kw in t for kw in STYLE_COPY_KEYWORDS)
 
 
+# --- Угадывание конкретного вида Word/Excel-документа по ключевым словам во
+# свободной фразе ("сделай доклад про...", "нужна смета на...") - без этого
+# свободный чат мог запустить только презентацию по тексту (там уже была своя
+# логика извлечения слайдов/стиля/фото), а Word и Excel просто отправляли
+# отговорку "открой меню" вместо того, чтобы реально собрать документ.
+WORD_KIND_KEYWORDS = [
+    (("резюме", "cv", "resume"), "resume"),
+    (("договор аренды", "договор найма"), "rent"),
+    (("трудовой договор",), "employment"),
+    (("договор поставки",), "supply"),
+    (("договор дарения",), "gift"),
+    (("брачный договор",), "marriage_contract"),
+    (("договор оказания услуг", "договор услуг"), "services"),
+    (("расписка", "договор займа"), "loan"),
+    (("доверенность",), "proxy"),
+    (("акт приема-передачи", "акт приёма-передачи", "акт приема передачи"), "act"),
+    (("досудебная претензия", "претензия"), "claim"),
+    (("согласие на выезд",), "consent"),
+    (("исковое заявление", "иск в суд"), "lawsuit"),
+    (("коммерческое предложение",), "offer"),
+    (("заявление",), "statement"),
+    (("курсовая",), "coursework"),
+    (("реферат",), "referat"),
+    (("эссе",), "essay"),
+    (("конспект",), "notes"),
+    (("доклад",), "report"),
+]
+
+# Договор купли-продажи - отдельная проверка с двумя условиями сразу (контекст сделки
+# И предмет), а не просто список ключевых слов: "машина"/"квартира" сами по себе
+# слишком общие и встречаются в рефератах/эссе на посторонние темы, поэтому одного
+# совпадения недостаточно - должен быть ещё явный признак купли-продажи.
+DKP_CONTEXT_KEYWORDS = ("купли-продажи", "купли продажи", "продаж", "куплю", "продаю", "покупк")
+DKP_CAR_SUBJECT_KEYWORDS = ("машин", "автомобил", "авто")
+DKP_REALTY_SUBJECT_KEYWORDS = ("квартир", "недвиж", "участ", "дом")
+
+EXCEL_KIND_KEYWORDS = [
+    (("смета проекта", "бизнес-план", "бизнес план"), "project_budget"),
+    (("смета",), "expense_estimate"),
+    (("семейный бюджет", "бюджет семь"), "family_budget"),
+    (("прайс-лист", "прайс лист", "прайслист"), "price_list"),
+    (("финансовая модель", "финмодель", "стартап"), "startup_model"),
+]
+
+
+def guess_word_kind(text: str) -> str:
+    t = (text or "").lower()
+    if any(kw in t for kw in DKP_CONTEXT_KEYWORDS):
+        if any(kw in t for kw in DKP_CAR_SUBJECT_KEYWORDS):
+            return "dkp_car"
+        if any(kw in t for kw in DKP_REALTY_SUBJECT_KEYWORDS):
+            return "dkp_realty"
+        return "dkp"
+    for keywords, kind in WORD_KIND_KEYWORDS:
+        if any(kw in t for kw in keywords):
+            return kind
+    return "doc"
+
+
+def guess_excel_kind(text: str) -> str:
+    t = (text or "").lower()
+    for keywords, kind in EXCEL_KIND_KEYWORDS:
+        if any(kw in t for kw in keywords):
+            return kind
+    return "calc_table"
+
+
 def get_user(uid):
     if uid not in users_db:
         users_db[uid] = {"name": "", "plan": "premium", "generations": 0, "history": [], "busy": False,
@@ -1609,7 +1787,9 @@ class VoiceToTextMiddleware(BaseMiddleware):
             except Exception:
                 pass
             if not transcript:
-                await event.answer(tr("msg_voice_failed", lang))
+                dur = getattr(event.voice, "duration", 0) or 0
+                key = "msg_voice_too_long" if dur > MAX_VOICE_SECONDS else "msg_voice_failed"
+                await event.answer(tr(key, lang))
                 return
             event = event.model_copy(update={"text": transcript})
         return await handler(event, data)
@@ -1705,36 +1885,44 @@ def _get_photo_lock(uid) -> asyncio.Lock:
     return lock
 
 
+_jobs_lock = threading.Lock()
+
+
 def start_job(uid):
     """Помечает пользователя как занятого дорогой генерацией и проверяет
     защиту от флуда/DDoS (rate-limit + глобальный потолок).
-    Возвращает (True, None) при успехе, иначе (False, "текст для пользователя")."""
+    Возвращает (True, None) при успехе, иначе (False, "текст для пользователя").
+    Обёрнуто в _jobs_lock - сейчас в коде нет отдельных OS-потоков, которые могли бы
+    столкнуться здесь (только asyncio, где обычные def-функции и так атомарны
+    относительно других корутин), но лок дешёвый и подстраховывает на случай,
+    если в будущем сюда добавится вызов из ThreadPoolExecutor/run_in_executor."""
     global _active_generations
     u = get_user(uid)
 
-    if u.get("busy"):
-        return False, "Уже собираю предыдущую версию, подожди немного 🙂"
+    with _jobs_lock:
+        if u.get("busy"):
+            return False, "Уже собираю предыдущую версию, подожди немного 🙂"
 
-    now = time.monotonic()
-    last = _last_request_time.get(uid, 0)
-    if now - last < RATE_LIMIT_SECONDS:
-        wait = int(RATE_LIMIT_SECONDS - (now - last)) + 1
-        return False, f"Слишком часто 🙂 Подожди ещё {wait} сек. и попробуй снова."
+        now = time.monotonic()
+        last = _last_request_time.get(uid, 0)
+        if now - last < RATE_LIMIT_SECONDS:
+            wait = int(RATE_LIMIT_SECONDS - (now - last)) + 1
+            return False, f"Слишком часто 🙂 Подожди ещё {wait} сек. и попробуй снова."
 
-    if _active_generations >= MAX_CONCURRENT_GENERATIONS:
-        return False, "Сейчас бот перегружен — очень много запросов одновременно. Попробуй, пожалуйста, через минуту 🙏"
+        if _active_generations >= MAX_CONCURRENT_GENERATIONS:
+            return False, "Сейчас бот перегружен — очень много запросов одновременно. Попробуй, пожалуйста, через минуту 🙏"
 
-    u["busy"] = True
-    u["_counted"] = True
-    # Полный 30-секундный лимит взводится только при УСПЕХЕ (note_success ниже
-    # перезапишет его временем реального завершения) - но чтобы неудачные попытки
-    # не превращались в лазейку для накрутки запросов к платному xAI API без всякой
-    # паузы (упавшая генерация мгновенно освобождает busy и разрешает повтор),
-    # здесь сразу взводится короткая пауза FAIL_COOLDOWN_SECONDS. Если сборка
-    # успеет завершиться успешно раньше - note_success её перезапишет на полную.
-    _last_request_time[uid] = now - (RATE_LIMIT_SECONDS - FAIL_COOLDOWN_SECONDS)
-    _active_generations += 1
-    _generation_timestamps.append(now)
+        u["busy"] = True
+        u["_counted"] = True
+        # Полный 30-секундный лимит взводится только при УСПЕХЕ (note_success ниже
+        # перезапишет его временем реального завершения) - но чтобы неудачные попытки
+        # не превращались в лазейку для накрутки запросов к платному xAI API без всякой
+        # паузы (упавшая генерация мгновенно освобождает busy и разрешает повтор),
+        # здесь сразу взводится короткая пауза FAIL_COOLDOWN_SECONDS. Если сборка
+        # успеет завершиться успешно раньше - note_success её перезапишет на полную.
+        _last_request_time[uid] = now - (RATE_LIMIT_SECONDS - FAIL_COOLDOWN_SECONDS)
+        _active_generations += 1
+        _generation_timestamps.append(now)
     _check_hourly_load()
     return True, None
 
@@ -1746,10 +1934,11 @@ def finish_job(uid):
     дважды за одну и ту же генерацию."""
     global _active_generations
     u = get_user(uid)
-    if u.get("_counted"):
-        _active_generations = max(0, _active_generations - 1)
-        u["_counted"] = False
-    u["busy"] = False
+    with _jobs_lock:
+        if u.get("_counted"):
+            _active_generations = max(0, _active_generations - 1)
+            u["_counted"] = False
+        u["busy"] = False
 
 
 def note_success(uid):
@@ -1996,12 +2185,12 @@ async def analyze_user_image(path: str, caption: str, lang: str) -> str:
     return await ask_grok_vision(path, VISION_SOLVE_PROMPT + extra + lang_bit)
 
 
-async def handle_vision_upload(m: Message, local_path: str, caption: str):
+async def handle_vision_upload(m: Message, state: FSMContext, local_path: str, caption: str):
     """Общий путь для фото из галереи и картинки, присланной как документ."""
     lang = user_lang(m.from_user.id)
     uid = m.from_user.id
     if not can_afford(uid, CREDIT_COSTS["vision"]):
-        await m.answer(tr("msg_limit", lang))
+        await send_no_credits_notice(m, state, lang)
         return
     ok, reason = start_job(uid)
     if not ok:
@@ -2614,10 +2803,51 @@ def cover(src, dest, w, h):
 
 
 def _pptx_tint(color_tuple, factor=0.9):
-    """Осветляет RGB-цвет темы к белому (0..1) - для мягкой заливки карточек в раскладке
-    'cards', аналог _xl_tint для Excel."""
+    """Осветляет RGB-цвет темы к белому (0..1) - используется только там, где заливка
+    заведомо должна быть светлой (не зависит от темы)."""
     r, g, b = color_tuple
     return (int(r + (255 - r) * factor), int(g + (255 - g) * factor), int(b + (255 - b) * factor))
+
+
+def _blend_toward(color_tuple, target_tuple, factor):
+    """Смешивает цвет с любым целевым цветом (0=без изменений, 1=полностью target) -
+    для заливки карточек используем колор темы, смешанный с ЕЁ ЖЕ фоном (не всегда
+    к белому, как _pptx_tint) - так карточка остаётся мягкой и читаемой что на
+    светлой, что на тёмной теме, вместо того чтобы на тёмной теме внезапно стать
+    светлым пятном."""
+    return tuple(int(color_tuple[i] + (target_tuple[i] - color_tuple[i]) * factor) for i in range(3))
+
+
+def card_fill_for(colors, factor=0.88):
+    """Заливка карточки в цвете темы - акцентный цвет, смешанный с фоном темы, а не
+    с белым - одинаково хорошо смотрится и на светлых, и на тёмных темах."""
+    return _blend_toward(colors["line"], colors["bg"], factor)
+
+
+def invert_colors(colors):
+    """Контрастная инверсия палитры - bg и ink меняются местами, mid/mute пересчитываются
+    от новой пары, акцентный цвет (line), фото-промпт и шрифт остаются прежними, чтобы
+    презентация не теряла характер темы. Используется в sandwich_colors() ниже - для
+    чередования тёмных и светлых слайдов внутри одной презентации."""
+    new_bg, new_ink = colors["ink"], colors["bg"]
+    inverted = dict(colors)
+    inverted["bg"] = new_bg
+    inverted["ink"] = new_ink
+    inverted["mid"] = _blend_toward(new_ink, new_bg, 0.35)
+    inverted["mute"] = _blend_toward(new_ink, new_bg, 0.58)
+    return inverted
+
+
+def sandwich_colors(colors):
+    """Тёмный и светлый варианты палитры темы (dark_colors, light_colors) - для
+    "сэндвич"-структуры презентации: тёмная обложка и заключение, светлая середина
+    (или наоборот, если сама тема изначально тёмная) - раньше вся презентация красилась
+    одним и тем же вариантом от начала до конца, без контрастного ритма, к которому
+    привыкли премиальные шаблоны. Если тема уже тёмная (bg тёмный) - она и есть
+    "тёмный" вариант, светлый строится инверсией, и наоборот."""
+    if _relative_luminance(colors["bg"]) > 0.5:
+        return invert_colors(colors), colors
+    return colors, invert_colors(colors)
 
 
 def slide_background(slide, colors):
@@ -2644,11 +2874,47 @@ def slide_background(slide, colors):
     return shape
 
 
-def rect(slide, l, t, w, h, color):
-    s = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(l), Inches(t), Inches(w), Inches(h))
+def rect(slide, l, t, w, h, color, rounded=False, radius=0.08):
+    """Прямоугольник (или скруглённая карточка, rounded=True) - скругление сильно
+    приближает вид карточек к референсу (там нет острых углов вообще), radius - доля
+    от меньшей стороны, которую занимает скругление (0.08 - мягкое, не "пилюля")."""
+    shape_type = MSO_SHAPE.ROUNDED_RECTANGLE if rounded else MSO_SHAPE.RECTANGLE
+    s = slide.shapes.add_shape(shape_type, Inches(l), Inches(t), Inches(w), Inches(h))
+    if rounded:
+        try:
+            s.adjustments[0] = radius
+        except Exception:
+            pass
     s.fill.solid()
     s.fill.fore_color.rgb = RGBColor(*color)
     s.line.fill.background()
+    return s
+
+
+def slide_paragraphs(content: str, limit: int = 2):
+    """Режет текст слайда на смысловые блоки для макетов, где несколько абзацев кладутся
+    в отдельные визуальные блоки (карточки/шаги/бейджи, а также фото+текст, где content
+    иногда приходит с одиночными переводами строк вместо пустой строки между абзацами).
+    Сначала пробуем разбить по \\n\\n - если получилось меньше limit блоков, пробуем
+    одиночный \\n (модель не всегда ставит именно двойной перевод строки)."""
+    text = (content or "").strip()
+    blocks = [x.strip() for x in text.split("\n\n") if x.strip()]
+    if len(blocks) < 2:
+        blocks = [x.strip() for x in text.split("\n") if x.strip()]
+    return blocks[:limit] or [""]
+
+
+def fill_slide_text(tf, blocks, size=16, color=(70, 70, 74), space_after=16):
+    """Заполняет текстовый блок несколькими абзацами подряд (каждый - свой <a:p>) -
+    общий код для макетов 0/3/6/7/8, где раньше один и тот же цикл дублировался
+    в каждой ветке почти дословно."""
+    for i, b in enumerate(blocks):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.text = b
+        p.font.size = Pt(size)
+        p.font.color.rgb = RGBColor(*color)
+        p.font.name = "Calibri"
+        p.space_after = Pt(space_after)
 
 
 def txt(slide, l, t, w, h, text, size, color, bold=False, font_name="Calibri"):
@@ -2685,6 +2951,7 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
         "bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
         "line": XL_CHART_TYPE.LINE_MARKERS,
         "pie": XL_CHART_TYPE.PIE,
+        "donut": XL_CHART_TYPE.DOUGHNUT,
     }.get(ctype, XL_CHART_TYPE.COLUMN_CLUSTERED)
 
     graphic_frame = slide.shapes.add_chart(xl_type, Inches(l), Inches(t), Inches(w), Inches(h), cd)
@@ -2707,7 +2974,7 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
     else:
         chart.has_title = False
 
-    is_pie = ctype == "pie"
+    is_pie = ctype in ("pie", "donut")
     multi_series = len(series_list) > 1
 
     if is_pie or multi_series:
@@ -2769,7 +3036,7 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
 # изменился, если сама ссылка выглядит одинаково. Добавляя это число в query-параметры,
 # каждая новая версия HTML получает технически другой адрес, и кэш Telegram больше не
 # может ошибочно посчитать её той же самой страницей.
-MINIAPP_VERSION = 14
+MINIAPP_VERSION = 15
 
 
 def build_miniapp_url(u):
@@ -3370,7 +3637,7 @@ async def to_main_menu(m: Message, state: FSMContext):
 async def start_pres(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     if not can_afford(m.from_user.id, presentation_cost(PRESENTATION_MIN_SLIDES)):
-        await m.answer(tr("msg_limit", lang))
+        await send_no_credits_notice(m, state, lang)
         return
     await m.answer(tr("msg_how_build_pres", lang), reply_markup=mode_kb(lang=lang))
     await state.set_state(Form.waiting_mode)
@@ -3480,6 +3747,9 @@ async def process_slides(m: Message, state: FSMContext):
             slides = 12
     angle = random.choice(ANGLES)
     await state.update_data(slides=slides, angle=angle)
+    if not can_afford(m.from_user.id, presentation_cost(slides)):
+        await send_no_credits_notice(m, state, lang)
+        return
     await m.answer(tr("msg_building_sample", lang), reply_markup=cancel_kb(lang))
     lang_instr = grok_lang_instruction(content_gen_lang(data, lang) or "ru")
 
@@ -3713,6 +3983,12 @@ async def _build_presentation(m: Message, state: FSMContext):
     data = await state.get_data()
     uid = m.from_user.id
     u = get_user(uid)
+    # Баланс мог измениться с момента черновика (потрачен в другом месте) - перепроверяем
+    # перед тем, как заводить дорогую фоновую задачу (start_job ниже).
+    planned_slides = data.get("slides") or PRESENTATION_MIN_SLIDES
+    if not can_afford(uid, presentation_cost(planned_slides)):
+        await send_no_credits_notice(m, state, lang)
+        return
     ok, reason = start_job(uid)
     if not ok:
         await bot.send_message(uid, reason)
@@ -3725,6 +4001,10 @@ async def _build_presentation(m: Message, state: FSMContext):
         # словарь с реально извлечёнными из .pptx цветами/шрифтом (см. extract_pptx_style),
         # он приоритетнее любой из 14 встроенных тем.
         colors = data.get("custom_colors") or THEMES.get(theme_name, THEMES["default"])
+        # "Сэндвич"-контраст: обложка и заключительный слайд - тёмный вариант палитры,
+        # основная часть - светлый (или наоборот, если сама тема изначально тёмная) -
+        # раньше вся презентация красилась одним и тем же вариантом от начала до конца.
+        dark_colors, light_colors = sandwich_colors(colors)
         angle = data.get("angle") or random.choice(ANGLES)
         cgl = content_gen_lang(data, lang)
 
@@ -3803,23 +4083,28 @@ async def _build_presentation(m: Message, state: FSMContext):
         prs.slide_height = Inches(7.5)
         slides_data = content.get("slides", [])
         n = len(slides_data)
+        # ИИ мог вернуть больше слайдов, чем изначально планировали - пересчитываем
+        # стоимость по факту и проверяем баланс ещё раз, до того как начнём тратить
+        # на генерацию фото (самую дорогую часть) для слайдов, которые не по карману.
+        if not can_afford(uid, presentation_cost(n)):
+            await send_no_credits_notice(m, state, lang)
+            return
 
-        # 7 раскладок (3 базовых + 3 зеркальных фото слева/справа/сверху/снизу/крупно/мелко,
-        # плюс "карточки" - две текстовые плашки рядом без фото, для слайдов с двумя явными
-        # смысловыми блоками в content) - выбираются случайно без повтора одной и той же
-        # раскладки два слайда подряд, чтобы презентация не выглядела как один и тот же шаблон,
-        # повторённый N раз, и чтобы разные презентации не были визуально неотличимы друг от друга.
-        LAYOUT_COUNT = 7
+        # 9 раскладок (3 базовых + 3 зеркальных фото слева/справа/сверху/снизу/крупно/мелко,
+        # "карточки" (две плашки рядом), "нумерованные шаги" (бейдж-номер + коннектор,
+        # вертикальный список) и "иконки-бейджи" (мелкие цветные квадраты + текст в столбик) -
+        # выбираются случайно без повтора одной и той же раскладки два слайда подряд, чтобы
+        # презентация не выглядела как один и тот же шаблон, повторённый N раз.
+        LAYOUT_COUNT = 9
         layout_sequence = []
         prev_layout = None
         for i in range(n):
             pool = [l for l in range(LAYOUT_COUNT) if l != prev_layout]
             content_blocks_i = [x.strip() for x in (slides_data[i].get("content") or "").split("\n\n") if x.strip()]
             if len(content_blocks_i) < 2:
-                # "Карточкам" нужно ровно 2 смысловых блока - если модель не разбила
-                # content на два абзаца, одна из карточек останется пустой и будет выглядеть
-                # криво, поэтому для таких слайдов этот вариант просто не предлагаем.
-                pool = [l for l in pool if l != 6]
+                # "Карточкам"/"шагам"/"бейджам" нужно минимум 2 смысловых блока - если
+                # модель не разбила content на абзацы, часть плашек останется пустой.
+                pool = [l for l in pool if l not in (6, 7, 8)]
             next_layout = random.choice(pool)
             layout_sequence.append(next_layout)
             prev_layout = next_layout
@@ -3910,145 +4195,133 @@ async def _build_presentation(m: Message, state: FSMContext):
                 images.append(None)
 
         slide = prs.slides.add_slide(prs.slide_layouts[6])
-        slide_background(slide, colors)
+        slide_background(slide, dark_colors)
         if cover_panel_img:
             photo_x = 0 if cover_split_side == "left" else 6.933
             panel_x = 6.933 if cover_split_side == "left" else 0
             slide.shapes.add_picture(cover_panel_img, Inches(photo_x), Inches(0), width=Inches(6.4), height=Inches(7.5))
-            rect(slide, panel_x, 0, 6.4, 7.5, colors["bg"])
-            txt(slide, panel_x + 0.5, 2.9, 5.4, 2.0, content.get("title", "Презентация"), 32, colors["ink"], True, font_name=colors["heading_font"])
-            rect(slide, panel_x + 0.5, 4.9, 0.85, 0.05, colors["line"])
-            txt(slide, panel_x + 0.5, 6.6, 5.4, 0.4, "01  /  введение", 13, colors["mute"])
+            rect(slide, panel_x, 0, 6.4, 7.5, dark_colors["bg"])
+            txt(slide, panel_x + 0.5, 2.6, 5.4, 2.4, content.get("title", "Презентация"), 40, dark_colors["ink"], True, font_name=dark_colors["heading_font"])
+            rect(slide, panel_x + 0.5, 4.9, 0.85, 0.05, dark_colors["line"])
+            txt(slide, panel_x + 0.5, 6.6, 5.4, 0.4, f"01  /  {n + 1:02}", 13, dark_colors["mute"])
         else:
             if cover_img:
                 slide.shapes.add_picture(cover_img, Inches(0), Inches(0), width=Inches(13.333), height=Inches(7.5))
-                rect(slide, 0, 4.7, 13.333, 2.8, colors["bg"])
-            txt(slide, 0.7, 5.0, 12, 1.5, content.get("title", "Презентация"), 40, colors["ink"], True, font_name=colors["heading_font"])
-            txt(slide, 0.7, 6.6, 12, 0.4, "01  /  введение", 13, colors["mute"])
+                rect(slide, 0, 4.55, 13.333, 2.95, dark_colors["bg"])
+            txt(slide, 0.7, 4.85, 12, 1.75, content.get("title", "Презентация"), 48, dark_colors["ink"], True, font_name=dark_colors["heading_font"])
+            txt(slide, 0.7, 6.6, 12, 0.4, f"01  /  {n + 1:02}", 13, dark_colors["mute"])
 
         for idx, s in enumerate(slides_data):
             slide = prs.slides.add_slide(prs.slide_layouts[6])
-            slide_background(slide, colors)
+            # Заключительный слайд - тёмный (см. sandwich_colors выше), остальные - светлые.
+            sc = dark_colors if idx == n - 1 else light_colors
+            slide_background(slide, sc)
             layout = layout_sequence[idx]
             img = images[idx] if idx < len(images) else None
             chart_data = charts[idx] if idx < len(charts) else None
             if layout == 0:
                 if chart_data:
-                    add_chart(slide, 0.5, 0.6, 5.4, 6.3, chart_data, colors)
+                    add_chart(slide, 0.5, 0.6, 5.4, 6.3, chart_data, sc)
                 elif img:
                     slide.shapes.add_picture(img[1], Inches(0), Inches(0), width=Inches(6.4), height=Inches(7.5))
-                txt(slide, 7.05, 1.5, 5.5, 1.6, s.get("title", ""), 30, colors["ink"], True, font_name=colors["heading_font"])
-                rect(slide, 7.05, 3.25, 0.85, 0.05, colors["line"])
+                txt(slide, 7.05, 1.5, 5.5, 1.6, s.get("title", ""), 30, sc["ink"], True, font_name=sc["heading_font"])
+                rect(slide, 7.05, 3.25, 0.85, 0.05, sc["line"])
                 box = slide.shapes.add_textbox(Inches(7.05), Inches(3.5), Inches(5.5), Inches(3.2))
                 tf = box.text_frame
                 tf.word_wrap = True
-                blocks = [x.strip() for x in (s.get("content") or "").split("\n") if x.strip()][:2]
-                for i, b in enumerate(blocks or [""]):
-                    p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-                    p.text = b
-                    p.font.size = Pt(16)
-                    p.font.color.rgb = RGBColor(*colors["mid"])
-                    p.font.name = "Calibri"
-                    p.space_after = Pt(16)
-                txt(slide, 7.05, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
+                fill_slide_text(tf, slide_paragraphs(s.get("content"), 2), size=16, color=sc["mid"])
+                txt(slide, 7.05, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
             elif layout == 1:
                 if chart_data:
-                    add_chart(slide, 0.7, 0.35, 11.9, 4.0, chart_data, colors)
+                    add_chart(slide, 0.7, 0.35, 11.9, 4.0, chart_data, sc)
                 elif img:
                     slide.shapes.add_picture(img[2], Inches(0), Inches(0), width=Inches(13.333), height=Inches(4.55))
-                txt(slide, 0.7, 4.85, 12, 1.0, s.get("title", ""), 28, colors["ink"], True, font_name=colors["heading_font"])
+                txt(slide, 0.7, 4.85, 12, 1.0, s.get("title", ""), 28, sc["ink"], True, font_name=sc["heading_font"])
                 box = slide.shapes.add_textbox(Inches(0.7), Inches(5.85), Inches(12), Inches(1.2))
                 tf = box.text_frame
                 tf.word_wrap = True
                 p = tf.paragraphs[0]
                 p.text = " ".join((s.get("content") or "").split())
                 p.font.size = Pt(15)
-                p.font.color.rgb = RGBColor(*colors["mid"])
+                p.font.color.rgb = RGBColor(*sc["mid"])
                 p.font.name = "Calibri"
             elif layout == 2:
                 # Заголовок уже НЕ должен доходить до x=8.7 (где начинается фото/график
                 # справа) - раньше ширина плашки (8.2") залезала на 0.2" в зону картинки,
                 # и длинные заголовки визуально обрезались, т.к. фото рисуется поверх текста.
-                txt(slide, 0.7, 1.3, 7.6, 2.2, s.get("title", ""), 36, colors["ink"], True, font_name=colors["heading_font"])
-                rect(slide, 0.7, 3.6, 1.1, 0.06, colors["line"])
+                txt(slide, 0.7, 1.3, 7.6, 2.2, s.get("title", ""), 36, sc["ink"], True, font_name=sc["heading_font"])
+                rect(slide, 0.7, 3.6, 1.1, 0.06, sc["line"])
                 box = slide.shapes.add_textbox(Inches(0.7), Inches(3.9), Inches(7.4), Inches(2.6))
                 tf = box.text_frame
                 tf.word_wrap = True
                 p = tf.paragraphs[0]
                 p.text = " ".join((s.get("content") or "").split())
                 p.font.size = Pt(16)
-                p.font.color.rgb = RGBColor(*colors["mid"])
+                p.font.color.rgb = RGBColor(*sc["mid"])
                 p.font.name = "Calibri"
                 if chart_data:
-                    add_chart(slide, 8.5, 1.3, 4.6, 4.7, chart_data, colors)
+                    add_chart(slide, 8.5, 1.3, 4.6, 4.7, chart_data, sc)
                 elif img:
                     slide.shapes.add_picture(img[1], Inches(8.7), Inches(1.3), width=Inches(3.9), height=Inches(4.7))
-                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
+                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
             elif layout == 3:
                 # Зеркало layout 0: фото - правая половина кадра, текст - слева.
                 if chart_data:
-                    add_chart(slide, 0.7, 0.6, 5.4, 6.3, chart_data, colors)
+                    add_chart(slide, 0.7, 0.6, 5.4, 6.3, chart_data, sc)
                 elif img:
                     slide.shapes.add_picture(img[1], Inches(6.933), Inches(0), width=Inches(6.4), height=Inches(7.5))
-                txt(slide, 0.7, 1.5, 5.5, 1.6, s.get("title", ""), 30, colors["ink"], True, font_name=colors["heading_font"])
-                rect(slide, 0.7, 3.25, 0.85, 0.05, colors["line"])
+                txt(slide, 0.7, 1.5, 5.5, 1.6, s.get("title", ""), 30, sc["ink"], True, font_name=sc["heading_font"])
+                rect(slide, 0.7, 3.25, 0.85, 0.05, sc["line"])
                 box = slide.shapes.add_textbox(Inches(0.7), Inches(3.5), Inches(5.5), Inches(3.2))
                 tf = box.text_frame
                 tf.word_wrap = True
-                blocks = [x.strip() for x in (s.get("content") or "").split("\n") if x.strip()][:2]
-                for i, b in enumerate(blocks or [""]):
-                    p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-                    p.text = b
-                    p.font.size = Pt(16)
-                    p.font.color.rgb = RGBColor(*colors["mid"])
-                    p.font.name = "Calibri"
-                    p.space_after = Pt(16)
-                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
+                fill_slide_text(tf, slide_paragraphs(s.get("content"), 2), size=16, color=sc["mid"])
+                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
             elif layout == 4:
                 # Зеркало layout 1: фото - нижняя полоса кадра, текст - сверху.
-                txt(slide, 0.7, 0.4, 12, 1.0, s.get("title", ""), 28, colors["ink"], True, font_name=colors["heading_font"])
+                txt(slide, 0.7, 0.4, 12, 1.0, s.get("title", ""), 28, sc["ink"], True, font_name=sc["heading_font"])
                 box = slide.shapes.add_textbox(Inches(0.7), Inches(1.4), Inches(12), Inches(1.2))
                 tf = box.text_frame
                 tf.word_wrap = True
                 p = tf.paragraphs[0]
                 p.text = " ".join((s.get("content") or "").split())
                 p.font.size = Pt(15)
-                p.font.color.rgb = RGBColor(*colors["mid"])
+                p.font.color.rgb = RGBColor(*sc["mid"])
                 p.font.name = "Calibri"
                 if chart_data:
-                    add_chart(slide, 0.7, 3.15, 11.9, 4.0, chart_data, colors)
+                    add_chart(slide, 0.7, 3.15, 11.9, 4.0, chart_data, sc)
                 elif img:
                     slide.shapes.add_picture(img[2], Inches(0), Inches(2.95), width=Inches(13.333), height=Inches(4.55))
             elif layout == 5:
                 # Зеркало layout 2: фото - слева мелко, текст - справа.
-                txt(slide, 5.2, 1.3, 7.4, 2.2, s.get("title", ""), 36, colors["ink"], True, font_name=colors["heading_font"])
-                rect(slide, 5.2, 3.6, 1.1, 0.06, colors["line"])
+                txt(slide, 5.2, 1.3, 7.4, 2.2, s.get("title", ""), 36, sc["ink"], True, font_name=sc["heading_font"])
+                rect(slide, 5.2, 3.6, 1.1, 0.06, sc["line"])
                 box = slide.shapes.add_textbox(Inches(5.2), Inches(3.9), Inches(7.4), Inches(2.6))
                 tf = box.text_frame
                 tf.word_wrap = True
                 p = tf.paragraphs[0]
                 p.text = " ".join((s.get("content") or "").split())
                 p.font.size = Pt(16)
-                p.font.color.rgb = RGBColor(*colors["mid"])
+                p.font.color.rgb = RGBColor(*sc["mid"])
                 p.font.name = "Calibri"
                 if chart_data:
-                    add_chart(slide, 0.7, 1.3, 4.6, 4.7, chart_data, colors)
+                    add_chart(slide, 0.7, 1.3, 4.6, 4.7, chart_data, sc)
                 elif img:
                     slide.shapes.add_picture(img[1], Inches(0.7), Inches(1.3), width=Inches(3.9), height=Inches(4.7))
-                txt(slide, 5.2, 6.95, 7.4, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
-            else:
-                # Раскладка "карточки" (layout 6) - без фото: заголовок сверху, ниже -
+                txt(slide, 5.2, 6.95, 7.4, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
+            elif layout == 6:
+                # Раскладка "карточки" - без фото: заголовок сверху, ниже -
                 # две текстовые плашки рядом с мягкой заливкой под тему. Используется только
                 # для слайдов, где content уже разбит на 2 абзаца (см. фильтр при выборе
                 # раскладки выше) - каждый абзац идёт в свою карточку.
-                txt(slide, 0.7, 0.5, 11.9, 1.0, s.get("title", ""), 32, colors["ink"], True, font_name=colors["heading_font"])
-                rect(slide, 0.7, 1.55, 1.1, 0.06, colors["line"])
-                blocks = [x.strip() for x in (s.get("content") or "").split("\n\n") if x.strip()][:2]
+                txt(slide, 0.7, 0.5, 11.9, 1.0, s.get("title", ""), 32, sc["ink"], True, font_name=sc["heading_font"])
+                rect(slide, 0.7, 1.55, 1.1, 0.06, sc["line"])
+                blocks = slide_paragraphs(s.get("content"), 2)
                 card_w, gap, card_top, card_h = 5.85, 0.3, 2.0, 4.65
-                card_fill = _pptx_tint(colors["line"], 0.9)
+                card_fill = card_fill_for(sc)
                 for i, block in enumerate(blocks):
                     card_l = 0.7 + i * (card_w + gap)
-                    rect(slide, card_l, card_top, card_w, card_h, card_fill)
+                    rect(slide, card_l, card_top, card_w, card_h, card_fill, rounded=True, radius=0.05)
                     box = slide.shapes.add_textbox(Inches(card_l + 0.35), Inches(card_top + 0.3),
                                                     Inches(card_w - 0.7), Inches(card_h - 0.6))
                     tf = box.text_frame
@@ -4056,9 +4329,67 @@ async def _build_presentation(m: Message, state: FSMContext):
                     p = tf.paragraphs[0]
                     p.text = block
                     p.font.size = Pt(16)
-                    p.font.color.rgb = RGBColor(*colors["mid"])
+                    p.font.color.rgb = RGBColor(*sc["mid"])
                     p.font.name = "Calibri"
-                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, colors["mute"])
+                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
+            elif layout == 7:
+                # Раскладка "нумерованные шаги" - вертикальный список из 2-3 пунктов, у
+                # каждого свой номер в скруглённом бейдже слева и тонкая соединительная
+                # линия вниз к следующему номеру (как в референсных презентациях этого
+                # стиля - зрительно куда динамичнее плоского списка).
+                txt(slide, 0.7, 0.5, 11.9, 1.0, s.get("title", ""), 32, sc["ink"], True, font_name=sc["heading_font"])
+                blocks = slide_paragraphs(s.get("content"), 3)
+                step_top, step_h, badge = 2.1, 1.55, 0.55
+                badge_l = 0.7
+                line_l = badge_l + badge / 2 - 0.012
+                if len(blocks) > 1:
+                    rect(slide, line_l, step_top + badge, 0.024, step_h * (len(blocks) - 1), sc["mute"])
+                for i, block in enumerate(blocks):
+                    row_top = step_top + i * step_h
+                    rect(slide, badge_l, row_top, badge, badge, sc["line"], rounded=True, radius=0.28)
+                    numbox = slide.shapes.add_textbox(Inches(badge_l), Inches(row_top), Inches(badge), Inches(badge))
+                    ntf = numbox.text_frame
+                    ntf.word_wrap = False
+                    np_ = ntf.paragraphs[0]
+                    np_.text = str(i + 1)
+                    np_.alignment = PP_ALIGN.CENTER
+                    np_.font.size = Pt(20)
+                    np_.font.bold = True
+                    np_.font.color.rgb = RGBColor(*sc["bg"])
+                    np_.font.name = sc["heading_font"]
+                    ntf.vertical_anchor = MSO_ANCHOR.MIDDLE
+                    box = slide.shapes.add_textbox(Inches(badge_l + badge + 0.4), Inches(row_top - 0.08),
+                                                    Inches(10.9 - badge), Inches(step_h))
+                    tf = box.text_frame
+                    tf.word_wrap = True
+                    p = tf.paragraphs[0]
+                    p.text = block
+                    p.font.size = Pt(15)
+                    p.font.color.rgb = RGBColor(*sc["mid"])
+                    p.font.name = "Calibri"
+                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
+            else:
+                # layout 8 - раскладка "бейджи": заголовок сверху, ниже - список из 2
+                # пунктов, у каждого свой цветной квадрат-маркер слева от текста (заменяет
+                # иконку - без внешней библиотеки глифов, но визуально держит ту же роль:
+                # разбивает стену текста на читаемые смысловые блоки).
+                txt(slide, 0.7, 0.5, 11.9, 1.0, s.get("title", ""), 32, sc["ink"], True, font_name=sc["heading_font"])
+                blocks = slide_paragraphs(s.get("content"), 2)
+                row_top, row_h, badge = 2.0, 2.3, 0.5
+                badge_fill = card_fill_for(sc, factor=0.7)
+                for i, block in enumerate(blocks):
+                    top = row_top + i * row_h
+                    rect(slide, 0.7, top, badge, badge, badge_fill, rounded=True, radius=0.3)
+                    rect(slide, 0.7 + badge / 2 - 0.06, top + badge / 2 - 0.06, 0.12, 0.12, sc["line"], rounded=True, radius=0.5)
+                    box = slide.shapes.add_textbox(Inches(0.7 + badge + 0.4), Inches(top - 0.1), Inches(11.0 - badge), Inches(row_h))
+                    tf = box.text_frame
+                    tf.word_wrap = True
+                    p = tf.paragraphs[0]
+                    p.text = block
+                    p.font.size = Pt(16)
+                    p.font.color.rgb = RGBColor(*sc["mid"])
+                    p.font.name = "Calibri"
+                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
 
         pptx_path = f"/tmp/pres_{uid}.pptx"
         prs.save(pptx_path)
@@ -5459,7 +5790,7 @@ def excel_mode_kb(lang="ru"):
 async def start_excel(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     if not can_afford(m.from_user.id, CREDIT_COSTS["excel"]):
-        await m.answer(tr("msg_limit", lang))
+        await send_no_credits_notice(m, state, lang)
         return
     await m.answer(tr("msg_for_whom_table", lang), reply_markup=excel_category_kb(lang))
     await state.set_state(Form.waiting_excel_category)
@@ -6302,7 +6633,7 @@ def word_hint(kind: str, mode: str, lang: str = "ru") -> str:
 async def word_mode_ai(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     if not can_afford(m.from_user.id, CREDIT_COSTS["word"]):
-        await m.answer(tr("msg_limit", lang))
+        await send_no_credits_notice(m, state, lang)
         return
     await state.update_data(mode="ai", user_text="")
     await m.answer(tr("msg_content_lang_prompt", lang), reply_markup=content_lang_kb(lang))
@@ -6326,7 +6657,7 @@ async def word_content_lang(m: Message, state: FSMContext):
 async def word_mode_user(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     if not can_afford(m.from_user.id, CREDIT_COSTS["word"]):
-        await m.answer(tr("msg_limit", lang))
+        await send_no_credits_notice(m, state, lang)
         return
     await state.update_data(mode="user")
     data = await state.get_data()
@@ -6813,7 +7144,7 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
         fmt = detect_requested_format(text)
         if fmt == "presentation":
             if not can_afford(m.from_user.id, presentation_cost(PRESENTATION_MIN_SLIDES)):
-                await bot.send_message(m.from_user.id, tr("msg_limit", lang))
+                await send_no_credits_notice(m, state, lang)
                 return
             slides = extract_slide_count(text)
             style = extract_style(text)
@@ -6842,9 +7173,21 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
             await process_slides(m, state)
             return
         if fmt == "excel":
-            await bot.send_message(m.from_user.id, "Для таблицы открой «Создать» в меню или напиши в чат после /cancel.")
+            if not can_afford(m.from_user.id, CREDIT_COSTS["excel"]):
+                await send_no_credits_notice(m, state, lang)
+                return
+            kind = guess_excel_kind(text)
+            await state.update_data(excel_kind=kind, excel_topic=text, extra="", excel_mode="ai")
+            await bot.send_message(m.from_user.id, tr("msg_request_accepted", lang))
+            await excel_build(m, state)
             return
-        await bot.send_message(m.from_user.id, "Для документа открой «Создать» в меню или напиши в чат после /cancel.")
+        if not can_afford(m.from_user.id, CREDIT_COSTS["word"]):
+            await send_no_credits_notice(m, state, lang)
+            return
+        kind = guess_word_kind(text)
+        await state.update_data(word_kind=kind, word_size="short", topic=text, user_text="", extra="")
+        await bot.send_message(m.from_user.id, tr("msg_request_accepted", lang))
+        await word_build(m, state)
         return
     reply = await ask_grok_chat(text, lang, history=get_chat_history(m.from_user.id))
     append_chat_turn(m.from_user.id, "user", text)
@@ -6957,7 +7300,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         except (TypeError, ValueError):
             slides = 8
         if not can_afford(m.from_user.id, presentation_cost(slides)):
-            await bot.send_message(m.from_user.id, tr("msg_limit", lang))
+            await send_no_credits_notice(m, state, lang)
             return
         await state.update_data(
             topic=topic, user_text=user_text, extra="", extra_used=0,
@@ -6971,7 +7314,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
 
     if action == "gen_word":
         if not can_afford(m.from_user.id, CREDIT_COSTS["word"]):
-            await m.answer(tr("msg_limit", lang))
+            await send_no_credits_notice(m, state, lang)
             return
         content = (payload.get("content") or "").strip()
         if not content:
@@ -6985,7 +7328,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
 
     if action == "gen_excel":
         if not can_afford(m.from_user.id, CREDIT_COSTS["excel"]):
-            await m.answer(tr("msg_limit", lang))
+            await send_no_credits_notice(m, state, lang)
             return
         content = (payload.get("content") or "").strip()
         if not content:
@@ -6999,7 +7342,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
 
     if action == "image":
         if not can_afford(m.from_user.id, CREDIT_COSTS["image"]):
-            await m.answer(tr("msg_limit", lang))
+            await send_no_credits_notice(m, state, lang)
             return
         await state.set_state(Form.waiting_image_prompt)
         await m.answer(tr("msg_image_prompt", lang))
@@ -7080,7 +7423,7 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
     lang = user_lang(m.from_user.id)
     uid = m.from_user.id
     if not can_afford(uid, CREDIT_COSTS["word"]):
-        await m.answer(tr("msg_limit", lang))
+        await send_no_credits_notice(m, state, lang)
         return
     ok, reason = start_job(uid)
     if not ok:
@@ -7155,7 +7498,7 @@ async def build_presentation_with_copied_style(m: Message, state: FSMContext, pp
     uid = m.from_user.id
     slides = detect_slide_count(instruction)
     if not can_afford(uid, presentation_cost(slides)):
-        await m.answer(tr("msg_limit", lang))
+        await send_no_credits_notice(m, state, lang)
         try:
             os.remove(pptx_path)
         except Exception:
@@ -7185,7 +7528,7 @@ async def build_presentation_from_upload(m: Message, state: FSMContext, source_t
     uid = m.from_user.id
     slides = detect_slide_count(instruction)
     if not can_afford(uid, presentation_cost(slides)):
-        await m.answer(tr("msg_limit", lang))
+        await send_no_credits_notice(m, state, lang)
         return
     # Переиспользуем существующий сборщик презентаций целиком (тот же, что и в обычном
     # сценарии /presentation, режим "мои данные") - просто заполняем то же состояние,
@@ -7202,7 +7545,7 @@ async def build_excel_from_upload(m: Message, state: FSMContext, source_text: st
     lang = user_lang(m.from_user.id)
     uid = m.from_user.id
     if not can_afford(uid, CREDIT_COSTS["excel"]):
-        await m.answer(tr("msg_limit", lang))
+        await send_no_credits_notice(m, state, lang)
         return
     low_instr = instruction.lower()
     if "смет" in low_instr:
@@ -7246,7 +7589,7 @@ async def image_prompt_handler(m: Message, state: FSMContext):
         return
     await state.clear()
     if not can_afford(uid, CREDIT_COSTS["image"]):
-        await m.answer(tr("msg_limit", lang))
+        await send_no_credits_notice(m, state, lang)
         return
     ok, reason = start_job(uid)
     if not ok:
@@ -7330,7 +7673,7 @@ async def photo_upload(m: Message, state: FSMContext):
     try:
         file_info = await bot.get_file(photo.file_id)
         await bot.download_file(file_info.file_path, local_path)
-        await handle_vision_upload(m, local_path, m.caption or "")
+        await handle_vision_upload(m, state, local_path, m.caption or "")
     except Exception as e:
         print("Ошибка скачивания фото:", e)
         lang = user_lang(uid)
@@ -7373,7 +7716,7 @@ async def document_upload(m: Message, state: FSMContext):
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     if ext in IMAGE_UPLOAD_EXTS:
         try:
-            await handle_vision_upload(m, local_path, caption)
+            await handle_vision_upload(m, state, local_path, caption)
         finally:
             try:
                 if os.path.exists(local_path):
@@ -7450,7 +7793,7 @@ async def pres_clarify_handler(m: Message, state: FSMContext):
 
     if not can_afford(m.from_user.id, presentation_cost(slides)):
         await state.clear()
-        await m.answer(tr("msg_limit", lang))
+        await send_no_credits_notice(m, state, lang)
         return
 
     await state.update_data(
