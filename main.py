@@ -191,6 +191,15 @@ for _part in _admin_raw.split(","):
 if not ADMIN_IDS:
     ADMIN_IDS = [909828109, 465823470]
 
+PAYMENT_NOTIFY_IDS = []
+for _part in (os.getenv("PAYMENT_NOTIFY_IDS") or "7944308918").split(","):
+    _part = _part.strip()
+    if _part.isdigit():
+        PAYMENT_NOTIFY_IDS.append(int(_part))
+
+SUPPORT_USERNAME = (os.getenv("SUPPORT_USERNAME") or "AlixDocSupport").strip().lstrip("@")
+COLLAB_USERNAME = (os.getenv("COLLAB_USERNAME") or "AlixDocCooperation").strip().lstrip("@")
+
 MAX_UPLOAD_BYTES = 19 * 1024 * 1024  # Telegram Bot API и так режет ~20 МБ
 MAX_VOICE_SECONDS = 120
 MAX_SOURCE_TEXT_CHARS = 24000
@@ -239,6 +248,9 @@ STARTING_CREDITS = 100  # стартовый баланс для новых по
 # spend_credits() на случай, если где-то забыли передать явную сумму.
 PRESENTATION_CREDITS_PER_SLIDE = 5
 PRESENTATION_MIN_SLIDES = 3  # тот же минимум, что уже валидируется в gen_presentation/detect_slide_count
+WORD_CREDITS_PER_PAGE = 5
+WORD_MIN_PAGES = 1
+WORD_MAX_PAGES = 20
 
 
 def presentation_cost(slides) -> int:
@@ -249,6 +261,23 @@ def presentation_cost(slides) -> int:
     except (TypeError, ValueError):
         n = PRESENTATION_MIN_SLIDES
     return n * PRESENTATION_CREDITS_PER_SLIDE
+
+
+def word_cost(pages) -> int:
+    try:
+        n = int(pages)
+    except (TypeError, ValueError):
+        n = WORD_MIN_PAGES
+    n = max(WORD_MIN_PAGES, min(WORD_MAX_PAGES, n))
+    return n * WORD_CREDITS_PER_PAGE
+
+
+def normalize_word_pages(pages) -> int:
+    try:
+        n = int(pages)
+    except (TypeError, ValueError):
+        n = 2
+    return max(WORD_MIN_PAGES, min(WORD_MAX_PAGES, n))
 
 
 # --- Оплата кредитов через Telegram Payments (провайдер - ЮKassa) ----------------------
@@ -466,6 +495,7 @@ async def send_topup_invoice(m: Message, lang: str, amount_rub: int):
             )
         except Exception as e:
             print("Не удалось отправить инвойс:", e)
+            await m.answer("Не получилось открыть оплату. Проверьте PAYMENT_PROVIDER_TOKEN у @BotFather и попробуйте ещё раз.")
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[
@@ -536,15 +566,18 @@ async def successful_payment_handler(m: Message):
     u["credits"] = int(u.get("credits") or 0) + credits_bought
     save_users()
     await m.answer(tr("msg_payment_success", lang, credits=credits_bought, balance=u["credits"]))
-    for admin_id in ADMIN_IDS:
-        try:
-            await bot.send_message(
-                admin_id,
-                f"💰 Оплата: {m.from_user.id} купил {credits_bought} кредитов за "
-                f"{m.successful_payment.total_amount / 100} {m.successful_payment.currency}."
-            )
-        except Exception:
-            pass
+    if PAYMENT_NOTIFY_IDS:
+        uname = f"@{m.from_user.username}" if m.from_user.username else str(m.from_user.id)
+        note = (
+            f"💰 Оплата: {u.get('name') or uname} ({uname}, id={m.from_user.id}) "
+            f"купил {credits_bought} кредитов за "
+            f"{m.successful_payment.total_amount / 100} {m.successful_payment.currency}."
+        )
+        for notify_id in PAYMENT_NOTIFY_IDS:
+            try:
+                await bot.send_message(notify_id, note)
+            except Exception as e:
+                print("Не удалось уведомить об оплате:", notify_id, e)
 
 
 
@@ -977,7 +1010,16 @@ TR = {
     "msg_building_template": {"ru": "Собираю шаблон…", "en": "Building the template…", "de": "Vorlage wird erstellt…",
                               "ar": "جاري إنشاء القالب…", "zh": "正在生成模板…", "es": "Creando la plantilla…", "fr": "Création du modèle…"},
     "msg_ready": {"ru": "Готово ✅", "en": "Done ✅", "de": "Fertig ✅", "ar": "تم ✅", "zh": "完成 ✅", "es": "Listo ✅", "fr": "Terminé ✅"},
-    "msg_which_size": {"ru": "Какой объём?", "en": "How much detail?", "de": "Welcher Umfang?",
+    "msg_thin_input": {
+        "ru": "Мало вводных — файл выйдет общим. Добавьте цель, факты и требования — будет сильнее.",
+        "en": "Too little context — the file will come out generic. Add the goal, facts and requirements for a stronger result.",
+        "de": "Zu wenig Vorgaben — die Datei wird allgemein. Ziel, Fakten und Anforderungen machen das Ergebnis stärker.",
+        "ar": "مدخلات قليلة — سيخرج الملف عاماً. أضف الهدف والحقائق والمتطلبات لنتيجة أقوى.",
+        "zh": "信息太少，文件会很空泛。补充目标、事实和要求，效果更好。",
+        "es": "Pocos datos: el archivo saldrá genérico. Añade objetivo, hechos y requisitos para un mejor resultado.",
+        "fr": "Trop peu d'infos — le fichier sera générique. Ajoutez objectif, faits et consignes pour un meilleur résultat.",
+    },
+    "msg_which_size": {"ru": "Сколько страниц? 1 страница = 5 кредитов.", "en": "How many pages? 1 page = 5 credits.", "de": "Wie viele Seiten? 1 Seite = 5 Credits.",
                        "ar": "ما الحجم المطلوب؟", "zh": "需要多少内容？", "es": "¿Qué extensión?", "fr": "Quelle ampleur ?"},
     "msg_building_draft": {"ru": "Собираю черновик…", "en": "Building the draft…", "de": "Entwurf wird erstellt…",
                            "ar": "جاري إعداد المسودة…", "zh": "正在生成草稿…", "es": "Creando el borrador…", "fr": "Création du brouillon…"},
@@ -1240,7 +1282,7 @@ TR = {
                              "zh": "没能理解。请用下方按钮选择操作，或输入 /cancel 重新开始。",
                              "es": "No entendí. Elige una acción con el botón de abajo, o escribe /cancel para empezar de nuevo.",
                              "fr": "Je n'ai pas compris. Choisis une action avec le bouton ci-dessous, ou tape /cancel pour recommencer."},
-    "msg_plan_info": {"ru": "💳 Баланс: {credits} кредитов\nПрезентация — 5 кр./слайд · Word/Excel — 5 кр. · распознавание фото — 3 кр. · шаблон бесплатно",
+    "msg_plan_info": {"ru": "💳 Баланс: {credits} кредитов\nПрезентация — 5 кр./слайд · Word — 5 кр./страница · Excel — 5 кр. · распознавание фото — 3 кр. · шаблон бесплатно",
                       "en": "💳 Balance: {credits} credits\nPresentation — 5 cr./slide · Word/Excel — 5 cr. · photo recognition — 3 cr. · template is free",
                       "de": "💳 Guthaben: {credits} Credits\nPräsentation — 5 Cr./Folie · Word/Excel — 5 Cr. · Fotoerkennung — 3 Cr. · Vorlage kostenlos",
                       "ar": "💳 الرصيد: {credits} كريدت\nعرض تقديمي — 5 لكل شريحة · وورد/إكسل — 5 · التعرف على الصور — 3 · القالب مجاني",
@@ -3474,8 +3516,9 @@ def word_kind_kb(category, more=False, lang="ru"):
 
 def word_size_kb(lang="ru"):
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text=tr("btn_shallow", lang))],
-        [KeyboardButton(text=tr("btn_deep", lang))],
+        [KeyboardButton(text="2 стр. · 10 кр."), KeyboardButton(text="4 стр. · 20 кр.")],
+        [KeyboardButton(text="6 стр. · 30 кр."), KeyboardButton(text="8 стр. · 40 кр.")],
+        [KeyboardButton(text="10 стр. · 50 кр."), KeyboardButton(text="15 стр. · 75 кр.")],
         [KeyboardButton(text=tr("btn_main_menu", lang))]
     ], resize_keyboard=True)
 
@@ -3855,6 +3898,7 @@ async def process_topic(m: Message, state: FSMContext):
         return
     name, _ = pick_theme(text)
     await state.update_data(topic=text, extra="", extra_used=0, theme_name=name)
+    await m.answer(tr("msg_thin_input", lang))
     style_label = THEME_LABELS_I18N.get(name, {}).get(lang, THEME_LABELS.get(name, name))
     await m.answer(
         tr("msg_style_fits_topic", lang, style=style_label),
@@ -3876,6 +3920,7 @@ async def process_user_text(m: Message, state: FSMContext):
     name, _ = pick_theme(text)
     topic = text[:80].replace("\n", " ")
     await state.update_data(user_text=text, topic=topic, extra="", extra_used=0, theme_name=name)
+    await m.answer(tr("msg_thin_input", lang))
     style_label = THEME_LABELS_I18N.get(name, {}).get(lang, THEME_LABELS.get(name, name))
     await m.answer(
         tr("msg_style_fits_text", lang, style=style_label),
@@ -6051,6 +6096,7 @@ async def waiting_excel_mode_fallback(m: Message, state: FSMContext):
 async def excel_topic(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     await state.update_data(excel_topic=m.text or "")
+    await m.answer(tr("msg_thin_input", lang))
     await m.answer(tr("msg_build_table_q", lang), reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
@@ -6059,6 +6105,7 @@ async def excel_topic(m: Message, state: FSMContext):
 async def excel_data(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     await state.update_data(excel_topic=m.text or "")
+    await m.answer(tr("msg_thin_input", lang))
     await m.answer(tr("msg_build_table_q", lang), reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
@@ -6067,6 +6114,7 @@ async def excel_data(m: Message, state: FSMContext):
 async def excel_startup_data(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     await state.update_data(excel_topic=m.text or "")
+    await m.answer(tr("msg_thin_input", lang))
     await m.answer(tr("msg_build_model_q", lang), reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
@@ -6801,7 +6849,7 @@ def word_hint(kind: str, mode: str, lang: str = "ru") -> str:
 @dp.message(Form.waiting_word_mode, F.text.in_(ALL_BTN_AI_GENERATE_LABELS))
 async def word_mode_ai(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
-    if not can_afford(m.from_user.id, CREDIT_COSTS["word"]):
+    if not can_afford(m.from_user.id, word_cost(WORD_MIN_PAGES)):
         await send_no_credits_notice(m, state, lang)
         return
     await state.update_data(mode="ai", user_text="")
@@ -6825,7 +6873,7 @@ async def word_content_lang(m: Message, state: FSMContext):
 @dp.message(Form.waiting_word_mode, F.text.in_(ALL_BTN_OWN_TEXT_LABELS))
 async def word_mode_user(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
-    if not can_afford(m.from_user.id, CREDIT_COSTS["word"]):
+    if not can_afford(m.from_user.id, word_cost(WORD_MIN_PAGES)):
         await send_no_credits_notice(m, state, lang)
         return
     await state.update_data(mode="user")
@@ -6891,12 +6939,9 @@ WORD_SIZE_KINDS = {"referat", "report", "essay", "coursework"}
 async def word_after_input(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
-    kind = data.get("word_kind", "doc")
-    if kind in WORD_SIZE_KINDS:
-        await m.answer(tr("msg_which_size", lang), reply_markup=word_size_kb(lang))
-        await state.set_state(Form.waiting_word_size)
-    else:
-        await word_build_draft(m, state, data, "short")
+    await m.answer(tr("msg_thin_input", lang))
+    await m.answer(tr("msg_which_size", lang), reply_markup=word_size_kb(lang))
+    await state.set_state(Form.waiting_word_size)
 
 
 @dp.message(Form.waiting_word_topic)
@@ -6926,9 +6971,13 @@ async def word_user_text(m: Message, state: FSMContext):
 
 async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str):
     lang = user_lang(m.from_user.id)
-    await state.update_data(word_size=size)
+    pages = normalize_word_pages(data.get("word_pages") or (2 if size == "short" else 6))
+    await state.update_data(word_size=size, word_pages=pages)
     await m.answer(tr("msg_building_draft", lang), reply_markup=cancel_kb(lang))
-    size_map = {"short": "поверхностное раскрытие темы — только суть и ключевые моменты, без глубокого разбора деталей и подпунктов, но по-настоящему содержательно, объём определяй по теме, не режь искусственно", "long": "полное раскрытие темы — подробно, с деталями, подпунктами и глубоким разбором, объём определяй по теме"}
+    size_map = {
+        "short": f"объём документа — примерно {pages} страниц Word, без воды, только суть",
+        "long": f"объём документа — примерно {pages} страниц Word, подробно, с подпунктами и разбором",
+    }
     kind = data.get("word_kind", "doc")
     kind_name = WORD_KIND_DESC.get(kind, "документ")
     lang_instr = grok_lang_instruction(content_gen_lang(data, lang) or "ru")
@@ -6958,8 +7007,14 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
 
 @dp.message(Form.waiting_word_size)
 async def word_size(m: Message, state: FSMContext):
-    t = (m.text or "").lower()
-    size = "long" if "полн" in t or "full" in t or "voll" in t or "完整" in t or "الكامل" in t or "completo" in t or "complet" in t else "short"
+    lang = user_lang(m.from_user.id)
+    raw = re.findall(r"\d+", m.text or "")
+    pages = normalize_word_pages(raw[0] if raw else 2)
+    if not can_afford(m.from_user.id, word_cost(pages)):
+        await send_no_credits_notice(m, state, lang)
+        return
+    size = "short" if pages <= 3 else "long"
+    await state.update_data(word_pages=pages, word_size=size)
     data = await state.get_data()
     await word_build_draft(m, state, data, size)
 
@@ -7026,8 +7081,12 @@ async def word_build(m: Message, state: FSMContext):
     await m.answer(tr("msg_building_word", lang))
     kind = data.get("word_kind", "doc")
     size = data.get("word_size", "short")
+    pages = normalize_word_pages(data.get("word_pages") or (2 if size == "short" else 6))
     lang_instr = grok_json_lang_instruction(content_gen_lang(data, lang) or "ru")
-    size_map = {"short": "поверхностное раскрытие темы — только суть и ключевые моменты, без глубокого разбора деталей и подпунктов, но по-настоящему содержательно, объём определяй по теме, не режь искусственно", "long": "полное раскрытие темы — подробно, с деталями, подпунктами и глубоким разбором, объём определяй по теме"}
+    size_map = {
+        "short": f"держи объём около {pages} страниц Word",
+        "long": f"держи объём около {pages} страниц Word, подробно",
+    }
     kind_name = WORD_KIND_DESC.get(kind, "документ")
     # Схема мета-полей своя под каждый тип документа (модульный словарь META_SCHEMAS,
     # он же переиспользуется в режиме "Скачать шаблон") — раньше запрашивалась
@@ -7052,34 +7111,16 @@ async def word_build(m: Message, state: FSMContext):
     # Русский текст обычно занимает 1.5-2 токена на слово, плюс накладные расходы
     # на JSON-обёртку (кавычки, экранирование, ключи полей) - лимит с запасом,
     # чтобы модель физически не упёрлась в потолок на середине последнего раздела.
-    if kind == "coursework":
-        gen_max_tokens = 20000 if size == "long" else 8000
-    elif kind == "referat":
-        gen_max_tokens = 12000 if size == "long" else 6000
-    elif kind in WORD_SIZE_KINDS:  # report, essay
-        gen_max_tokens = 7000 if size == "long" else 4000
-    else:
-        gen_max_tokens = 6000
+    gen_max_tokens = min(20000, 2500 + pages * 900)
     # Расплывчатые формулировки вроде "несколько содержательных абзацев" модель
     # игнорирует и всё равно пишет коротко, даже с большим лимитом токенов -
     # нужны точные числовые ориентиры по объёму на раздел, иначе она работает
     # по привычке писать компактно, независимо от того, сколько токенов доступно.
-    length_hint = ""
-    if kind == "coursework":
-        if size == "long":
-            length_hint = "\nЭто полноценная курсовая работа для сдачи, суммарный объём всего документа — 6000-9000 слов. Каждый содержательный раздел (кроме титульного листа, содержания и списка литературы) должен быть НЕ МЕНЕЕ 600-900 слов (это примерно 4-6 полноценных абзацев с фактами, примерами, анализом, а не общими фразами) - пиши подробно и разворачивай мысль, а не сжимай её в 2-3 предложения."
-        else:
-            length_hint = "\nСуммарный объём документа — 2000-3000 слов. Каждый содержательный раздел (кроме титульного листа, содержания и списка литературы) — примерно 200-300 слов, по существу, без искусственного разжижения."
-    elif kind == "referat":
-        if size == "long":
-            length_hint = "\nЭто полноценный реферат для сдачи, суммарный объём всего документа — 3000-5000 слов. Каждый содержательный раздел — НЕ МЕНЕЕ 400-600 слов (несколько развёрнутых абзацев с фактами и анализом), не сжимай в 2-3 предложения."
-        else:
-            length_hint = "\nСуммарный объём документа — 1200-1800 слов. Каждый содержательный раздел — примерно 150-250 слов, по существу."
-    elif kind in WORD_SIZE_KINDS:  # report, essay
-        if size == "long":
-            length_hint = "\nСуммарный объём документа — 1500-2500 слов. Каждый содержательный раздел — примерно 250-400 слов, развёрнуто, с конкретикой."
-        else:
-            length_hint = "\nСуммарный объём документа — 600-1000 слов. Каждый содержательный раздел — примерно 100-180 слов, по существу, без воды."
+    words_total = pages * 280
+    length_hint = (
+        f"\nЦелевой объём документа — {pages} страниц Word (примерно {words_total} слов). "
+        "Пиши ровно на этот объём: не короче и без воды ради объёма."
+    )
     # Модель склонна писать заключение как краткий пересказ глав и не проверять
     # число источников - это отдельная, часто игнорируемая инструкция, поэтому
     # прописываем её явно, а не полагаемся на общее описание вида документа.
@@ -7248,7 +7289,7 @@ async def word_build(m: Message, state: FSMContext):
         await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
         await m.answer_document(FSInputFile(pdf_path, filename=f"{fname}.pdf"), caption=tr("msg_pdf_caption", lang))
         u["generations"] += 1
-        spend_credits(uid, "word")
+        spend_credits(uid, "word", amount=word_cost(pages))
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
         note_success(uid)
         for p in (docx_path, pdf_path):
@@ -7295,15 +7336,19 @@ async def my_plan(m: Message, state: FSMContext):
 
 @dp.message(F.text.in_(ALL_BTN_HELP_LABELS))
 async def show_help(m: Message):
-    lang = user_lang(m.from_user.id)
-    await m.answer(tr("msg_help", lang), parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{SUPPORT_USERNAME}")],
+    ])
+    await m.answer("\u2060", reply_markup=kb)
 
 
 @dp.message(F.text.in_(ALL_BTN_COLLAB_LABELS))
 async def start_collab(m: Message, state: FSMContext):
-    lang = user_lang(m.from_user.id)
-    await m.answer(tr("msg_collab", lang), parse_mode="HTML", reply_markup=cancel_kb(lang))
-    await state.set_state(Form.waiting_collab_message)
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🤝 Сотрудничество", url=f"https://t.me/{COLLAB_USERNAME}")],
+    ])
+    await m.answer("\u2060", reply_markup=kb)
 
 
 async def handle_free_text_request(m: Message, state: FSMContext, text: str):
@@ -7362,11 +7407,13 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
             await bot.send_message(m.from_user.id, tr("msg_request_accepted", lang))
             await excel_build(m, state)
             return
-        if not can_afford(m.from_user.id, CREDIT_COSTS["word"]):
+        pages = extract_slide_count(text) or 2
+        pages = normalize_word_pages(pages)
+        if not can_afford(m.from_user.id, word_cost(pages)):
             await send_no_credits_notice(m, state, lang)
             return
         kind = guess_word_kind(text)
-        await state.update_data(word_kind=kind, word_size="short", topic=text, user_text="", extra="")
+        await state.update_data(word_kind=kind, word_size="short" if pages <= 3 else "long", word_pages=pages, topic=text, user_text="", extra="")
         await bot.send_message(m.from_user.id, tr("msg_request_accepted", lang))
         await word_build(m, state)
         return
@@ -7505,14 +7552,18 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         return
 
     if action == "gen_word":
-        if not can_afford(m.from_user.id, CREDIT_COSTS["word"]):
+        raw_pages = payload.get("pages") or payload.get("size")
+        pages = normalize_word_pages(raw_pages if str(raw_pages).isdigit() else (4 if payload.get("size") == "long" else 2))
+        if not can_afford(m.from_user.id, word_cost(pages)):
             await send_no_credits_notice(m, state, lang)
             return
         content = (payload.get("content") or "").strip()
         if not content:
             return
         await state.update_data(
-            word_kind=payload.get("kind") or "doc", word_size=payload.get("size") or "short",
+            word_kind=payload.get("kind") or "doc",
+            word_size="short" if pages <= 3 else "long",
+            word_pages=pages,
             topic=content, user_text="", extra=(payload.get("extra") or "").strip(),
         )
         await word_build(m, state)
@@ -7611,6 +7662,30 @@ async def grant(m: Message):
         await m.answer("Формат: /grant user_id")
 
 
+@dp.message(Command("broadcast"))
+async def broadcast(m: Message):
+    """Пуш тем, кто уже открывал бота: обычное сообщение в чат.
+    Telegram сам показывает уведомление, отдельный FCM не нужен."""
+    if m.from_user.id not in ADMIN_IDS:
+        return
+    text = (m.text or "")
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await m.answer("Формат: /broadcast текст уведомления")
+        return
+    body = parts[1].strip()
+    sent = skipped = 0
+    await m.answer(f"Рассылка начата: {len(users_db)} человек в базе.")
+    for uid in list(users_db.keys()):
+        try:
+            await bot.send_message(uid, body)
+            sent += 1
+        except Exception:
+            skipped += 1
+        await asyncio.sleep(0.05)
+    await m.answer(f"Готово. Доставлено: {sent}. Не дошло (блок/удалил чат): {skipped}.")
+
+
 @dp.message(Command("addcredits"))
 async def addcredits(m: Message):
     """Начисляет кредиты любому пользователю по его id - в подарок или в качестве
@@ -7643,9 +7718,12 @@ async def addcredits(m: Message):
 async def build_word_from_upload(m: Message, state: FSMContext, source_text: str, instruction: str):
     lang = user_lang(m.from_user.id)
     uid = m.from_user.id
-    if not can_afford(uid, CREDIT_COSTS["word"]):
+    pages = extract_slide_count(instruction) or 4
+    pages = normalize_word_pages(pages)
+    if not can_afford(uid, word_cost(pages)):
         await send_no_credits_notice(m, state, lang)
         return
+    await state.update_data(word_pages=pages)
     ok, reason = start_job(uid)
     if not ok:
         await m.answer(reason)
@@ -7692,7 +7770,7 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
         fname = safe_filename(content.get("title"), fallback=kind_name)
         await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
         u["generations"] += 1
-        spend_credits(uid, "word")
+        spend_credits(uid, "word", amount=word_cost(pages))
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title') or kind_name} (из файла)")
         save_users()
         note_success(uid)
