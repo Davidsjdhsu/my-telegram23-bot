@@ -230,7 +230,7 @@ PLAN_LIMITS = {"premium": 15}
 # статистика /grant и старая логика), но реальный допуск к генерации теперь
 # решает can_afford() ниже, а не can_generate().
 CREDIT_COSTS = {"presentation": 10, "word": 5, "excel": 5, "template": 0, "image": 10, "vision": 3}
-STARTING_CREDITS = 50  # стартовый баланс для новых пользователей - подобрать под реальную экономику отдельно
+STARTING_CREDITS = 100  # стартовый баланс для новых пользователей
 
 # Презентация стоит не фиксированную сумму, а по числу слайдов - честнее, чем плоская
 # ставка: 3-слайдовый черновик и 30-слайдовый доклад явно требуют разных ресурсов
@@ -300,6 +300,8 @@ def _build_users_payload():
             "control_mode_chosen": bool(u.get("control_mode_chosen")),
             "credits": int(u.get("credits") if u.get("credits") is not None else STARTING_CREDITS),
             "chat_history": list(u.get("chat_history") or [])[-30:],
+            "chat_summary": u.get("chat_summary") or "",
+            "known_facts": list(u.get("known_facts") or [])[-15:],
         }
     return payload
 
@@ -1707,7 +1709,7 @@ def get_user(uid):
     if uid not in users_db:
         users_db[uid] = {"name": "", "plan": "premium", "generations": 0, "history": [], "busy": False,
                           "lang": "ru", "lang_chosen": False, "control_mode": "buttons", "control_mode_chosen": False,
-                          "credits": STARTING_CREDITS, "chat_history": []}
+                          "credits": STARTING_CREDITS, "chat_history": [], "chat_summary": "", "known_facts": []}
         save_users()
     elif "credits" not in users_db[uid]:
         # существующие пользователи с прошлой версии бота - выдаём тот же стартовый баланс один раз
@@ -1715,18 +1717,23 @@ def get_user(uid):
         save_users()
     if "chat_history" not in users_db[uid]:
         users_db[uid]["chat_history"] = []
+    if "chat_summary" not in users_db[uid]:
+        users_db[uid]["chat_summary"] = ""
+    if "known_facts" not in users_db[uid]:
+        users_db[uid]["known_facts"] = []
     return users_db[uid]
 
 
-CHAT_HISTORY_MAX_MESSAGES = 10  # 5 обменов репликами - недолгая, но реальная память разговора
+CHAT_HISTORY_MAX_MESSAGES = 10  # 5 обменов репликами дословно - после этого старое сжимается в резюме
+CHAT_SUMMARY_TRIGGER = 10  # при таком размере дословной истории запускаем сжатие
 
 
 def get_chat_history(uid) -> list:
     """Последние несколько реплик свободного чата для передачи в ask_grok_chat() -
     без этого бот забывал абсолютно всё между сообщениями, включая только что
     разобранное фото. Память короткая и не бесконечная (см. CHAT_HISTORY_MAX_MESSAGES) -
-    так и промпт не раздувается токенами со временем, и старый контекст естественно
-    "забывается", если разговор давно ушёл в другую сторону."""
+    так и промпт не раздувается токенами со временем; то, что вышло за этот предел,
+    не теряется полностью - см. chat_summary/known_facts в update_long_term_memory()."""
     return list(get_user(uid).get("chat_history") or [])
 
 
@@ -1742,6 +1749,58 @@ def append_chat_turn(uid, role: str, content: str):
     hist.append({"role": role, "content": content[:2000]})  # длинные сообщения обрезаем, не раздуваем промпт
     u["chat_history"] = hist[-CHAT_HISTORY_MAX_MESSAGES:]
     save_users()
+
+
+async def update_long_term_memory(uid):
+    """Раз в несколько сообщений сжимает историю чата в короткое резюме (chat_summary)
+    и обновляет список долгосрочных фактов о пользователе (known_facts) - отдельным
+    лёгким вызовом к Grok. Без этого история просто обрывалась бы по CHAT_HISTORY_MAX_MESSAGES
+    без следа - с этим старое "не забывается" полностью, а сжимается в несколько
+    предложений + список фактов, которые продолжают влиять на тон и контекст ответов
+    даже спустя много сообщений. Не критично для работы чата - при сбое просто не
+    обновляет память в этот раз, ответ пользователю уже отправлен до вызова этой функции."""
+    u = get_user(uid)
+    hist = u.get("chat_history") or []
+    if len(hist) < CHAT_SUMMARY_TRIGGER:
+        return
+    try:
+        convo_text = "\n".join(f'{"Пользователь" if h["role"] == "user" else "Бот"}: {h["content"]}' for h in hist)
+        prev_summary = u.get("chat_summary") or ""
+        prev_facts = u.get("known_facts") or []
+        r = await client.chat.completions.create(
+            model="grok-3",
+            messages=[
+                {"role": "system", "content": (
+                    "Сожми переписку в краткое резюме (2-4 предложения, по-русски) - о чём "
+                    "говорили, что важно помнить дальше. Отдельно выпиши устойчивые факты о "
+                    "САМОМ пользователе (имя, род деятельности, предпочтения по стилю общения), "
+                    "если они реально прозвучали в переписке - только то, что действительно "
+                    "было сказано, ничего не придумывай и не додумывай. "
+                    "Ответь СТРОГО валидным JSON без markdown-обёртки: "
+                    '{"summary": "...", "facts": ["...", "..."]}. '
+                    "Учти уже известное резюме и факты ниже - не повторяй их, а дополняй и уточняй."
+                )},
+                {"role": "user", "content": (
+                    f"Уже известное резюме: {prev_summary or '(нет)'}\n"
+                    f"Уже известные факты: {prev_facts or '(нет)'}\n\n"
+                    f"Новый отрезок переписки:\n{convo_text}"
+                )},
+            ],
+            temperature=0.3,
+            max_tokens=400,
+        )
+        raw = (r.choices[0].message.content or "").strip()
+        data = json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
+        u["chat_summary"] = (data.get("summary") or prev_summary or "")[:800]
+        new_facts = [f for f in (data.get("facts") or []) if isinstance(f, str) and f.strip()]
+        # dict.fromkeys - убирает дубликаты, сохраняя порядок (обычный set() его теряет)
+        u["known_facts"] = list(dict.fromkeys([*prev_facts, *new_facts]))[:15]
+        # Старое уже свёрнуто в резюме - дословно оставляем только последние 4 реплики,
+        # чтобы не дублировать одно и то же в промпте (и резюме, и полный текст).
+        u["chat_history"] = hist[-4:]
+        save_users()
+    except Exception as e:
+        print("Не удалось обновить долгосрочную память чата:", uid, e)
 
 
 def user_lang(uid):
@@ -1769,6 +1828,28 @@ async def transcribe_voice(voice, uid) -> str | None:
     except Exception as e:
         print("Ошибка распознавания голоса:", e)
         return None
+
+
+async def maybe_send_voice_reply(m: Message, text: str):
+    """Озвучивает ответ бота голосом через OpenAI TTS - только в ответ на голосовое
+    сообщение пользователя, той же модальностью, какой был вопрос (если написали
+    текстом - отвечаем текстом, без сюрпризов). Не критично для работы чата: текстовый
+    ответ уже отправлен до вызова этой функции, при любой ошибке просто молча не
+    отправляем голос, вторым сообщением ничего не дублируем и не ломаем диалог."""
+    if not whisper_client or not text:
+        return
+    local_path = f"/tmp/tts_{m.from_user.id}_{random.randint(1000, 9999)}.ogg"
+    try:
+        async with whisper_client.audio.speech.with_streaming_response.create(
+            model="tts-1",
+            voice="alloy",
+            input=text[:4000],
+            response_format="opus",
+        ) as resp:
+            await resp.stream_to_file(local_path)
+        await m.answer_voice(FSInputFile(local_path))
+    except Exception as e:
+        print("Не удалось озвучить ответ голосом:", e)
     finally:
         try:
             if os.path.exists(local_path):
@@ -2555,18 +2636,62 @@ def looks_like_document_request(text: str) -> bool:
     return has_keyword and has_verb
 
 
-async def ask_grok_chat(user_text: str, lang: str = "ru", history: list = None) -> str:
+async def classify_uncertain_intent(text: str) -> str | None:
+    """Резервная проверка для сообщений, которые НЕ поймал keyword-фильтр
+    (looks_like_document_request) - когда человек просит файл косвенно, без прямого
+    "сделай презентацию" (например: "мне для встречи с клиентами нужно что-то
+    показать про наш продукт"). Вызывается только для достаточно длинных сообщений
+    (см. порог в handle_free_text_request) - отдельный дешёвый запрос с почти нулевым
+    max_tokens, не полноценный ответ чата. При любом сбое (в том числе непонятном
+    ответе модели) молча возвращает None - тогда сообщение просто уйдёт в обычный чат,
+    как и раньше, а не сломает диалог."""
+    try:
+        r = await client.chat.completions.create(
+            model="grok-3",
+            messages=[
+                {"role": "system", "content": (
+                    "Определи, просит ли человек СОЗДАТЬ файл - презентацию, Word-документ "
+                    "или Excel-таблицу. Это может быть сказано и не напрямую (например "
+                    "\"нужно что-то показать клиентам\" означает презентацию). "
+                    "Ответь СТРОГО одним словом: presentation, word, excel или none "
+                    "(если это обычный вопрос или просьба, не про создание файла)."
+                )},
+                {"role": "user", "content": text[:500]},
+            ],
+            temperature=0,
+            max_tokens=5,
+        )
+        answer = (r.choices[0].message.content or "").strip().lower()
+        return answer if answer in ("presentation", "word", "excel") else None
+    except Exception as e:
+        print("classify_uncertain_intent error:", e)
+        return None
+
+
+async def ask_grok_chat(user_text: str, lang: str = "ru", history: list = None,
+                         summary: str = "", facts: list = None, recent_generations: list = None) -> str:
     """Отдельная функция для бесплатного чат-помощника (кнопка "Чат" в Mini App и
     просто свободные сообщения боту вне сценариев генерации документов). Использует
     того же клиента и модель, что и ask_grok(), но с обычным системным промптом
     помощника, а не "арт-директора презентаций" - иначе ответы на посторонние
     вопросы неуместно тянуло бы в сторону слайдов и заголовков.
-    history - последние несколько реплик разговора (см. CHAT_HISTORY_TURNS в
-    вызывающем коде), список {"role": "user"/"assistant", "content": "..."} в
-    хронологическом порядке - без этого бот не помнил вообще ничего из того,
-    что говорилось секунду назад, включая разбор присланных фото."""
+    history - последние несколько реплик разговора дословно, список
+    {"role": "user"/"assistant", "content": "..."} в хронологическом порядке.
+    summary/facts - долгосрочная память за пределами history (см. update_long_term_memory).
+    recent_generations - последние документы/презентации, которые человек уже делал
+    в этом боте (строки вида "10.09 14:23 — Презентация про китов") - чтобы чат мог
+    на них ссылаться ("хочешь то же самое, но на другую тему?"), а не делать вид,
+    что видит человека впервые."""
     lang_names = {"ru": "русском", "en": "английском", "de": "немецком", "ar": "арабском",
                   "zh": "китайском", "es": "испанском", "fr": "французском"}
+    memory_bits = []
+    if summary:
+        memory_bits.append(f"Резюме более раннего разговора с этим человеком: {summary}")
+    if facts:
+        memory_bits.append("Устойчивые факты об этом человеке: " + "; ".join(facts))
+    if recent_generations:
+        memory_bits.append("Последние документы/презентации, которые человек уже делал в этом боте: " + "; ".join(recent_generations))
+    memory_block = ("\n\n" + "\n".join(memory_bits)) if memory_bits else ""
     try:
         messages = [
             {"role": "system", "content": (
@@ -2583,6 +2708,9 @@ async def ask_grok_chat(user_text: str, lang: str = "ru", history: list = None) 
                 "Ниже может быть история последних сообщений этого же разговора - используй её, чтобы "
                 "не забывать, о чём уже говорили (включая то, что было на присланных ранее фото), "
                 "и не переспрашивать то, что человек уже объяснил. "
+                "Если есть резюме более раннего разговора, устойчивые факты о человеке или список его "
+                "прошлых генераций в этом боте - тоже используй естественно, не перечисляй их в ответе "
+                "списком и не упоминай, что это \"из памяти\" - просто веди себя как тот, кто помнит. "
                 "Пиши так, чтобы не читалось как текст нейросети: не ставь тире («—») почти в каждом "
                 "предложении - это первое, что выдаёт ИИ-текст, используй его редко и только когда без него "
                 "правда не обойтись, обычно достаточно запятой, точки или союза. Не начинай ответ со слов "
@@ -2600,20 +2728,37 @@ async def ask_grok_chat(user_text: str, lang: str = "ru", history: list = None) 
                 "Презентацию, Word или Excel на любую тему, в том числе такую, делать можно: "
                 "это файл, не совет. Тогда ответь по-человечески и направь в меню или одну фразу в чат. "
                 "Ответ держи коротким, как в переписке."
+                f"{memory_block}"
             )},
         ]
         messages.extend(history or [])
         messages.append({"role": "user", "content": user_text})
-        r = await client.chat.completions.create(
-            model="grok-3",
-            messages=messages,
-            temperature=0.95,
-            max_tokens=1200
-        )
+        # Живой веб-поиск (актуальные новости, курсы, свежие факты) - параметр специфичен
+        # для xAI API, официально не части общего OpenAI-совместимого SDK, поэтому
+        # передаём через extra_body и на любой сбой (например, если xAI поменяет формат
+        # параметра) откатываемся на обычный запрос без поиска - чат не должен падать
+        # из-за экспериментальной фичи.
+        try:
+            r = await client.chat.completions.create(
+                model="grok-3",
+                messages=messages,
+                temperature=0.95,
+                max_tokens=1200,
+                extra_body={"search_parameters": {"mode": "auto"}},
+            )
+        except Exception as e_search:
+            print("Живой поиск недоступен, отвечаю без него:", e_search)
+            r = await client.chat.completions.create(
+                model="grok-3",
+                messages=messages,
+                temperature=0.95,
+                max_tokens=1200,
+            )
         return r.choices[0].message.content
     except Exception as e:
         print("Grok API error (chat):", e)
         return None
+
 
 
 async def generate_image(prompt: str, path: str) -> bool:
@@ -7167,8 +7312,17 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
     text = (text or "").strip()
     if not text:
         return
+    fmt = None
     if looks_like_document_request(text):
         fmt = detect_requested_format(text)
+    elif len(text.split()) >= 12:
+        # Ключевые слова ничего не поймали, но сообщение достаточно длинное/конкретное,
+        # чтобы стоило перепроверить через модель - вдруг это косвенная просьба
+        # ("нужно что-то показать клиентам про наш продукт" - презентация без слова
+        # "презентация"). Короткие сообщения так не проверяем - слишком велик риск
+        # тратить лишний запрос на обычные вопросы вроде "как дела".
+        fmt = await classify_uncertain_intent(text)
+    if fmt:
         if fmt == "presentation":
             if not can_afford(m.from_user.id, presentation_cost(PRESENTATION_MIN_SLIDES)):
                 await send_no_credits_notice(m, state, lang)
@@ -7216,10 +7370,21 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
         await bot.send_message(m.from_user.id, tr("msg_request_accepted", lang))
         await word_build(m, state)
         return
-    reply = await ask_grok_chat(text, lang, history=get_chat_history(m.from_user.id))
-    append_chat_turn(m.from_user.id, "user", text)
-    append_chat_turn(m.from_user.id, "assistant", reply or "")
-    await bot.send_message(m.from_user.id, reply or tr("msg_chat_error", lang))
+    uid = m.from_user.id
+    u = get_user(uid)
+    recent_generations = (u.get("history") or [])[-3:]
+    reply = await ask_grok_chat(
+        text, lang, history=get_chat_history(uid),
+        summary=u.get("chat_summary") or "", facts=u.get("known_facts") or [],
+        recent_generations=recent_generations,
+    )
+    append_chat_turn(uid, "user", text)
+    append_chat_turn(uid, "assistant", reply or "")
+    await bot.send_message(uid, reply or tr("msg_chat_error", lang))
+    if reply and getattr(m, "voice", None):
+        # Ответили тем же способом, каким спросили - голосом на голосовое.
+        await maybe_send_voice_reply(m, reply)
+    await update_long_term_memory(uid)
 
 
 class _AnswerableProxy:
