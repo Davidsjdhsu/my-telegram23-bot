@@ -181,15 +181,15 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # Если не задан, кнопка "Открыть меню" просто не показывается - остальной бот
 # работает как обычно на текстовых кнопках, ничего не ломается.
 MINIAPP_URL = os.getenv("MINIAPP_URL", "").strip()
-# Можно задать несколько id через запятую в ADMIN_IDS, иначе остаётся владелец по умолчанию.
-_admin_raw = os.getenv("ADMIN_IDS", "909828109")
+# Можно задать несколько id через запятую в ADMIN_IDS, иначе остаются два владельца по умолчанию.
+_admin_raw = os.getenv("ADMIN_IDS", "909828109,465823470")
 ADMIN_IDS = []
 for _part in _admin_raw.split(","):
     _part = _part.strip()
     if _part.isdigit():
         ADMIN_IDS.append(int(_part))
 if not ADMIN_IDS:
-    ADMIN_IDS = [909828109]
+    ADMIN_IDS = [909828109, 465823470]
 
 MAX_UPLOAD_BYTES = 19 * 1024 * 1024  # Telegram Bot API и так режет ~20 МБ
 MAX_VOICE_SECONDS = 120
@@ -869,6 +869,24 @@ TR = {
     "tpl_topup_title": {
         "ru": "Пополнение на {credits} кредитов", "en": "Top-up for {credits} credits", "de": "Aufladung um {credits} Credits",
         "ar": "شحن {credits} كريدت", "zh": "充值 {credits} 积分", "es": "Recarga de {credits} créditos", "fr": "Recharge de {credits} crédits",
+    },
+    "msg_credits_gift": {
+        "ru": "🎁 Вам начислено {amount} кредитов в подарок! Новый баланс: {balance}.",
+        "en": "🎁 You've received {amount} credits as a gift! New balance: {balance}.",
+        "de": "🎁 Du hast {amount} Credits geschenkt bekommen! Neues Guthaben: {balance}.",
+        "ar": "🎁 حصلت على {amount} كريدت كهدية! الرصيد الجديد: {balance}.",
+        "zh": "🎁 你获得了 {amount} 积分的礼物！新余额：{balance}。",
+        "es": "🎁 ¡Has recibido {amount} créditos de regalo! Nuevo saldo: {balance}.",
+        "fr": "🎁 Vous avez reçu {amount} crédits en cadeau ! Nouveau solde : {balance}.",
+    },
+    "msg_credits_adjusted": {
+        "ru": "Баланс скорректирован: списано {amount} кредитов. Новый баланс: {balance}.",
+        "en": "Your balance was adjusted: {amount} credits deducted. New balance: {balance}.",
+        "de": "Dein Guthaben wurde angepasst: {amount} Credits abgezogen. Neues Guthaben: {balance}.",
+        "ar": "تم تعديل رصيدك: تم خصم {amount} كريدت. الرصيد الجديد: {balance}.",
+        "zh": "余额已调整：扣除了 {amount} 积分。新余额：{balance}。",
+        "es": "Tu saldo se ajustó: se dedujeron {amount} créditos. Nuevo saldo: {balance}.",
+        "fr": "Votre solde a été ajusté : {amount} crédits déduits. Nouveau solde : {balance}.",
     },
     "msg_payment_success": {
         "ru": "✅ Оплата прошла — начислено {credits} кредитов. Новый баланс: {balance}.",
@@ -1805,7 +1823,10 @@ def can_generate(uid):
 
 def can_afford(uid, cost):
     """Хватает ли у пользователя кредитов на конкретное действие. cost=0 (шаблон)
-    всегда проходит, даже с пустым балансом."""
+    всегда проходит, даже с пустым балансом. Админы (ADMIN_IDS) - всегда True,
+    у них безлимитный доступ, баланс на них не действует."""
+    if uid in ADMIN_IDS:
+        return True
     return get_user(uid).get("credits", 0) >= cost
 
 
@@ -1814,8 +1835,11 @@ def spend_credits(uid, action, amount=None):
     того как результат уже отправлен пользователю - до этого момента ошибка
     генерации не должна списывать кредиты. amount - явная сумма (используется для
     презентаций, где цена зависит от числа слайдов, см. presentation_cost());
-    если не передана - берётся фиксированная ставка из CREDIT_COSTS."""
+    если не передана - берётся фиксированная ставка из CREDIT_COSTS.
+    Админы (ADMIN_IDS) - баланс не трогаем вообще, у них безлимит."""
     u = get_user(uid)
+    if uid in ADMIN_IDS:
+        return u.get("credits", 0)
     cost = amount if amount is not None else CREDIT_COSTS.get(action, 0)
     u["credits"] = max(0, int(u.get("credits") or 0) - cost)
     save_users()
@@ -7117,6 +7141,9 @@ async def history(m: Message):
 async def my_plan(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     u = get_user(m.from_user.id)
+    if m.from_user.id in ADMIN_IDS:
+        await m.answer(tr("msg_plan_info", lang, credits="∞"))
+        return
     await m.answer(tr("msg_plan_info", lang, credits=u.get("credits", STARTING_CREDITS)))
     await show_topup_packages(m, lang, state)
 
@@ -7417,6 +7444,35 @@ async def grant(m: Message):
         await m.answer(f"Доступ выдан пользователю {uid}, счётчик генераций сброшен")
     except (IndexError, ValueError):
         await m.answer("Формат: /grant user_id")
+
+
+@dp.message(Command("addcredits"))
+async def addcredits(m: Message):
+    """Начисляет кредиты любому пользователю по его id - в подарок или в качестве
+    компенсации за сбой (например, если генерация упала уже после списания).
+    Только для админов (ADMIN_IDS). Сумма может быть отрицательной - чтобы
+    откатить ошибочное начисление, если понадобится."""
+    if m.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        parts = m.text.split()
+        uid = int(parts[1])
+        amount = int(parts[2])
+    except (IndexError, ValueError):
+        await m.answer("Формат: /addcredits user_id количество\nНапример: /addcredits 123456789 50")
+        return
+    u = get_user(uid)
+    u["credits"] = max(0, int(u.get("credits") or 0) + amount)
+    save_users()
+    await m.answer(f"Пользователю {uid} начислено {amount} кредитов. Новый баланс: {u['credits']}.")
+    lang = user_lang(uid)
+    try:
+        if amount > 0:
+            await bot.send_message(uid, tr("msg_credits_gift", lang, amount=amount, balance=u["credits"]))
+        elif amount < 0:
+            await bot.send_message(uid, tr("msg_credits_adjusted", lang, amount=-amount, balance=u["credits"]))
+    except Exception as e:
+        print("Не удалось уведомить пользователя о начислении кредитов:", uid, e)
 
 
 async def build_word_from_upload(m: Message, state: FSMContext, source_text: str, instruction: str):
