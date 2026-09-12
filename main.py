@@ -284,7 +284,7 @@ def normalize_word_pages(pages) -> int:
 # PAYMENT_PROVIDER_TOKEN получают у @BotFather (Bot Settings -> Payments -> ЮKassa) ПОСЛЕ
 # прохождения модерации в личном кабинете ЮKassa - пока переменная не задана, бот сам
 # откатывается на старое ручное поведение (пересылка запроса админу), ничего не падает.
-PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "").strip()
+PAYMENT_PROVIDER_TOKEN = (os.getenv("PAYMENT_PROVIDER_TOKEN") or "").strip().strip('"').strip("'")
 PAYMENT_CURRENCY = "RUB"
 
 # Три пакета с прогрессивной скидкой за объём. price_rub - в рублях (не в копейках,
@@ -481,21 +481,56 @@ async def send_topup_invoice(m: Message, lang: str, amount_rub: int):
     обработать заявку вручную, пока автоматика не готова."""
     credits = amount_rub * CREDIT_TO_RUB_RATE
     title = tr("tpl_topup_title", lang, credits=credits)
+    # Telegram жёстко режет поля инвойса: title и label — до 32 символов.
+    invoice_title = (title or "Top-up")[:32]
+    invoice_desc = (f"{title} ({amount_rub} {PAYMENT_CURRENCY})")[:255]
+    price_label = f"{amount_rub} {PAYMENT_CURRENCY}"[:32]
 
     if PAYMENT_PROVIDER_TOKEN:
         try:
+            amount_kop = int(amount_rub) * 100
+            # ЮKassa с онлайн-кассой (54-ФЗ) отклоняет платёж без чека в provider_data.
+            receipt = {
+                "receipt": {
+                    "items": [{
+                        "description": invoice_title[:128],
+                        "quantity": "1.00",
+                        "amount": {
+                            "value": f"{int(amount_rub):.2f}",
+                            "currency": PAYMENT_CURRENCY,
+                        },
+                        "vat_code": 1,
+                        "payment_mode": "full_payment",
+                        "payment_subject": "service",
+                    }]
+                }
+            }
             await bot.send_invoice(
                 chat_id=m.from_user.id,
-                title=title,
-                description=title,
+                title=invoice_title,
+                description=invoice_desc,
                 payload=f"credits:custom:{credits}",
                 provider_token=PAYMENT_PROVIDER_TOKEN,
                 currency=PAYMENT_CURRENCY,
-                prices=[LabeledPrice(label=title, amount=amount_rub * 100)],  # копейки
+                prices=[LabeledPrice(label=price_label, amount=amount_kop)],
+                need_email=True,
+                send_email_to_provider=True,
+                provider_data=json.dumps(receipt, ensure_ascii=False),
             )
         except Exception as e:
-            print("Не удалось отправить инвойс:", e)
-            await m.answer("Не получилось открыть оплату. Проверьте PAYMENT_PROVIDER_TOKEN у @BotFather и попробуйте ещё раз.")
+            print("Не удалось отправить инвойс:", repr(e))
+            err = str(e)
+            hint = "Не получилось открыть оплату."
+            low = err.lower()
+            if "provider" in low or "token" in low:
+                hint += " Токен провайдера не принят — в BotFather нужен именно Payments token ЮKassa, не секретный ключ из кабинета ЮKassa."
+            elif "title" in low or "label" in low or "too long" in low:
+                hint += " Слишком длинное название счёта."
+            elif "currency" in low or "amount" in low:
+                hint += " Проблема с валютой или суммой счёта."
+            else:
+                hint += f" Ответ Telegram: {err[:240]}"
+            await m.answer(hint)
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[
