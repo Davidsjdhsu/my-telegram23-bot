@@ -47,7 +47,11 @@
   .orb { position: fixed; border-radius: 50%; filter: blur(75px); pointer-events: none; z-index: 0; }
   .orb1 { width: 300px; height: 300px; background: #8b5cf6; opacity: .5; top: -70px; left: -70px; }
   .orb2 { width: 260px; height: 260px; background: #22d3ee; opacity: .38; top: 300px; right: -90px; }
-  .wrap { position: relative; z-index: 1; padding: 20px 18px 110px; max-width: 460px; margin: 0 auto; }
+  .wrap { position: relative; z-index: 1; padding: 20px 18px 110px; max-width: 460px; margin: 0 auto; width: 100%; }
+  .screen { width: 100%; }
+  img, svg, iframe { max-width: 100%; }
+  .portfolio-preview, .detail-preview, .mini-slide, .mini-resume, .mini-table { max-width: 100%; }
+  .hero-grid, .media-grid { width: 100%; }
 
   .glass { background: rgba(255,255,255,0.055); border: 1px solid rgba(255,255,255,0.13); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
 
@@ -591,8 +595,6 @@
           <div class="portfolio-arrow"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron" xlink:href="#i-chevron"/></svg></div>
         </div>
       </div>
-    </div>
-
     </div>
 
     <!-- ===== ЭКРАН: ДЕТАЛИЗАЦИЯ ПРИМЕРА (Резюме) ===== -->
@@ -1596,7 +1598,9 @@
   // предпросмотра и пополнения баланса, обрабатываются отдельно ниже) ---
   document.querySelectorAll('.form-back[data-back-to]').forEach(el => {
     el.addEventListener('click', () => {
-      document.querySelector(`.tab-item[data-tab="${el.dataset.backTo}"]`).click();
+      const tab = document.querySelector(`.tab-item[data-tab="${el.dataset.backTo}"]`);
+      if (tab) tab.click();
+      else showScreen(el.dataset.backTo);
     });
   });
 
