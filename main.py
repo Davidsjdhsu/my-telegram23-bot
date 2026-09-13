@@ -4495,10 +4495,14 @@ async def _build_presentation(m: Message, state: FSMContext):
         images = []
         raw_sources = []
         for i, s in enumerate(slides_data):
-            if charts[i] or layout_sequence[i] == 6:
-                # Раскладке "карточки" фото не нужно вовсе - не тратим на неё ни платную
-                # генерацию через ИИ, ни личное фото пользователя (пусть достанется слайду,
-                # который реально его покажет).
+            if charts[i] or layout_sequence[i] in (6, 7, 8):
+                # Раскладкам "карточки" (6), "нумерованные шаги" (7) и "бейджи" (8) фото не
+                # нужно вовсе - их код отрисовки его никогда не использует. Раньше сюда всё
+                # равно генерировалось (или забирало из очереди личное фото пользователя, если
+                # он его прислал) и просто отбрасывалось - слайд выходил наполовину пустым, а
+                # платная генерация или единственное присланное пользователем фото пропадали
+                # впустую. Не тратим на эти раскладки ни то, ни другое - пусть достанется
+                # слайду, который реально его покажет.
                 images.append(None)
                 continue
             own = user_photos.pop(0) if user_photos else None
@@ -4557,7 +4561,9 @@ async def _build_presentation(m: Message, state: FSMContext):
                 elif img:
                     slide.shapes.add_picture(img[1], Inches(0), Inches(0), width=Inches(6.4), height=Inches(7.5))
                 txt(slide, 7.05, 1.5, 5.5, 1.6, s.get("title", ""), 30, sc["ink"], True, font_name=sc["heading_font"])
-                rect(slide, 7.05, 3.25, 0.85, 0.05, sc["line"])
+                # Раньше здесь была тонкая декоративная полоска-акцент под заголовком -
+                # убрана: это как раз тот самый штамп "сделано нейросетью", вместо неё
+                # просто оставлен воздух (см. правило "NEVER use accent lines" в гайде по слайдам).
                 box = slide.shapes.add_textbox(Inches(7.05), Inches(3.5), Inches(5.5), Inches(3.2))
                 tf = box.text_frame
                 tf.word_wrap = True
@@ -4577,12 +4583,16 @@ async def _build_presentation(m: Message, state: FSMContext):
                 p.font.size = Pt(15)
                 p.font.color.rgb = RGBColor(*sc["mid"])
                 p.font.name = "Calibri"
+                # Раньше здесь не было номера страницы вовсе - раскладка "фото сверху" была
+                # единственной (вместе с зеркальной №4 ниже), где счётчик "N / N" пропадал
+                # из готовой презентации.
+                txt(slide, 0.7, 7.1, 12, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
             elif layout == 2:
                 # Заголовок уже НЕ должен доходить до x=8.7 (где начинается фото/график
                 # справа) - раньше ширина плашки (8.2") залезала на 0.2" в зону картинки,
                 # и длинные заголовки визуально обрезались, т.к. фото рисуется поверх текста.
                 txt(slide, 0.7, 1.3, 7.6, 2.2, s.get("title", ""), 36, sc["ink"], True, font_name=sc["heading_font"])
-                rect(slide, 0.7, 3.6, 1.1, 0.06, sc["line"])
+                # Декоративная полоска-акцент под заголовком убрана (см. layout 0 выше).
                 box = slide.shapes.add_textbox(Inches(0.7), Inches(3.9), Inches(7.4), Inches(2.6))
                 tf = box.text_frame
                 tf.word_wrap = True
@@ -4603,7 +4613,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                 elif img:
                     slide.shapes.add_picture(img[1], Inches(6.933), Inches(0), width=Inches(6.4), height=Inches(7.5))
                 txt(slide, 0.7, 1.5, 5.5, 1.6, s.get("title", ""), 30, sc["ink"], True, font_name=sc["heading_font"])
-                rect(slide, 0.7, 3.25, 0.85, 0.05, sc["line"])
+                # Декоративная полоска-акцент под заголовком убрана (см. layout 0 выше).
                 box = slide.shapes.add_textbox(Inches(0.7), Inches(3.5), Inches(5.5), Inches(3.2))
                 tf = box.text_frame
                 tf.word_wrap = True
@@ -4623,11 +4633,18 @@ async def _build_presentation(m: Message, state: FSMContext):
                 if chart_data:
                     add_chart(slide, 0.7, 3.15, 11.9, 4.0, chart_data, sc)
                 elif img:
-                    slide.shapes.add_picture(img[2], Inches(0), Inches(2.95), width=Inches(13.333), height=Inches(4.55))
+                    # Высота полосы уменьшена с 4.55 до 4.15 - раньше фото доходило вплотную
+                    # до нижнего края слайда (2.95 + 4.55 = 7.5"), и разместить под ним номер
+                    # страницы было некуда (пришлось бы рисовать поверх фото). Теперь внизу
+                    # остаётся свободная полоса фона под счётчик, как и в остальных раскладках.
+                    slide.shapes.add_picture(img[2], Inches(0), Inches(2.95), width=Inches(13.333), height=Inches(4.15))
+                # Раньше здесь не было номера страницы вовсе - см. комментарий у layout 1 выше,
+                # та же самая пропажа счётчика была и в его зеркальной раскладке.
+                txt(slide, 0.7, 7.15, 12, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
             elif layout == 5:
                 # Зеркало layout 2: фото - слева мелко, текст - справа.
                 txt(slide, 5.2, 1.3, 7.4, 2.2, s.get("title", ""), 36, sc["ink"], True, font_name=sc["heading_font"])
-                rect(slide, 5.2, 3.6, 1.1, 0.06, sc["line"])
+                # Декоративная полоска-акцент под заголовком убрана (см. layout 0 выше).
                 box = slide.shapes.add_textbox(Inches(5.2), Inches(3.9), Inches(7.4), Inches(2.6))
                 tf = box.text_frame
                 tf.word_wrap = True
@@ -4647,7 +4664,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                 # для слайдов, где content уже разбит на 2 абзаца (см. фильтр при выборе
                 # раскладки выше) - каждый абзац идёт в свою карточку.
                 txt(slide, 0.7, 0.5, 11.9, 1.0, s.get("title", ""), 32, sc["ink"], True, font_name=sc["heading_font"])
-                rect(slide, 0.7, 1.55, 1.1, 0.06, sc["line"])
+                # Декоративная полоска-акцент под заголовком убрана (см. layout 0 выше).
                 blocks = slide_paragraphs(s.get("content"), 2)
                 card_w, gap, card_top, card_h = 5.85, 0.3, 2.0, 4.65
                 card_fill = card_fill_for(sc)
@@ -4707,7 +4724,11 @@ async def _build_presentation(m: Message, state: FSMContext):
                 # разбивает стену текста на читаемые смысловые блоки).
                 txt(slide, 0.7, 0.5, 11.9, 1.0, s.get("title", ""), 32, sc["ink"], True, font_name=sc["heading_font"])
                 blocks = slide_paragraphs(s.get("content"), 2)
-                row_top, row_h, badge = 2.0, 2.3, 0.5
+                # row_h был 2.3" - для обычных 2-3-строчных абзацев (Pt(16), textbox шириной
+                # ~10") это в 3-4 раза больше, чем реально занимает текст: под каждым пунктом
+                # оставалась пустая полоса высотой почти в пол-слайда, и раскладка выглядела
+                # не "воздушной", а полупустой/сломанной. 1.4" вплотную под содержимое.
+                row_top, row_h, badge = 2.0, 1.4, 0.5
                 badge_fill = card_fill_for(sc, factor=0.7)
                 for i, block in enumerate(blocks):
                     top = row_top + i * row_h
