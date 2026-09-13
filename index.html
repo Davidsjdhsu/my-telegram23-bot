@@ -407,7 +407,13 @@
   /* Мини-макет презентации: фото на весь кадр + плашка с заголовком снизу - точная
      копия логики обложки в _build_presentation() (cover_style "band"). */
   .portfolio-preview.pv-pres { padding: 0; }
-  .portfolio-preview.pv-pres img { width: 100%; height: 100%; display: block; object-fit: cover; object-position: top; }
+  /* object-position: bottom - карточка на главном экране (382x168, соотношение ~2.27)
+     заметно шире обложки презентации (520x292, ~1.78), поэтому object-fit:cover обрезает
+     лишнее по вертикали. Обложка всегда строится как "фото + тёмная подпись с заголовком
+     и номером страницы внизу" (см. cover-слайд в _build_presentation) - обрезая сверху
+     (где просто небо/волосы), а не снизу, мы всегда сохраняем подпись целиком, вместо
+     того чтобы отрезать вторую строку заголовка, как было при object-position: top. */
+  .portfolio-preview.pv-pres img { width: 100%; height: 100%; display: block; object-fit: cover; object-position: bottom; }
   .mini-slide {
     width: 100%; height: 100%; border-radius: 0; position: relative; overflow: hidden;
     background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 45%, #22d3ee 100%);
@@ -1514,34 +1520,34 @@
   });
 
   // Открытие настоящих файлов-примеров/шаблонов - статические файлы рядом с этой
-  // Предпросмотр примера ПРЯМО внутри Mini App - без выхода во внешний браузер/скачивание.
-  // Файл (.docx/.pptx/.xlsx) сам браузер отобразить не умеет, поэтому используем публичный
-  // онлайн-вьюер Microsoft (view.officeapps.live.com) во встроенном iframe - тот же приём,
-  // которым множество сайтов показывают Office-документы без загрузки специального софта.
-  // Требует, чтобы файл был доступен по публичному https-адресу (GitHub Pages подходит).
-
-  let previewReturnScreen = 'quickstart';
+  // страницей (examples/...).
+  //
+  // Раньше "Посмотреть пример" открывал файл ПРЯМО внутри Mini App через встроенный
+  // iframe с онлайн-вьюером Microsoft (view.officeapps.live.com) - в теории удобно
+  // (не покидаешь приложение), но на практике вьюер Microsoft заметно нестабилен
+  // именно внутри вложенного webview Telegram: часть клиентов блокирует у него
+  // рендер по X-Frame-Options/CSP, часть просто зависает или показывает ошибку
+  // самого Microsoft вместо документа - особенно на презентациях (файл тяжелее и
+  // сложнее устроен, чем docx/xlsx, поэтому там вьюер сыпался чаще всего). Внешняя
+  // зависимость, которую мы не контролируем - чинить нечего, только убрать.
+  //
+  // Теперь "Посмотреть пример" делает то же самое, что и "Скачать шаблон" ниже:
+  // отдаёт ссылку через tg.openLink(). Файл открывается либо встроенным просмотром
+  // самого Telegram, либо системным приложением на устройстве - оба варианта
+  // штатные и не зависят от стороннего сервиса.
   document.querySelectorAll('[data-view]').forEach(el => {
     el.addEventListener('click', () => {
       const url = resolveAssetUrl(el.dataset.view);
-      const activeScreen = document.querySelector('.screen.active');
-      previewReturnScreen = activeScreen ? activeScreen.id.replace('screen-', '') : 'quickstart';
-      document.getElementById('previewTitle').textContent = t(el.dataset.titleKey || 'viewExampleBtn');
-      document.getElementById('previewFrame').src =
-        'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(url);
-      showScreen('preview');
+      const tg = getTg();
       getTg()?.HapticFeedback?.impactOccurred('light');
+      if (tg?.openLink) tg.openLink(url); else window.open(url, '_blank');
     });
   });
-  document.getElementById('previewBackBtn').addEventListener('click', () => {
-    document.getElementById('previewFrame').src = 'about:blank';
-    showScreen(previewReturnScreen);
-  });
 
-  // "Скачать шаблон" - это осознанное действие "забрать файл себе", поэтому здесь, в отличие
-  // от предпросмотра, открываем/скачиваем по-настоящему (tg.openLink надёжнее прямого клика
-  // по <a> внутри ограниченного webview Mini App - так Telegram рекомендует открывать внешние
-  // ресурсы; вне Telegram, при тестовом просмотре, открываем как обычную ссылку).
+  // "Скачать шаблон" - открывается тем же способом, что и пример выше (tg.openLink
+  // надёжнее прямого клика по <a> внутри ограниченного webview Mini App - так Telegram
+  // рекомендует открывать внешние ресурсы; вне Telegram, при тестовом просмотре,
+  // открываем как обычную ссылку).
   document.querySelectorAll('[data-download]').forEach(el => {
     el.addEventListener('click', () => {
       const url = resolveAssetUrl(el.dataset.download);
