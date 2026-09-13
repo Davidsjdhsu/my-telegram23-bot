@@ -3399,18 +3399,11 @@ def main_kb(lang="ru", uid=None):
     # Кнопка открытия Mini App здесь больше не дублируется - её роль полностью
     # взяла на себя нативная кнопка меню Telegram (см. sync_menu_button), которая
     # висит слева от поля ввода постоянно и не занимает место в обычной клавиатуре.
-    #
-    # Раньше (см. историю правок) она всё равно добавлялась и сюда, вопреки этому же
-    # комментарию - в reply-клавиатуре WebApp-кнопка растягивается на всю ширину и
-    # выглядит непропорционально большой, а главное - при запуске Mini App именно
-    # через неё Telegram не всегда сразу даёт tg.initData (в отличие от запуска через
-    # нативную кнопку меню), из-за чего sendAction() в index.html иногда уходил в
-    # HTTP-ветку без валидной initData и падал с "Не удалось отправить запрос".
-    # Раз роль полностью покрывает нативная кнопка меню - тут её действительно
-    # убираем, а не только на словах в комментарии.
     rows = []
     if uid is not None:
-        pass  # uid оставлен в сигнатуре - используется остальными вызывающими местами
+        miniapp_url = build_miniapp_url(get_user(uid))
+        if miniapp_url:
+            rows.append([KeyboardButton(text=tr("btn_open_miniapp", lang), web_app=WebAppInfo(url=miniapp_url))])
     rows += [
         [KeyboardButton(text=tr("btn_pres", lang))],
         [KeyboardButton(text=tr("btn_word", lang))],
