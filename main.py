@@ -513,13 +513,24 @@ async def send_topup_invoice(m: Message, lang: str, amount_rub: int):
     # Прямой API ЮKassa - в приоритете, если настроен (даёт доступ ко всем способам
     # оплаты, включённым в личном кабинете, включая СБП - в отличие от ограниченного
     # протокола Telegram Bot Payments ниже, где доступны только карта/ЮMoney/SberPay).
+    #
+    # Две отдельные кнопки/платежа, а не один общий способ выбора, потому что у них
+    # разная надёжность на телефоне: диплинк из кнопки конкретного банка (SberPay
+    # и т.п.) на общей странице выбора ЮKassa открывается через её JS и часто просто
+    # "отправляет ссылку", а не переключает на само приложение банка (ограничение
+    # встроенных браузеров/WebView, а не нашего кода) - тогда как ссылка СБП с самого
+    # начала спроектирована именно под открытие банковского приложения и работает
+    # надёжнее. Пользователю честно даём выбор, а не гадаем за него.
     if YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY:
-        pay_url = await create_yookassa_payment(m.from_user.id, amount_rub, credits)
-        if pay_url:
-            kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=tr("tpl_pay_btn", lang, amount=amount_rub), url=pay_url)
-            ]])
-            await m.answer(f"{title}\n\n{amount_rub} ₽", reply_markup=kb)
+        sbp_url = await create_yookassa_payment(m.from_user.id, amount_rub, credits, payment_method="sbp")
+        generic_url = await create_yookassa_payment(m.from_user.id, amount_rub, credits)
+        buttons = []
+        if sbp_url:
+            buttons.append([InlineKeyboardButton(text=tr("tpl_pay_btn_sbp", lang, amount=amount_rub), url=sbp_url)])
+        if generic_url:
+            buttons.append([InlineKeyboardButton(text=tr("tpl_pay_btn", lang, amount=amount_rub), url=generic_url)])
+        if buttons:
+            await m.answer(f"{title}\n\n{amount_rub} ₽", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
             return
         print("Не удалось создать платёж через прямой API ЮKassa, пробую запасной способ (Telegram Payments)")
 
@@ -1012,6 +1023,12 @@ TR = {
     "tpl_pay_btn": {
         "ru": "💳 Оплатить {amount} ₽", "en": "💳 Pay {amount} ₽", "de": "💳 {amount} ₽ bezahlen",
         "ar": "💳 ادفع {amount} ₽", "zh": "💳 支付 {amount} ₽", "es": "💳 Pagar {amount} ₽", "fr": "💳 Payer {amount} ₽",
+    },
+    "tpl_pay_btn_sbp": {
+        "ru": "⚡ Оплатить {amount} ₽ через СБП", "en": "⚡ Pay {amount} ₽ via Fast Payment System (SBP)",
+        "de": "⚡ {amount} ₽ per Schnellzahlungssystem (SBP) bezahlen", "ar": "⚡ ادفع {amount} ₽ عبر نظام الدفع السريع (SBP)",
+        "zh": "⚡ 通过快捷支付系统（SBP）支付 {amount} ₽", "es": "⚡ Pagar {amount} ₽ mediante el Sistema de Pagos Rápidos (SBP)",
+        "fr": "⚡ Payer {amount} ₽ via le Système de Paiement Rapide (SBP)",
     },
     "msg_topup_not_ready": {
         "ru": "Оплата пока подключается — ваш запрос уже передан, баланс пополним вручную в ближайшее время.",
@@ -4693,6 +4710,15 @@ async def _build_presentation(m: Message, state: FSMContext):
                 line_l = badge_l + badge / 2 - 0.012
                 if len(blocks) > 1:
                     rect(slide, line_l, step_top + badge, 0.024, step_h * (len(blocks) - 1), sc["mute"])
+                # Цифра в бейдже раньше красилась в sc["bg"] в расчёте на то, что это всегда
+                # контрастно с заливкой бейджа (sc["line"]) - верно для светлого варианта темы,
+                # но "line" - единственный цвет, который invert_colors() НЕ трогает при
+                # построении тёмного варианта (см. sandwich_colors/invert_colors выше). У тем,
+                # где ink совпадает с line (fashion, nature), тёмный sc["bg"] оказывается
+                # равен sc["line"] - и номер становится того же цвета, что и сам бейдж, то
+                # есть невидимым. Берём цвет цифры от яркости самой заливки бейджа, а не от
+                # фона слайда - тогда контраст гарантирован в любой теме и на любом варианте.
+                badge_num_color = (255, 255, 255) if _relative_luminance(sc["line"]) < 0.5 else (20, 20, 20)
                 for i, block in enumerate(blocks):
                     row_top = step_top + i * step_h
                     rect(slide, badge_l, row_top, badge, badge, sc["line"], rounded=True, radius=0.28)
@@ -4704,7 +4730,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                     np_.alignment = PP_ALIGN.CENTER
                     np_.font.size = Pt(20)
                     np_.font.bold = True
-                    np_.font.color.rgb = RGBColor(*sc["bg"])
+                    np_.font.color.rgb = RGBColor(*badge_num_color)
                     np_.font.name = sc["heading_font"]
                     ntf.vertical_anchor = MSO_ANCHOR.MIDDLE
                     box = slide.shapes.add_textbox(Inches(badge_l + badge + 0.4), Inches(row_top - 0.08),
@@ -8405,12 +8431,15 @@ async def api_action_handler(request):
     return _aiohttp_web.json_response({"ok": True})
 
 
-async def create_yookassa_payment(uid: int, amount_rub: int, credits: int) -> str | None:
+async def create_yookassa_payment(uid: int, amount_rub: int, credits: int, payment_method: str | None = None) -> str | None:
     """Создаёт платёж напрямую через API ЮKassa (не через Telegram Payments) - так
     доступны все включённые в личном кабинете способы оплаты, включая СБП, а не
     только карта/ЮMoney/SberPay из ограниченного протокола Telegram Bot Payments.
-    Возвращает ссылку на страницу оплаты ЮKassa или None при ошибке/если ключи
-    ещё не настроены (тогда вызывающий код должен откатиться на прежний способ)."""
+    payment_method - необязательный конкретный способ ("sbp" и т.п.): если передан,
+    ЮKassa сразу ведёт на экран ЭТОГО способа (например, выбор банка для СБП-диплинка)
+    вместо общей страницы со списком карта/ЮMoney/SberPay. Возвращает ссылку на
+    страницу оплаты ЮKassa или None при ошибке/если ключи ещё не настроены (тогда
+    вызывающий код должен откатиться на прежний способ)."""
     if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
         return None
     title = f"Пополнение на {credits} кредитов"
@@ -8432,6 +8461,8 @@ async def create_yookassa_payment(uid: int, amount_rub: int, credits: int) -> st
             }],
         },
     }
+    if payment_method:
+        payload["payment_method_data"] = {"type": payment_method}
     try:
         async with httpx.AsyncClient(timeout=20.0) as http_client:
             r = await http_client.post(
