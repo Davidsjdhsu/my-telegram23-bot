@@ -8,6 +8,11 @@ from urllib.parse import urlencode
 import re
 import time
 import threading
+import uuid
+import hmac
+import hashlib
+from urllib.parse import parse_qsl
+from aiohttp import web as _aiohttp_web
 import colorsys
 from collections import deque
 from datetime import datetime
@@ -20,6 +25,7 @@ from aiogram.types import (Message, FSInputFile, ReplyKeyboardMarkup, KeyboardBu
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.base import StorageKey
 from openai import AsyncOpenAI
 from docx import Document
 from docx.shared import Pt as DocxPt, Cm, RGBColor as DocxRGB
@@ -198,6 +204,25 @@ for _part in (os.getenv("PAYMENT_NOTIFY_IDS") or "7944308918").split(","):
         PAYMENT_NOTIFY_IDS.append(int(_part))
 
 SUPPORT_USERNAME = (os.getenv("SUPPORT_USERNAME") or "AlixDocSupport").strip().lstrip("@")
+
+# --- Веб-сервер (Mini App + приём вебхуков ЮKassa) --------------------------------------
+# WEB_BASE_URL - собственный публичный HTTPS-адрес этого сервиса (после переключения
+# Render с Background Worker на Web Service Render сам выдаёт такой адрес вида
+# https://<имя-сервиса>.onrender.com - без всякого отдельного домена).
+WEB_BASE_URL = (os.getenv("WEB_BASE_URL") or "").strip().rstrip("/")
+# Папка со статикой Mini App (index.html, examples/...) - если решили разместить
+# страницу на этом же сервере, а не на GitHub Pages. Если папки нет - веб-сервер
+# просто не будет отдавать статику, вебхук и /api/action при этом продолжат работать.
+MINIAPP_STATIC_DIR = os.path.join(BASE_DIR, "public")
+
+# --- Прямой API ЮKassa (не через Telegram Payments) -------------------------------------
+# Нужен для способов оплаты, которых нет в ограниченном протоколе Telegram Bot Payments
+# (там доступны только карта, ЮMoney и SberPay) - в первую очередь ради СБП.
+# ShopId и Секретный ключ берутся в личном кабинете ЮKassa: Настройки -> API.
+YOOKASSA_SHOP_ID = (os.getenv("YOOKASSA_SHOP_ID") or "").strip()
+YOOKASSA_SECRET_KEY = (os.getenv("YOOKASSA_SECRET_KEY") or "").strip()
+BOT_USERNAME = (os.getenv("BOT_USERNAME") or "AlixDocBot").strip().lstrip("@")
+_processed_yookassa_payment_ids = set()  # защита от повторной обработки одного и того же вебхука
 COLLAB_USERNAME = (os.getenv("COLLAB_USERNAME") or "AlixDocCooperation").strip().lstrip("@")
 
 MAX_UPLOAD_BYTES = 19 * 1024 * 1024  # Telegram Bot API и так режет ~20 МБ
@@ -436,7 +461,10 @@ class Form(StatesGroup):
     waiting_topup_amount = State()
 
 
-MIN_TOPUP_RUB = 50  # минимальная сумма пополнения
+MIN_TOPUP_RUB = 60  # минимальная сумма пополнения - ниже этого ЮKassa/эквайер отклоняет
+# платёж с ошибкой по валюте/сумме счёта (проверено эмпирически: 50 ₽ стабильно
+# падает, 60 ₽ стабильно проходит) - похоже на реальный нижний порог на стороне
+# провайдера, а не баг в нашем коде, поэтому просто держим планку выше этой границы.
 MAX_TOPUP_RUB = 9999  # верхняя граница разовой суммы пополнения
 CREDIT_TO_RUB_RATE = 1  # 1 рубль = 1 кредит - без пакетов, любая сумма от минимума
 
@@ -481,6 +509,20 @@ async def send_topup_invoice(m: Message, lang: str, amount_rub: int):
     обработать заявку вручную, пока автоматика не готова."""
     credits = amount_rub * CREDIT_TO_RUB_RATE
     title = tr("tpl_topup_title", lang, credits=credits)
+
+    # Прямой API ЮKassa - в приоритете, если настроен (даёт доступ ко всем способам
+    # оплаты, включённым в личном кабинете, включая СБП - в отличие от ограниченного
+    # протокола Telegram Bot Payments ниже, где доступны только карта/ЮMoney/SberPay).
+    if YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY:
+        pay_url = await create_yookassa_payment(m.from_user.id, amount_rub, credits)
+        if pay_url:
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=tr("tpl_pay_btn", lang, amount=amount_rub), url=pay_url)
+            ]])
+            await m.answer(f"{title}\n\n{amount_rub} ₽", reply_markup=kb)
+            return
+        print("Не удалось создать платёж через прямой API ЮKassa, пробую запасной способ (Telegram Payments)")
+
     # Telegram жёстко режет поля инвойса: title и label — до 32 символов.
     invoice_title = (title or "Top-up")[:32]
     invoice_desc = (f"{title} ({amount_rub} {PAYMENT_CURRENCY})")[:255]
@@ -2704,6 +2746,16 @@ DOCUMENT_ACTION_VERBS = [
 NEGATION_PATTERNS = ["не хочу", "не нужен", "не нужна", "не нужно", "не надо", "не буду", "don't", "do not"]
 
 
+THIN_INPUT_CHAR_THRESHOLD = 80  # примерно 12-15 слов - короче этого считаем вводные скудными
+
+
+def is_thin_input(text: str) -> bool:
+    """Действительно ли вводных мало - подсказку "добавьте цель, факты и требования"
+    показываем ТОЛЬКО когда это правда, а не всегда подряд (раньше показывалась
+    безусловно, даже в ответ на подробный абзац - это лишь раздражало)."""
+    return len((text or "").strip()) < THIN_INPUT_CHAR_THRESHOLD
+
+
 def looks_like_document_request(text: str) -> bool:
     t = (text or "").lower()
     if any(neg in t for neg in NEGATION_PATTERNS):
@@ -3294,14 +3346,21 @@ def build_miniapp_url(u):
     if not MINIAPP_URL:
         return None
     history_short = [h[:60] for h in (u.get("history") or [])[-8:]]
-    params = urlencode({
+    params = {
         "name": u.get("name") or "",
         "credits": u.get("credits", STARTING_CREDITS),
         "mode": u.get("control_mode", "buttons"),
         "history": json.dumps(history_short, ensure_ascii=False),
         "lang": u.get("lang", "ru"),
         "v": MINIAPP_VERSION,
-    })
+    }
+    if WEB_BASE_URL:
+        # Позволяет Mini App отправлять действия через свой HTTP (/api/action) -
+        # единственный способ, который работает и при запуске через системную
+        # кнопку меню чата, а не только через кнопку в reply-клавиатуре (см.
+        # sendAction в index.html и api_action_handler/sync_menu_button в этом файле).
+        params["api"] = WEB_BASE_URL
+    params = urlencode(params)
     sep = "&" if "?" in MINIAPP_URL else "?"
     return f"{MINIAPP_URL}{sep}{params}"
 
@@ -3751,17 +3810,26 @@ async def sync_menu_button(chat_id: int, u: dict, lang: str):
     """Настраивает нативную кнопку меню Telegram (та, что сидит слева от поля ввода
     сообщения, а не внутри Mini App).
 
-    ОТКЛЮЧЕНО НАМЕРЕННО: системная кнопка меню запускает Mini App способом, при
-    котором Telegram.WebApp.sendData() не работает (это ограничение платформы,
-    sendData поддерживается только при запуске через кнопку в reply-клавиатуре -
-    см. main_kb/btn_open_miniapp). У бота нет публичного HTTP-адреса (сервис на
-    Render типа Background Worker, без входящего трафика), значит обходной путь
-    через свой API тоже недоступен без миграции хостинга. Поэтому кнопка меню
-    всегда ставится в MenuButtonDefault (список команд бота), а единственный
-    рабочий вход в Mini App - кнопка "✨ Открыть меню" в обычной клавиатуре
-    (см. main_kb), которая запускает Mini App как раз тем способом, где
-    sendData исправно работает."""
+    Раньше была отключена намеренно: системная кнопка меню запускает Mini App
+    способом, при котором Telegram.WebApp.sendData() не работает (ограничение
+    платформы - sendData поддерживается только при запуске через кнопку в
+    reply-клавиатуре, см. main_kb/btn_open_miniapp), а обходного пути через свой
+    API не было, пока сервис был Background Worker без входящего HTTP.
+
+    Теперь, когда WEB_BASE_URL настроен (сервис переключён на Web Service), Mini
+    App умеет отправлять действия через /api/action вместо sendData (см. sendAction
+    в index.html) - значит и запуск через системную кнопку меню становится рабочим,
+    поэтому включаем MenuButtonWebApp. Если WEB_BASE_URL ещё не задан - остаёмся на
+    старом безопасном поведении (MenuButtonDefault + кнопка в клавиатуре)."""
     try:
+        if WEB_BASE_URL:
+            miniapp_url = build_miniapp_url(u)
+            if miniapp_url:
+                await bot.set_chat_menu_button(
+                    chat_id=chat_id,
+                    menu_button=MenuButtonWebApp(text=tr("btn_open_miniapp", lang), web_app=WebAppInfo(url=miniapp_url)),
+                )
+                return
         await bot.set_chat_menu_button(chat_id=chat_id, menu_button=MenuButtonDefault())
     except Exception as e:
         print("Не удалось установить кнопку меню чата:", chat_id, e)
@@ -3933,7 +4001,8 @@ async def process_topic(m: Message, state: FSMContext):
         return
     name, _ = pick_theme(text)
     await state.update_data(topic=text, extra="", extra_used=0, theme_name=name)
-    await m.answer(tr("msg_thin_input", lang))
+    if is_thin_input(text):
+        await m.answer(tr("msg_thin_input", lang))
     style_label = THEME_LABELS_I18N.get(name, {}).get(lang, THEME_LABELS.get(name, name))
     await m.answer(
         tr("msg_style_fits_topic", lang, style=style_label),
@@ -3955,7 +4024,8 @@ async def process_user_text(m: Message, state: FSMContext):
     name, _ = pick_theme(text)
     topic = text[:80].replace("\n", " ")
     await state.update_data(user_text=text, topic=topic, extra="", extra_used=0, theme_name=name)
-    await m.answer(tr("msg_thin_input", lang))
+    if is_thin_input(text):
+        await m.answer(tr("msg_thin_input", lang))
     style_label = THEME_LABELS_I18N.get(name, {}).get(lang, THEME_LABELS.get(name, name))
     await m.answer(
         tr("msg_style_fits_text", lang, style=style_label),
@@ -6131,7 +6201,8 @@ async def waiting_excel_mode_fallback(m: Message, state: FSMContext):
 async def excel_topic(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     await state.update_data(excel_topic=m.text or "")
-    await m.answer(tr("msg_thin_input", lang))
+    if is_thin_input(m.text):
+        await m.answer(tr("msg_thin_input", lang))
     await m.answer(tr("msg_build_table_q", lang), reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
@@ -6140,7 +6211,8 @@ async def excel_topic(m: Message, state: FSMContext):
 async def excel_data(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     await state.update_data(excel_topic=m.text or "")
-    await m.answer(tr("msg_thin_input", lang))
+    if is_thin_input(m.text):
+        await m.answer(tr("msg_thin_input", lang))
     await m.answer(tr("msg_build_table_q", lang), reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
@@ -6149,7 +6221,8 @@ async def excel_data(m: Message, state: FSMContext):
 async def excel_startup_data(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     await state.update_data(excel_topic=m.text or "")
-    await m.answer(tr("msg_thin_input", lang))
+    if is_thin_input(m.text):
+        await m.answer(tr("msg_thin_input", lang))
     await m.answer(tr("msg_build_model_q", lang), reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
@@ -6974,7 +7047,8 @@ WORD_SIZE_KINDS = {"referat", "report", "essay", "coursework"}
 async def word_after_input(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
-    await m.answer(tr("msg_thin_input", lang))
+    if is_thin_input(data.get("user_text") or data.get("topic") or ""):
+        await m.answer(tr("msg_thin_input", lang))
     await m.answer(tr("msg_which_size", lang), reply_markup=word_size_kb(lang))
     await state.set_state(Form.waiting_word_size)
 
@@ -7152,10 +7226,28 @@ async def word_build(m: Message, state: FSMContext):
     # нужны точные числовые ориентиры по объёму на раздел, иначе она работает
     # по привычке писать компактно, независимо от того, сколько токенов доступно.
     words_total = pages * 280
-    length_hint = (
-        f"\nЦелевой объём документа — {pages} страниц Word (примерно {words_total} слов). "
-        "Пиши ровно на этот объём: не короче и без воды ради объёма."
-    )
+    if kind in WORD_SIZE_KINDS and pages >= 4:
+        # Курсовые/рефераты/доклады/эссе на серьёзный объём (4+ страниц - явно не
+        # "коротко для галочки") - плоская формула "страницы×280 слов" тут не годится:
+        # без явного минимума на раздел модель может размазать общий объём неровно,
+        # оставив часть разделов формальными 2-3 предложениями вместо полноценного
+        # раскрытия. Пороги примерно как для реальных учебных работ такого типа.
+        section_min_map = {"coursework": 600, "referat": 350, "report": 220, "essay": 220}
+        section_min = section_min_map.get(kind, 250)
+        length_hint = (
+            f"\nЭто полноценная работа для сдачи (не черновик и не план), целевой объём — "
+            f"примерно {words_total} слов ({pages} страниц Word). Каждый содержательный "
+            f"раздел (кроме титульного листа, содержания и списка литературы) — "
+            f"НЕ МЕНЕЕ {section_min} слов: развёрнутые абзацы с фактами, примерами, "
+            "анализом, а не общие фразы в 2-3 предложения. Не экономь на глубине ради "
+            "краткости - лучше раскрыть меньше подтем, но каждую по-настоящему полно."
+        )
+        gen_max_tokens = max(gen_max_tokens, 8000)  # глубокому тексту нужен запас токенов с лихвой
+    else:
+        length_hint = (
+            f"\nЦелевой объём документа — {pages} страниц Word (примерно {words_total} слов). "
+            "Пиши ровно на этот объём: не короче и без воды ради объёма."
+        )
     # Модель склонна писать заключение как краткий пересказ глав и не проверять
     # число источников - это отдельная, часто игнорируемая инструкция, поэтому
     # прописываем её явно, а не полагаемся на общее описание вида документа.
@@ -7467,6 +7559,64 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
         # Ответили тем же способом, каким спросили - голосом на голосовое.
         await maybe_send_voice_reply(m, reply)
     await update_long_term_memory(uid)
+
+
+def verify_telegram_init_data(init_data: str) -> dict | None:
+    """Проверяет подлинность initData, которую Mini App передаёт в /api/action -
+    без этого кто угодно мог бы прислать чужой user_id и подделать действие от
+    имени другого человека. Алгоритм ровно тот, что описан в официальной
+    документации Telegram (проверка HMAC-SHA256 с секретом, производным от
+    токена бота). Возвращает распарсенные данные (включая user) при успехе,
+    иначе None - вызывающий код должен отклонить запрос как есть, без попытки
+    угадать/восстановить пользователя из невалидных данных."""
+    try:
+        pairs = dict(parse_qsl(init_data, strict_parsing=True))
+        received_hash = pairs.pop("hash", None)
+        if not received_hash:
+            return None
+        data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+        secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+        computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(computed_hash, received_hash):
+            return None
+        if "user" in pairs:
+            pairs["user"] = json.loads(pairs["user"])
+        return pairs
+    except Exception as e:
+        print("Не удалось провалидировать initData:", e)
+        return None
+
+
+class _FakeUser:
+    def __init__(self, uid, first_name=""):
+        self.id = uid
+        self.username = None
+        self.first_name = first_name or ""
+        self.is_bot = False
+
+
+class _FakeChat:
+    def __init__(self, uid):
+        self.id = uid
+        self.type = "private"
+
+
+class _FakeMessageForApi:
+    """Минимальная замена настоящему aiogram Message - только для действий, которые
+    пришли через /api/action (нативная кнопка меню чата, без sendData - см.
+    verify_telegram_init_data выше и обработчик api_action_handler ниже).
+    Даёт ровно те атрибуты, что реально читаются в _handle_miniapp_payload и всей
+    цепочке вызовов генерации (from_user/chat/voice/caption/text) - см. проверку
+    через grep по m.* перед тем, как это писать. Оборачивается в _AnswerableProxy
+    (как и настоящий web_app_data), чтобы answer()/answer_document() гарантированно
+    уходили через bot.send_* с явным chat_id, а не пытались вызвать методы
+    настоящего Message, которых у этой заглушки нет."""
+    def __init__(self, uid, first_name=""):
+        self.from_user = _FakeUser(uid, first_name)
+        self.chat = _FakeChat(uid)
+        self.voice = None
+        self.caption = None
+        self.text = None
 
 
 class _AnswerableProxy:
@@ -8182,39 +8332,167 @@ async def global_error_handler(event):
     return True
 
 
-def start_health_check_server():
-    """Render (и подобные платформы) для сервисов типа "Web Service" ждут, что
-    приложение ответит на HTTP-запрос проверки здоровья на порту из переменной
-    окружения PORT - иначе помечает деплой как неудавшийся, даже если сам бот
-    прекрасно работает через long-polling и никакого HTTP на самом деле не требует.
-    Этот сервер не имеет отношения к Mini App (та веб-страница отдельно живёт на
-    GitHub Pages) - он существует только чтобы Render видел "живой" сервис.
-    Работает в отдельном потоке на чистой стандартной библиотеке (без aiohttp),
-    чтобы не тянуть ещё одну внешнюю зависимость поверх и без того шаткого билда."""
-    import threading
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+async def api_action_handler(request):
+    """Приём действий из Mini App через свой HTTP - работает при ЛЮБОМ способе
+    открытия Mini App, включая системную кнопку меню чата (где Telegram.WebApp.
+    sendData() платформой не поддерживается - см. sync_menu_button). Проверяет
+    initData (подлинность запроса реально от Telegram для этого пользователя),
+    строит облегчённую замену Message (_FakeMessageForApi) и прогоняет действие
+    через ТУ ЖЕ функцию _handle_miniapp_payload, что и настоящий web_app_data -
+    никакой отдельной логики для этого пути не заводится, чтобы поведение не
+    разъезжалось между способами открытия."""
+    try:
+        body = await request.json()
+    except Exception:
+        return _aiohttp_web.json_response({"error": "bad json"}, status=400)
+    init_data = body.get("initData") or ""
+    action = (body.get("action") or "").strip()
+    payload = body.get("payload") or {}
+    parsed = verify_telegram_init_data(init_data)
+    if not parsed:
+        return _aiohttp_web.json_response({"error": "invalid init data"}, status=401)
+    user = parsed.get("user") or {}
+    uid = user.get("id")
+    if not uid or not action:
+        return _aiohttp_web.json_response({"error": "missing uid/action"}, status=400)
+    try:
+        fake_m = _FakeMessageForApi(uid, user.get("first_name", ""))
+        m_proxy = ensure_answerable(fake_m)
+        state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, chat_id=uid, user_id=uid))
+        await _handle_miniapp_payload(m_proxy, state, payload, action)
+    except Exception as e:
+        print("Ошибка /api/action:", repr(e))
+        import traceback
+        traceback.print_exc()
+        try:
+            await bot.send_message(uid, "Что-то пошло не так при обработке запроса из меню. Попробуйте ещё раз.")
+        except Exception:
+            pass
+    return _aiohttp_web.json_response({"ok": True})
 
-    class _HealthHandler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"OK")
 
-        def log_message(self, format, *args):
-            pass  # не засорять логи бота запросами проверки здоровья
+async def create_yookassa_payment(uid: int, amount_rub: int, credits: int) -> str | None:
+    """Создаёт платёж напрямую через API ЮKassa (не через Telegram Payments) - так
+    доступны все включённые в личном кабинете способы оплаты, включая СБП, а не
+    только карта/ЮMoney/SberPay из ограниченного протокола Telegram Bot Payments.
+    Возвращает ссылку на страницу оплаты ЮKassa или None при ошибке/если ключи
+    ещё не настроены (тогда вызывающий код должен откатиться на прежний способ)."""
+    if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
+        return None
+    title = f"Пополнение на {credits} кредитов"
+    payload = {
+        "amount": {"value": f"{int(amount_rub):.2f}", "currency": PAYMENT_CURRENCY},
+        "confirmation": {"type": "redirect", "return_url": f"https://t.me/{BOT_USERNAME}"},
+        "capture": True,
+        "description": title[:128],
+        "metadata": {"uid": str(uid), "credits": str(credits)},
+        "receipt": {
+            "customer": {"email": f"user{uid}@{BOT_USERNAME.lower()}.telegram"},
+            "items": [{
+                "description": title[:128],
+                "quantity": "1.00",
+                "amount": {"value": f"{int(amount_rub):.2f}", "currency": PAYMENT_CURRENCY},
+                "vat_code": 1,
+                "payment_mode": "full_payment",
+                "payment_subject": "service",
+            }],
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as http_client:
+            r = await http_client.post(
+                "https://api.yookassa.ru/v3/payments",
+                json=payload,
+                auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
+                headers={"Idempotence-Key": str(uuid.uuid4()), "Content-Type": "application/json"},
+            )
+            r.raise_for_status()
+            return r.json().get("confirmation", {}).get("confirmation_url")
+    except Exception as e:
+        print("Ошибка создания платежа ЮKassa (прямой API):", e)
+        return None
 
+
+async def yookassa_webhook_handler(request):
+    """ЮKassa стучится сюда при изменении статуса платежа - нас интересует только
+    payment.succeeded. Отвечаем 200 почти всегда (в том числе на "непонятные"
+    события) - иначе ЮKassa будет бесконечно повторять доставку одного и того же
+    уведомления, приняв любой другой код ответа за временный сбой на нашей стороне."""
+    try:
+        data = await request.json()
+    except Exception:
+        return _aiohttp_web.Response(status=400, text="bad json")
+    event = data.get("event")
+    obj = data.get("object") or {}
+    if event == "payment.succeeded" and obj.get("paid"):
+        payment_id = obj.get("id")
+        if payment_id and payment_id not in _processed_yookassa_payment_ids:
+            _processed_yookassa_payment_ids.add(payment_id)
+            metadata = obj.get("metadata") or {}
+            try:
+                uid = int(metadata.get("uid"))
+                credits = int(metadata.get("credits"))
+            except (TypeError, ValueError):
+                uid = credits = None
+            if uid and credits:
+                u = get_user(uid)
+                u["credits"] = int(u.get("credits") or 0) + credits
+                save_users()
+                lang = user_lang(uid)
+                try:
+                    await bot.send_message(uid, tr("msg_payment_success", lang, credits=credits, balance=u["credits"]))
+                except Exception as e:
+                    print("Не удалось уведомить об оплате:", uid, e)
+                for admin_id in PAYMENT_NOTIFY_IDS:
+                    try:
+                        await bot.send_message(admin_id, f"💰 Оплата (ЮKassa API): {uid} пополнил на {credits} кредитов.")
+                    except Exception:
+                        pass
+    return _aiohttp_web.Response(status=200, text="ok")
+
+
+async def _health_handler(request):
+    return _aiohttp_web.Response(text="OK")
+
+
+async def _miniapp_static_handler(request):
+    """Отдаёт файлы Mini App с этого же сервера, если папка public/ существует в
+    репозитории (см. MINIAPP_STATIC_DIR) - опционально, GitHub Pages как хостинг
+    Mini App продолжает работать одновременно и независимо от этого."""
+    filename = request.match_info.get("filename", "index.html") or "index.html"
+    path = os.path.join(MINIAPP_STATIC_DIR, filename)
+    if not os.path.isdir(MINIAPP_STATIC_DIR) or not os.path.isfile(path):
+        return _aiohttp_web.Response(status=404, text="Not found")
+    return _aiohttp_web.FileResponse(path)
+
+
+async def start_web_server():
+    """Веб-сервер на aiohttp, работающий в том же asyncio event loop, что и сам бот
+    (long-polling для Telegram по-прежнему делает всю основную работу - см. main(),
+    веб-сервер НЕ заменяет его, а работает рядом). Три задачи разом: 1) отвечает
+    Render на проверку здоровья (порт из переменной PORT - без этого Render считает
+    деплой Web Service неудавшимся, даже если бот прекрасно работает), 2) отдаёт
+    статику Mini App, если она перенесена на этот же сервер (см. MINIAPP_STATIC_DIR),
+    3) принимает вебхуки от ЮKassa и действия Mini App из /api/action."""
+    app = _aiohttp_web.Application()
+    app.router.add_get("/", _health_handler)
+    app.router.add_get("/health", _health_handler)
+    app.router.add_get("/index.html", _miniapp_static_handler)
+    app.router.add_get("/{filename:.+}", _miniapp_static_handler)
+    app.router.add_post("/api/action", api_action_handler)
+    app.router.add_post("/yookassa-webhook", yookassa_webhook_handler)
+    runner = _aiohttp_web.AppRunner(app)
+    await runner.setup()
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    print(f"Health-check сервер запущен на порту {port}")
+    site = _aiohttp_web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Веб-сервер запущен на порту {port} (health-check + Mini App статика + вебхуки)")
 
 
 async def main():
     print("Бот запущен")
     print("REPLICATE TOKEN:", "YES" if REPLICATE_API_TOKEN else "NO")
-    start_health_check_server()
+    await start_web_server()
     # Текст на экране бота ДО нажатия Start (карточка профиля бота в Telegram) -
     # выставляется один раз при каждом запуске, обёрнуто в try/except, потому что
     # это не критичная для работы бота вещь: если Telegram сейчас недоступен для
