@@ -1887,7 +1887,14 @@ async def update_long_term_memory(uid):
         prev_summary = u.get("chat_summary") or ""
         prev_facts = u.get("known_facts") or []
         r = await client.chat.completions.create(
-            model="grok-3",
+            # "grok-3" официально отправлен на пенсию xAI 15.05.2026 - с этой даты xAI сама,
+            # без единой ошибки в логах, молча перенаправляет все запросы с этим именем на
+            # grok-4.3 с reasoning_effort="none" (самый быстрый/слабый режим). Отсюда и "бот
+            # стал тупым" - модель уже несколько месяцев не та, что была, а видно это только
+            # по качеству ответов. Указываем "grok-4.3" явно - по деньгам ничего не меняется
+            # (биллинг и так идёт по тарифу grok-4.3, раз xAI и так на него перенаправляет),
+            # а вот скрытого даунгрейда на reasoning_effort=none больше нет.
+            model="grok-4.3",
             messages=[
                 {"role": "system", "content": (
                     "Сожми переписку в краткое резюме (2-4 предложения, по-русски) - о чём "
@@ -2315,7 +2322,8 @@ def content_gen_lang(data: dict, interface_lang: str, mode_key: str = "mode"):
     return None
 
 
-VISION_MODEL = os.getenv("XAI_VISION_MODEL", "grok-2-vision-1212")
+VISION_MODEL = os.getenv("XAI_VISION_MODEL", "grok-4.6")  # grok-2-vision-1212 - модель конца 2024 года,
+# давно не флагман; grok-4.6 (актуальный на сейчас) официально поддерживает изображения на входе.
 IMAGE_UPLOAD_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "heic"}
 
 
@@ -2357,7 +2365,7 @@ async def ask_grok_vision(image_path: str, prompt: str, max_tokens: int = 2500) 
         b64, mime = _prepare_vision_image(image_path)
     except Exception as e:
         return f"{GROK_ERROR_PREFIX}{e}"
-    models = [VISION_MODEL, "grok-2-vision-1212", "grok-4"]
+    models = [VISION_MODEL, "grok-4.6"]  # запасной вариант тоже актуальный, не устаревший grok-2-vision-1212/grok-4
     seen = []
     for model in models:
         if model in seen:
@@ -2472,7 +2480,7 @@ async def ask_grok(prompt: str, max_tokens: int = 4000) -> str:
     for attempt in range(3):
         try:
             r = await client.chat.completions.create(
-                model="grok-3",
+                model="grok-4.3",  # grok-3 отправлен на пенсию xAI 15.05.2026, см. комментарий в update_long_term_memory()
                 messages=[
                     {"role": "system", "content": "Ты арт-директор презентаций. Пиши как живой сильный автор, не как нейросеть, и так, чтобы текст не триггерил детекторы ИИ-генерации: без канцелярита и шаблонных фраз («в современном мире», «является», «следует отметить», «данный», «невозможно переоценить», «таким образом», «подводя итог»), без идеально симметричной структуры абзацев и слишком гладких переходов. Чередуй короткие и длинные предложения неравномерно. Заголовки живые. Каждый ответ уникален. Исправляй ошибки. Только русский."},
                     {"role": "user", "content": prompt}
@@ -2776,7 +2784,7 @@ async def classify_uncertain_intent(text: str) -> str | None:
     как и раньше, а не сломает диалог."""
     try:
         r = await client.chat.completions.create(
-            model="grok-3",
+            model="grok-4.3",  # grok-3 отправлен на пенсию xAI 15.05.2026, см. комментарий в update_long_term_memory()
             messages=[
                 {"role": "system", "content": (
                     "Определи, просит ли человек СОЗДАТЬ файл - презентацию, Word-документ "
@@ -2869,7 +2877,7 @@ async def ask_grok_chat(user_text: str, lang: str = "ru", history: list = None,
         # из-за экспериментальной фичи.
         try:
             r = await client.chat.completions.create(
-                model="grok-3",
+                model="grok-4.3",  # grok-3 отправлен на пенсию xAI 15.05.2026, см. комментарий в update_long_term_memory()
                 messages=messages,
                 temperature=0.95,
                 max_tokens=1200,
@@ -2878,7 +2886,7 @@ async def ask_grok_chat(user_text: str, lang: str = "ru", history: list = None,
         except Exception as e_search:
             print("Живой поиск недоступен, отвечаю без него:", e_search)
             r = await client.chat.completions.create(
-                model="grok-3",
+                model="grok-4.3",
                 messages=messages,
                 temperature=0.95,
                 max_tokens=1200,
@@ -3059,9 +3067,14 @@ def enhance_user_photo(src_path: str, colors: dict, target_luminance=None) -> Im
     # шаге частично "отменил" бы размытие периферии.
     im = im.filter(ImageFilter.UnsharpMask(radius=1.6, percent=90, threshold=2))
 
-    # 5. Размытие фона вокруг объекта (боке) - объект (лицо/люди, если найдены) остаётся
-    # чётким, периферия кадра мягко уходит в размытие, как при съёмке с открытой диафрагмой.
-    im = _apply_depth_blur(im, subject=subject, blur_radius=10.0)
+    # 5. Размытие фона вокруг объекта (боке) - ТОЛЬКО если реально нашли лицо (subject не
+    # None). Раньше размывалось всегда, а без найденного лица "объектом" считался центр
+    # кадра - на портретах это выглядело нормально, а на любом другом фото (скриншот,
+    # документ, еда, товар, пейзаж, групповое фото с людьми не по центру) резкость в
+    # случайном месте кадра и размытая периферия читались как явный дефект, а не как
+    # профессиональная обработка. Без обнаруженного лица фото лучше оставить резким целиком.
+    if subject is not None:
+        im = _apply_depth_blur(im, subject=subject, blur_radius=10.0)
 
     # 6. Заметный цветовой тон в духе темы презентации (soft-light блендинг на 28%) -
     # объединяет разномастные фото пользователя визуально с остальными слайдами.
@@ -8413,41 +8426,72 @@ async def create_yookassa_payment(uid: int, amount_rub: int, credits: int) -> st
         return None
 
 
+async def _fetch_yookassa_payment(payment_id: str) -> dict | None:
+    """Независимо запрашивает реальное состояние платежа напрямую по API ЮKassa
+    (GET /v3/payments/{id} с Basic Auth по тем же shop_id/секретному ключу, что и
+    создание платежа). ВАЖНО: у ЮKassa вебхуки НЕ подписываются криптографически -
+    POST на /yookassa-webhook может прислать кто угодно, кто узнает этот адрес, с
+    произвольными event/paid/metadata в теле. Поэтому зачислять кредиты можно только
+    на основании ответа ЭТОГО запроса, а не полей из самого вебхука."""
+    if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as http_client:
+            r = await http_client.get(
+                f"https://api.yookassa.ru/v3/payments/{payment_id}",
+                auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
+            )
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        print("Не удалось проверить платёж ЮKassa через API:", payment_id, e)
+        return None
+
+
 async def yookassa_webhook_handler(request):
     """ЮKassa стучится сюда при изменении статуса платежа - нас интересует только
     payment.succeeded. Отвечаем 200 почти всегда (в том числе на "непонятные"
     события) - иначе ЮKassa будет бесконечно повторять доставку одного и того же
-    уведомления, приняв любой другой код ответа за временный сбой на нашей стороне."""
+    уведомления, приняв любой другой код ответа за временный сбой на нашей стороне.
+
+    Тело вебхука используем только чтобы понять, ЗА КАКИМ payment_id идти проверять
+    статус - решение о зачислении кредитов принимаем исключительно по ответу
+    _fetch_yookassa_payment(), а не по event/paid/metadata из самого запроса (это
+    защита от поддельного POST на этот адрес, см. docstring выше)."""
     try:
         data = await request.json()
     except Exception:
         return _aiohttp_web.Response(status=400, text="bad json")
-    event = data.get("event")
     obj = data.get("object") or {}
-    if event == "payment.succeeded" and obj.get("paid"):
-        payment_id = obj.get("id")
-        if payment_id and payment_id not in _processed_yookassa_payment_ids:
-            _processed_yookassa_payment_ids.add(payment_id)
-            metadata = obj.get("metadata") or {}
-            try:
-                uid = int(metadata.get("uid"))
-                credits = int(metadata.get("credits"))
-            except (TypeError, ValueError):
-                uid = credits = None
-            if uid and credits:
-                u = get_user(uid)
-                u["credits"] = int(u.get("credits") or 0) + credits
-                save_users()
-                lang = user_lang(uid)
+    payment_id = obj.get("id")
+    if data.get("event") == "payment.succeeded" and payment_id:
+        if payment_id not in _processed_yookassa_payment_ids:
+            verified = await _fetch_yookassa_payment(payment_id)
+            if verified and verified.get("status") == "succeeded" and verified.get("paid"):
+                metadata = verified.get("metadata") or {}
                 try:
-                    await bot.send_message(uid, tr("msg_payment_success", lang, credits=credits, balance=u["credits"]))
-                except Exception as e:
-                    print("Не удалось уведомить об оплате:", uid, e)
-                for admin_id in PAYMENT_NOTIFY_IDS:
+                    uid = int(metadata.get("uid"))
+                    credits = int(metadata.get("credits"))
+                except (TypeError, ValueError):
+                    uid = credits = None
+                if uid and credits:
+                    # В "обработанные" помечаем только ПОСЛЕ реального зачисления - если
+                    # тут что-то упадёт (например save_users()), ЮKassa повторит вебхук
+                    # позже, и мы не потеряем платёж молча.
+                    _processed_yookassa_payment_ids.add(payment_id)
+                    u = get_user(uid)
+                    u["credits"] = int(u.get("credits") or 0) + credits
+                    save_users()
+                    lang = user_lang(uid)
                     try:
-                        await bot.send_message(admin_id, f"💰 Оплата (ЮKassa API): {uid} пополнил на {credits} кредитов.")
-                    except Exception:
-                        pass
+                        await bot.send_message(uid, tr("msg_payment_success", lang, credits=credits, balance=u["credits"]))
+                    except Exception as e:
+                        print("Не удалось уведомить об оплате:", uid, e)
+                    for admin_id in PAYMENT_NOTIFY_IDS:
+                        try:
+                            await bot.send_message(admin_id, f"💰 Оплата (ЮKassa API): {uid} пополнил на {credits} кредитов.")
+                        except Exception:
+                            pass
     return _aiohttp_web.Response(status=200, text="ok")
 
 
