@@ -2041,6 +2041,30 @@ class VoiceToTextMiddleware(BaseMiddleware):
 dp.message.outer_middleware(VoiceToTextMiddleware())
 
 
+class SyncUserNameMiddleware(BaseMiddleware):
+    """Держит u["name"] в актуальном состоянии на КАЖДОМ сообщении, а не только на /start.
+
+    Раньше имя записывалось единственный раз - в обработчике /start. Из-за этого Mini
+    App (см. build_miniapp_url/index.html) мог показывать пустое или устаревшее имя в
+    приветствии: у пользователей, зарегистрированных до этой правки, поле "name" вообще
+    не заполнено, а у тех, кто сменил имя в Telegram уже после /start, оно просто не
+    обновлялось никогда. Сравниваем с actual m.from_user.first_name и сохраняем только
+    при реальном отличии - чтобы не дёргать save_users() (запись на диск) на каждое
+    сообщение без необходимости."""
+
+    async def __call__(self, handler, event, data):
+        if isinstance(event, Message) and event.from_user:
+            u = get_user(event.from_user.id)
+            new_name = event.from_user.first_name or ""
+            if new_name and u.get("name") != new_name:
+                u["name"] = new_name
+                save_users()
+        return await handler(event, data)
+
+
+dp.message.outer_middleware(SyncUserNameMiddleware())
+
+
 def can_generate(uid):
     u = get_user(uid)
     return u["generations"] < PLAN_LIMITS.get(u["plan"], 15)
