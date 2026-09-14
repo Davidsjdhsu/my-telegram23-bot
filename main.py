@@ -276,7 +276,7 @@ PRESENTATION_CREDITS_PER_SLIDE = 5
 PRESENTATION_MIN_SLIDES = 3  # тот же минимум, что уже валидируется в gen_presentation/detect_slide_count
 WORD_CREDITS_PER_PAGE = 5
 WORD_MIN_PAGES = 1
-WORD_MAX_PAGES = 20
+WORD_MAX_PAGES = 40  # раньше было 20 - не хватало на длинные работы вроде курсовой на 30 страниц
 
 
 def presentation_cost(slides) -> int:
@@ -404,6 +404,21 @@ def save_users():
 
 users_db = load_users()
 
+if not os.getenv("DATA_DIR"):
+    # На Render диск сервиса эфемерный: users.json (кредиты, язык, история) переживает
+    # только рестарт процесса внутри той же сборки, но стирается при каждом новом деплое
+    # или пересоздании контейнера. Чтобы кредиты пользователей не обнулялись, в Render
+    # нужно подключить Persistent Disk и указать его точку монтирования в переменной
+    # окружения DATA_DIR (Dashboard -> сервис -> Environment). Это не ошибка кода - бот
+    # продолжает работать и без этого, но каждый передеплой будет сбрасывать баланс всех
+    # пользователей обратно к STARTING_CREDITS, поэтому предупреждение всегда в логах.
+    print(
+        f"[WARN] DATA_DIR не задан - users.json хранится в {USERS_FILE} на эфемерном диске. "
+        "После любого передеплоя/рестарта контейнера на Render кредиты и история пользователей "
+        "обнулятся. Подключите Persistent Disk в настройках сервиса и укажите его путь в "
+        "переменной окружения DATA_DIR, чтобы это исправить."
+    )
+
 _bot_username_cache = {"value": None}
 
 
@@ -473,12 +488,12 @@ CREDIT_TO_RUB_RATE = 1  # 1 рубль = 1 кредит - без пакетов,
 async def send_no_credits_notice(m: Message, state: FSMContext, lang: str):
     """Единая точка для "кредитов не хватает" по всему боту - вместо того чтобы просто
     сказать об этом и отправить человека самого искать, где пополнить, сразу же
-    предлагаем это сделать (текст + тут же спрашиваем сумму пополнения/показываем
-    кнопку оплаты, в зависимости от того, подключён ли PAYMENT_PROVIDER_TOKEN -
-    см. show_topup_packages). Одно место вместо копирования одной и той же пары
-    строк в 18+ местах кода, где идёт проверка can_afford()."""
+    предлагаем это сделать: текст + готовые суммы кнопками (тот же topup_offer_kb, что
+    и у "Мой тариф" - см. my_plan) вместо того чтобы сразу принудительно спрашивать сумму
+    текстом. Одно место вместо копирования одной и той же пары строк в 18+ местах кода,
+    где идёт проверка can_afford()."""
     await m.answer(tr("msg_limit", lang))
-    await show_topup_packages(m, lang, state)
+    await m.answer(tr("msg_topup_offer", lang), reply_markup=topup_offer_kb(lang))
 
 
 async def show_topup_packages(m: Message, lang: str, state: FSMContext, amount_rub=None):
@@ -498,7 +513,7 @@ async def show_topup_packages(m: Message, lang: str, state: FSMContext, amount_r
     await m.answer(tr("msg_topup_ask_amount", lang, min=MIN_TOPUP_RUB))
 
 
-async def send_topup_invoice(m: Message, lang: str, amount_rub: int):
+async def send_topup_invoice(m: Message, lang: str, amount_rub: int, user_id: int = None, user_username: str = None):
     """Отправляет настоящий Telegram-инвойс на конкретную (уже провалидированную)
     сумму в рублях - общий код и для пути через Mini App, и для пути через чат.
     Пока PAYMENT_PROVIDER_TOKEN не подключён (ЮKassa на модерации) - вместо
@@ -507,7 +522,13 @@ async def send_topup_invoice(m: Message, lang: str, amount_rub: int):
     кнопка настоящая, в настоящем работающем боте, просто платёжный бэкенд ещё
     не подключён - при нажатии честно говорим об этом, а не притворяемся, что
     оплата прошла. Одновременно уходит уведомление админу, чтобы можно было
-    обработать заявку вручную, пока автоматика не готова."""
+    обработать заявку вручную, пока автоматика не готова.
+    user_id/user_username - опциональные явные переопределения адресата: когда m -
+    это исходящее сообщение бота (например cq.message из callback на кнопку с
+    готовой суммой), m.from_user - это сам бот, а не человек, поэтому личность
+    нужно передать отдельно, а не брать из m.from_user."""
+    uid = user_id if user_id is not None else m.from_user.id
+    uname_raw = user_username if user_username is not None else m.from_user.username
     credits = amount_rub * CREDIT_TO_RUB_RATE
     title = tr("tpl_topup_title", lang, credits=credits)
 
@@ -523,8 +544,8 @@ async def send_topup_invoice(m: Message, lang: str, amount_rub: int):
     # начала спроектирована именно под открытие банковского приложения и работает
     # надёжнее. Пользователю честно даём выбор, а не гадаем за него.
     if YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY:
-        sbp_url = await create_yookassa_payment(m.from_user.id, amount_rub, credits, payment_method="sbp")
-        generic_url = await create_yookassa_payment(m.from_user.id, amount_rub, credits)
+        sbp_url = await create_yookassa_payment(uid, amount_rub, credits, payment_method="sbp")
+        generic_url = await create_yookassa_payment(uid, amount_rub, credits)
         buttons = []
         if sbp_url:
             buttons.append([InlineKeyboardButton(text=tr("tpl_pay_btn_sbp", lang, amount=amount_rub), url=sbp_url)])
@@ -560,7 +581,7 @@ async def send_topup_invoice(m: Message, lang: str, amount_rub: int):
                 }
             }
             await bot.send_invoice(
-                chat_id=m.from_user.id,
+                chat_id=uid,
                 title=invoice_title,
                 description=invoice_desc,
                 payload=f"credits:custom:{credits}",
@@ -592,10 +613,10 @@ async def send_topup_invoice(m: Message, lang: str, amount_rub: int):
     ]])
     await m.answer(f"{title}\n\n{amount_rub} ₽", reply_markup=kb)
 
-    u = get_user(m.from_user.id)
-    uname = f"@{m.from_user.username}" if m.from_user.username else str(m.from_user.id)
+    u = get_user(uid)
+    uname = f"@{uname_raw}" if uname_raw else str(uid)
     forward_text = (f"💳 Запрос на пополнение баланса от {u.get('name') or uname} "
-                     f"({uname}, id={m.from_user.id}) на {amount_rub} ₽ ({credits} кредитов).")
+                     f"({uname}, id={uid}) на {amount_rub} ₽ ({credits} кредитов).")
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(admin_id, forward_text)
@@ -612,25 +633,51 @@ async def topup_pending_callback(cq: CallbackQuery):
     await cq.answer(tr("msg_topup_not_ready", lang), show_alert=True)
 
 
-@dp.message(Form.waiting_topup_amount)
-async def topup_amount_handler(m: Message, state: FSMContext):
-    """Разбирает сумму из свободного текста ("100", "100 руб", "100₽" - всё сойдёт,
-    берём только цифры) и отправляет счёт на эту сумму. Состояние ожидания сбрасываем
-    ТОЛЬКО при успешном вводе - если число вне диапазона, остаёмся в том же
-    состоянии и ждём повторную попытку следующим сообщением (раньше сбрасывали
-    состояние ещё до проверки, из-за чего повторный ввод улетал в обычный чат
-    вместо обработки как сумму)."""
-    lang = user_lang(m.from_user.id)
-    digits = re.sub(r"[^\d]", "", (m.text or ""))
+TOPUP_PRESET_AMOUNTS = [100, 300, 500, 1000]  # ₽ - быстрые варианты под кнопкой "Мой тариф"
+
+
+def topup_offer_kb(lang="ru"):
+    """Мягкое предложение пополнить баланс - инлайн-кнопки с готовыми суммами (нажатие
+    сразу шлёт счёт, минуя вопрос текстом) плюс отдельная кнопка "Своя сумма" для
+    произвольного значения. В отличие от прежнего поведения (см. my_plan) кнопка "Мой
+    тариф" САМА по себе больше не переводит пользователя в режим ожидания суммы -
+    это происходит только по явному нажатию одной из кнопок ниже."""
+    a = TOPUP_PRESET_AMOUNTS
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"{a[0]} ₽", callback_data=f"topup_amt:{a[0]}"),
+         InlineKeyboardButton(text=f"{a[1]} ₽", callback_data=f"topup_amt:{a[1]}")],
+        [InlineKeyboardButton(text=f"{a[2]} ₽", callback_data=f"topup_amt:{a[2]}"),
+         InlineKeyboardButton(text=f"{a[3]} ₽", callback_data=f"topup_amt:{a[3]}")],
+        [InlineKeyboardButton(text=tr("btn_topup_custom", lang), callback_data="topup_custom")],
+    ])
+
+
+@dp.callback_query(F.data.startswith("topup_amt:"))
+async def topup_amount_preset_callback(cq: CallbackQuery):
+    """Нажатие на готовую сумму под "Мой тариф" - сразу шлёт счёт, без хождения через
+    Form.waiting_topup_amount и разбора текста. cq.message - это сообщение БОТА, поэтому
+    личность плательщика передаём в send_topup_invoice явно (cq.from_user), а не полагаемся
+    на m.from_user, который в исходящем сообщении бота указывает на самого бота."""
+    lang = user_lang(cq.from_user.id)
     try:
-        amount_rub = int(digits)
-    except ValueError:
-        amount_rub = 0
-    if amount_rub < MIN_TOPUP_RUB or amount_rub > MAX_TOPUP_RUB:
-        await m.answer(tr("msg_topup_invalid_amount", lang, min=MIN_TOPUP_RUB))
+        amount_rub = int(cq.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await cq.answer()
         return
-    await state.clear()
-    await send_topup_invoice(m, lang, amount_rub)
+    if not (MIN_TOPUP_RUB <= amount_rub <= MAX_TOPUP_RUB):
+        await cq.answer()
+        return
+    await cq.answer()
+    await send_topup_invoice(cq.message, lang, amount_rub, user_id=cq.from_user.id, user_username=cq.from_user.username)
+
+
+@dp.callback_query(F.data == "topup_custom")
+async def topup_custom_callback(cq: CallbackQuery, state: FSMContext):
+    """Кнопка "Своя сумма" - единственное место, где пользователь теперь попадает в
+    Form.waiting_topup_amount из "Мой тариф" (раньше это происходило безусловно и сразу)."""
+    lang = user_lang(cq.from_user.id)
+    await cq.answer()
+    await show_topup_packages(cq.message, lang, state)
 
 
 @dp.pre_checkout_query()
@@ -748,6 +795,12 @@ TR = {
                       "ar": "➕ عرض المزيد من المستندات", "zh": "➕ 显示更多文档", "es": "➕ Mostrar más documentos", "fr": "➕ Afficher plus de documents"},
     "btn_back_categories": {"ru": "⬅️ Назад к категориям", "en": "⬅️ Back to categories", "de": "⬅️ Zurück zu Kategorien",
                             "ar": "⬅️ العودة إلى الفئات", "zh": "⬅️ 返回分类", "es": "⬅️ Volver a categorías", "fr": "⬅️ Retour aux catégories"},
+    # Общая кнопка "на один шаг назад" (в отличие от btn_back_categories выше, которая
+    # ведёт конкретно к категориям Word/Excel) - используется на шагах стиля, количества
+    # слайдов, источника фото, объёма документа и способа сборки Word/Excel, где раньше
+    # выйти можно было только полным сбросом через "Главное меню".
+    "btn_back": {"ru": "⬅️ Назад", "en": "⬅️ Back", "de": "⬅️ Zurück",
+                 "ar": "⬅️ رجوع", "zh": "⬅️ 返回", "es": "⬅️ Atrás", "fr": "⬅️ Retour"},
     "btn_8slides": {"ru": "8️⃣ 8 слайдов", "en": "8️⃣ 8 slides", "de": "8️⃣ 8 Folien", "ar": "8️⃣ 8 شرائح", "zh": "8️⃣ 8张幻灯片", "es": "8️⃣ 8 diapositivas", "fr": "8️⃣ 8 diapositives"},
     "btn_12slides": {"ru": "1️⃣2️⃣ 12 слайдов", "en": "1️⃣2️⃣ 12 slides", "de": "1️⃣2️⃣ 12 Folien", "ar": "1️⃣2️⃣ 12 شريحة", "zh": "1️⃣2️⃣ 12张幻灯片", "es": "1️⃣2️⃣ 12 diapositivas", "fr": "1️⃣2️⃣ 12 diapositives"},
     "btn_16slides": {"ru": "1️⃣6️⃣ 16 слайдов", "en": "1️⃣6️⃣ 16 slides", "de": "1️⃣6️⃣ 16 Folien", "ar": "1️⃣6️⃣ 16 شريحة", "zh": "1️⃣6️⃣ 16张幻灯片", "es": "1️⃣6️⃣ 16 diapositivas", "fr": "1️⃣6️⃣ 16 diapositives"},
@@ -972,6 +1025,19 @@ TR = {
         "es": "No se pudo obtener respuesta, inténtalo de nuevo más tarde.",
         "fr": "Impossible d'obtenir une réponse, réessayez un peu plus tard.",
     },
+    "msg_topup_offer": {
+        "ru": "Если хотите пополнить баланс — выберите сумму:",
+        "en": "If you'd like to top up your balance — pick an amount:",
+        "de": "Wenn du dein Guthaben aufladen möchtest — wähle einen Betrag:",
+        "ar": "إذا أردت شحن رصيدك - اختر مبلغاً:",
+        "zh": "如果想充值——请选择金额：",
+        "es": "Si quieres recargar tu saldo — elige un importe:",
+        "fr": "Si vous souhaitez recharger votre solde — choisissez un montant :",
+    },
+    "btn_topup_custom": {
+        "ru": "✏️ Своя сумма", "en": "✏️ Custom amount", "de": "✏️ Eigener Betrag",
+        "ar": "✏️ مبلغ آخر", "zh": "✏️ 自定义金额", "es": "✏️ Otro importe", "fr": "✏️ Autre montant",
+    },
     "msg_topup_ask_amount": {
         "ru": "На какую сумму пополнить баланс? 1 ₽ = 1 кредит. Минимум {min} ₽, максимум 9999 ₽ — пришлите число.",
         "en": "How much would you like to top up? 1 ₽ = 1 credit. Minimum {min} ₽, maximum 9999 ₽ — send a number.",
@@ -989,6 +1055,15 @@ TR = {
         "zh": "无法识别金额——请发送 {min} 到 9999 ₽ 之间的数字（例如：100）。",
         "es": "No entendí el importe — envía un número de {min} a 9999 ₽ (por ejemplo: 100).",
         "fr": "Montant non reconnu — envoyez un nombre entre {min} et 9999 ₽ (par ex. : 100).",
+    },
+    "msg_topup_cancelled": {
+        "ru": "Хорошо, не буду пополнять баланс.",
+        "en": "Okay, I won't top up the balance.",
+        "de": "In Ordnung, ich lade das Guthaben nicht auf.",
+        "ar": "حسناً، لن أشحن الرصيد.",
+        "zh": "好的，不进行充值了。",
+        "es": "De acuerdo, no recargaré el saldo.",
+        "fr": "D'accord, je ne recharge pas le solde.",
     },
     "tpl_topup_title": {
         "ru": "Пополнение на {credits} кредитов", "en": "Top-up for {credits} credits", "de": "Aufladung um {credits} Credits",
@@ -1114,8 +1189,22 @@ TR = {
         "es": "Pocos datos: el archivo saldrá genérico. Añade objetivo, hechos y requisitos para un mejor resultado.",
         "fr": "Trop peu d'infos — le fichier sera générique. Ajoutez objectif, faits et consignes pour un meilleur résultat.",
     },
-    "msg_which_size": {"ru": "Сколько страниц? 1 страница = 5 кредитов.", "en": "How many pages? 1 page = 5 credits.", "de": "Wie viele Seiten? 1 Seite = 5 Credits.",
-                       "ar": "ما الحجم المطلوب؟", "zh": "需要多少内容？", "es": "¿Qué extensión?", "fr": "Quelle ampleur ?"},
+    "msg_thin_input_long": {
+        "ru": "⚠️ Вы запросили {pages} стр., а вводных данных очень мало. При таком объёме без деталей документ рискует получиться неполным, с повторами или ошибками по теме. Рекомендуем добавить факты, тезисы и структуру — иначе можно продолжить как есть, но результат будет слабее.",
+        "en": "⚠️ You asked for {pages} pages, but gave very little input. At this length, without details the document risks coming out incomplete, repetitive, or with factual errors. We recommend adding facts, key points and structure — you can still continue as is, but the result will be weaker.",
+        "de": "⚠️ Du hast {pages} Seiten angefordert, aber sehr wenig Vorgaben gemacht. Bei diesem Umfang riskiert das Dokument ohne Details, unvollständig, sich wiederholend oder fehlerhaft zu werden. Füge besser Fakten, Thesen und Struktur hinzu — du kannst aber auch so fortfahren, das Ergebnis wird dann schwächer.",
+        "ar": "⚠️ طلبت {pages} صفحة، لكن المدخلات قليلة جدًا. بهذا الحجم وبدون تفاصيل، قد يخرج المستند ناقصًا أو مكررًا أو به أخطاء واقعية. يُفضّل إضافة حقائق ونقاط رئيسية وهيكل — يمكنك المتابعة كما هي لكن النتيجة ستكون أضعف.",
+        "zh": "⚠️ 你要求生成 {pages} 页，但提供的信息非常少。在这种篇幅下，缺少细节容易导致文档内容不完整、重复，或出现事实性错误。建议补充事实、要点和结构——当然也可以直接继续，但效果会打折扣。",
+        "es": "⚠️ Pediste {pages} páginas, pero diste muy pocos datos. Con esta extensión, sin detalles el documento corre el riesgo de salir incompleto, repetitivo o con errores. Te recomendamos añadir hechos, ideas clave y estructura; también puedes continuar así, pero el resultado será más flojo.",
+        "fr": "⚠️ Vous avez demandé {pages} pages, mais très peu d'informations. À cette longueur, sans détails, le document risque d'être incomplet, répétitif ou de contenir des erreurs. Nous recommandons d'ajouter des faits, des points clés et une structure — vous pouvez aussi continuer tel quel, mais le résultat sera plus faible.",
+    },
+    "msg_which_size": {"ru": "Сколько страниц? 1 страница = 5 кредитов. Выберите кнопкой или напишите своё число (1-40).",
+                       "en": "How many pages? 1 page = 5 credits. Tap a button or type your own number (1-40).",
+                       "de": "Wie viele Seiten? 1 Seite = 5 Credits. Wähle einen Button oder gib eine eigene Zahl ein (1-40).",
+                       "ar": "كم عدد الصفحات؟ الصفحة الواحدة = 5 كريدت. اختر زرًا أو اكتب رقمًا خاصًا بك (1-40).",
+                       "zh": "需要多少页？1页 = 5积分。可点击按钮，也可直接输入数字（1-40）。",
+                       "es": "¿Cuántas páginas? 1 página = 5 créditos. Elige un botón o escribe tu propio número (1-40).",
+                       "fr": "Combien de pages ? 1 page = 5 crédits. Choisissez un bouton ou saisissez votre propre nombre (1-40)."},
     "msg_building_draft": {"ru": "Собираю черновик…", "en": "Building the draft…", "de": "Entwurf wird erstellt…",
                            "ar": "جاري إعداد المسودة…", "zh": "正在生成草稿…", "es": "Creando el borrador…", "fr": "Création du brouillon…"},
     "msg_no_text": {"ru": "Не собрал текст. Нажми ещё раз «{btn}».", "en": "Couldn't build the text. Tap \"{btn}\" again.",
@@ -1427,6 +1516,7 @@ def tr(key, lang, **kw):
 ALL_MAIN_MENU_LABELS = set(TR["btn_main_menu"].values())
 ALL_MORE_DOCS_LABELS = set(TR["btn_more_docs"].values())
 ALL_BACK_CATEGORIES_LABELS = set(TR["btn_back_categories"].values())
+ALL_BTN_BACK_LABELS = set(TR["btn_back"].values())
 ALL_BTN_PRES_LABELS = set(TR["btn_pres"].values())
 ALL_BTN_WORD_LABELS = set(TR["btn_word"].values())
 ALL_BTN_EXCEL_LABELS = set(TR["btn_excel"].values())
@@ -1450,6 +1540,63 @@ ALL_BTN_CHANGE_QUERY_LABELS = set(TR["btn_change_query"].values())
 ALL_BTN_BUILD_TABLE_LABELS = set(TR["btn_build_table"].values()) | {"делай", "да", "ок", "yes", "ok"}
 ALL_BTN_BUILD_DOC_LABELS = set(TR["btn_build_doc"].values()) | {"делай", "да", "ок", "yes", "ok"}
 ALL_BTN_TEMPLATE_LABELS = set(TR["btn_template"].values())
+
+
+# --- Выход из ожидания суммы пополнения (Form.waiting_topup_amount) ---------------------
+# Зарегистрированы здесь, СРАЗУ после появления нужных ALL_*_LABELS множеств, и обязательно
+# ДО общего topup_amount_handler ниже по файлу - aiogram проверяет хендлеры для апдейта в
+# порядке регистрации и берёт первый подошедший по фильтрам, а у общего хендлера фильтр
+# только по состоянию (совпадает с любым текстом), так что без этих хендлеров выше него
+# любая другая кнопка в этом состоянии перехватывалась бы как "невалидная сумма" - именно
+# так пользователь застревал в бесконечном "Не понял сумму" после "Мой тариф" -> "Передумал".
+@dp.message(Form.waiting_topup_amount, F.text.in_(ALL_MAIN_MENU_LABELS))
+async def topup_amount_escape_main_menu(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    await state.clear()
+    finish_job(m.from_user.id)
+    await m.answer(tr("msg_main_menu", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
+
+
+@dp.message(Form.waiting_topup_amount, F.text.in_(ALL_BTN_PLAN_LABELS))
+async def topup_amount_escape_my_plan(m: Message, state: FSMContext):
+    """Выход из ожидания суммы по повторному нажатию "Мой тариф" - my_plan определена
+    ниже по файлу, но вызывается только во время обработки апдейта (в теле функции), а
+    не в момент регистрации хендлера - к этому моменту модуль уже полностью загружен."""
+    await state.clear()
+    await my_plan(m, state)
+
+
+TOPUP_CANCEL_WORDS = ("отмена", "передумал", "передумала", "не надо", "не хочу", "стоп", "cancel")
+
+
+@dp.message(Form.waiting_topup_amount)
+async def topup_amount_handler(m: Message, state: FSMContext):
+    """Разбирает сумму из свободного текста ("100", "100 руб", "100₽" - всё сойдёт,
+    берём только цифры) и отправляет счёт на эту сумму. Состояние ожидания сбрасываем
+    ТОЛЬКО при успешном вводе - если число вне диапазона, остаёмся в том же
+    состоянии и ждём повторную попытку следующим сообщением (раньше сбрасывали
+    состояние ещё до проверки, из-за чего повторный ввод улетал в обычный чат
+    вместо обработки как сумму).
+    Кнопки-выходы (главное меню, повторный "Мой тариф") ловятся отдельными хендлерами
+    выше по файлу - они зарегистрированы раньше и потому проверяются первыми. Здесь же
+    дополнительно ловим свободный текст с явным смыслом отмены ("передумал" и т.п.),
+    которым раньше некуда было деться - оставался только бесконечный "Не понял сумму"."""
+    lang = user_lang(m.from_user.id)
+    text = m.text or ""
+    if any(w in text.lower() for w in TOPUP_CANCEL_WORDS):
+        await state.clear()
+        await m.answer(tr("msg_topup_cancelled", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
+        return
+    digits = re.sub(r"[^\d]", "", text)
+    try:
+        amount_rub = int(digits)
+    except ValueError:
+        amount_rub = 0
+    if amount_rub < MIN_TOPUP_RUB or amount_rub > MAX_TOPUP_RUB:
+        await m.answer(tr("msg_topup_invalid_amount", lang, min=MIN_TOPUP_RUB))
+        return
+    await state.clear()
+    await send_topup_invoice(m, lang, amount_rub)
 
 
 def lang_kb():
@@ -2806,6 +2953,25 @@ def is_thin_input(text: str) -> bool:
     return len((text or "").strip()) < THIN_INPUT_CHAR_THRESHOLD
 
 
+# После этого объёма скудные вводные - особенно рискованны: на короткий документ (пара
+# страниц) модель более-менее вытянет тему и без деталей, а вот на курсовую/реферат в
+# 20-40 страниц ей физически нечем заполнить структуру - в ход идут повторы, вода и
+# додуманные "факты". Порог совпадает с последней кнопкой из старого набора в word_size_kb(),
+# после которой начинаются действительно длинные объёмы.
+WORD_LONG_DOC_PAGE_THRESHOLD = 15
+
+
+def thin_long_doc_warning(pages, text, lang) -> str | None:
+    """Текст предупреждения, если запрошен большой документ (> WORD_LONG_DOC_PAGE_THRESHOLD
+    страниц), а вводных данных при этом мало - или None, если предупреждать не о чем.
+    Не блокирует генерацию, только заранее объясняет риск (аналогично msg_thin_input,
+    но отдельным более явным текстом - для короткого документа та же скудность вводных
+    не так критична)."""
+    if pages > WORD_LONG_DOC_PAGE_THRESHOLD and is_thin_input(text):
+        return tr("msg_thin_input_long", lang, pages=pages)
+    return None
+
+
 def looks_like_document_request(text: str) -> bool:
     t = (text or "").lower()
     if any(neg in t for neg in NEGATION_PATTERNS):
@@ -3688,13 +3854,19 @@ def cancel_kb(lang="ru"):
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=tr("btn_main_menu", lang))]], resize_keyboard=True)
 
 
-def mode_kb(show_template=False, lang="ru"):
+def mode_kb(show_template=False, lang="ru", show_back=False):
+    # show_back=True там, где перед этим шагом реально был предыдущий экран выбора
+    # (сейчас - Word: выбор вида документа). У презентации mode_kb - самый первый шаг
+    # после кнопки "🎨 Презентация", возвращаться там ещё некуда кроме главного меню,
+    # которое и так всегда доступно - поэтому там show_back остаётся False.
     rows = [
         [KeyboardButton(text=tr("btn_ai_generate", lang))],
         [KeyboardButton(text=tr("btn_own_text", lang))],
     ]
     if show_template:
         rows.append([KeyboardButton(text=tr("btn_template", lang))])
+    if show_back:
+        rows.append([KeyboardButton(text=tr("btn_back", lang))])
     rows.append([KeyboardButton(text=tr("btn_main_menu", lang))])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
@@ -3703,6 +3875,7 @@ def slides_kb(lang="ru"):
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text=tr("btn_8slides", lang)), KeyboardButton(text=tr("btn_12slides", lang))],
         [KeyboardButton(text=tr("btn_16slides", lang))],
+        [KeyboardButton(text=tr("btn_back", lang))],
         [KeyboardButton(text=tr("btn_main_menu", lang))]
     ], resize_keyboard=True)
 
@@ -3717,10 +3890,36 @@ def confirm_kb(lang="ru"):
     ], resize_keyboard=True)
 
 
+async def redisplay_pres_confirm(m: Message, state: FSMContext, lang: str):
+    """Повторно показывает экран подтверждения черновика презентации (после "Черновик
+    готов" - кнопки full_version/add_info/change_style/change_topic) без повторного
+    обращения к Grok - весь нужный текст уже лежит в data['sample']. Используется кнопкой
+    "Назад" с шагов, идущих ПОСЛЕ этого экрана (выбор источника фото, смена стиля из
+    confirm), чтобы вернуться к нему в точности таким, каким он был."""
+    data = await state.get_data()
+    sample = data.get("sample")
+    if not sample:
+        # Черновика по какой-то причине нет (в норме сюда попасть нельзя) - не показываем
+        # пустой экран, откатываемся в главное меню.
+        await m.answer(tr("msg_main_menu", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
+        await state.clear()
+        return
+    theme_name = data.get("theme_name", "default")
+    style_label = THEME_LABELS_I18N.get(theme_name, {}).get(lang, THEME_LABELS.get(theme_name, theme_name))
+    await send_draft(
+        m,
+        tr("msg_draft_ready_pres", lang, sample=sample, style=style_label),
+        title=data.get("topic", tr("msg_start_pres_again", lang)),
+        reply_markup=confirm_kb(lang)
+    )
+    await state.set_state(Form.waiting_confirm)
+
+
 def photo_source_kb(lang="ru"):
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text=tr("btn_ai_photos", lang))],
         [KeyboardButton(text=tr("btn_own_photos", lang))],
+        [KeyboardButton(text=tr("btn_back", lang))],
         [KeyboardButton(text=tr("btn_main_menu", lang))]
     ], resize_keyboard=True)
 
@@ -3912,10 +4111,16 @@ def word_kind_kb(category, more=False, lang="ru"):
 
 
 def word_size_kb(lang="ru"):
+    # Кнопки - только подсказка для типичных объёмов, не единственный вариант: обработчик
+    # Form.waiting_word_size (см. word_size()) парсит ЛЮБОЕ число, введённое текстом, так что
+    # пользователь всегда может написать своё значение в пределах WORD_MIN_PAGES..WORD_MAX_PAGES
+    # (например "30 страниц" для курсовой) - не только выбрать из готовых кнопок.
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="2 стр. · 10 кр."), KeyboardButton(text="4 стр. · 20 кр.")],
         [KeyboardButton(text="6 стр. · 30 кр."), KeyboardButton(text="8 стр. · 40 кр.")],
         [KeyboardButton(text="10 стр. · 50 кр."), KeyboardButton(text="15 стр. · 75 кр.")],
+        [KeyboardButton(text="20 стр. · 100 кр."), KeyboardButton(text="30 стр. · 150 кр.")],
+        [KeyboardButton(text=tr("btn_back", lang))],
         [KeyboardButton(text=tr("btn_main_menu", lang))]
     ], resize_keyboard=True)
 
@@ -4090,6 +4295,7 @@ def style_kb(include_keep=False, lang="ru"):
     for i in range(0, len(theme_order), 2):
         pair = theme_order[i:i + 2]
         rows.append([KeyboardButton(text=THEME_LABELS_I18N[k].get(lang, THEME_LABELS_I18N[k]["ru"])) for k in pair])
+    rows.append([KeyboardButton(text=tr("btn_back", lang))])
     rows.append([KeyboardButton(text=tr("btn_main_menu", lang))])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
@@ -4324,6 +4530,22 @@ async def process_user_text(m: Message, state: FSMContext):
     await state.set_state(Form.waiting_theme)
 
 
+@dp.message(Form.waiting_theme, F.text.in_(ALL_BTN_BACK_LABELS))
+async def theme_back(m: Message, state: FSMContext):
+    """"Назад" с выбора стиля - возвращает к вводу темы/своего текста (смотря что
+    вводили на предыдущем шаге). Зарегистрирован ДО process_theme ниже (у него фильтр
+    без ограничений по тексту, matches любое сообщение в этом состоянии) - иначе нажатие
+    "Назад" ушло бы туда и было бы воспринято как невалидное название стиля."""
+    lang = user_lang(m.from_user.id)
+    data = await state.get_data()
+    if data.get("mode") == "user":
+        await m.answer(tr("msg_own_text_prompt", lang), reply_markup=cancel_kb(lang))
+        await state.set_state(Form.waiting_user_text)
+    else:
+        await m.answer(tr("msg_topic_prompt", lang), reply_markup=cancel_kb(lang))
+        await state.set_state(Form.waiting_topic)
+
+
 @dp.message(Form.waiting_theme)
 async def process_theme(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
@@ -4336,6 +4558,16 @@ async def process_theme(m: Message, state: FSMContext):
         await state.update_data(theme_name=name)
     await m.answer(tr("msg_how_many_slides", lang), reply_markup=slides_kb(lang))
     await state.set_state(Form.waiting_slides)
+
+
+@dp.message(Form.waiting_slides, F.text.in_(ALL_BTN_BACK_LABELS))
+async def slides_back(m: Message, state: FSMContext):
+    """"Назад" с выбора количества слайдов - возвращает к выбору стиля (тема/свой текст
+    остаются как были). Зарегистрирован ДО process_slides ниже по той же причине, что и
+    theme_back выше - у него безусловный фильтр по состоянию."""
+    lang = user_lang(m.from_user.id)
+    await m.answer(tr("msg_pick_style", lang), reply_markup=style_kb(include_keep=True, lang=lang))
+    await state.set_state(Form.waiting_theme)
 
 
 @dp.message(Form.waiting_slides)
@@ -4420,6 +4652,12 @@ async def change_style(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     await m.answer(tr("msg_which_style", lang), reply_markup=style_kb(lang=lang))
     await state.set_state(Form.waiting_style)
+
+
+@dp.message(Form.waiting_style, F.text.in_(ALL_BTN_BACK_LABELS))
+async def change_style_back(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    await redisplay_pres_confirm(m, state, lang)
 
 
 @dp.message(Form.waiting_style)
@@ -4526,6 +4764,12 @@ async def photo_source_own(m: Message, state: FSMContext):
         reply_markup=photos_done_kb(lang)
     )
     await state.set_state(Form.waiting_pres_photos)
+
+
+@dp.message(Form.waiting_pres_photo_choice, F.text.in_(ALL_BTN_BACK_LABELS))
+async def photo_choice_back(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    await redisplay_pres_confirm(m, state, lang)
 
 
 @dp.message(Form.waiting_pres_photo_choice)
@@ -5053,10 +5297,17 @@ async def _build_presentation(m: Message, state: FSMContext):
                 badge_num_color = (255, 255, 255) if _relative_luminance(badge_fill) < 0.5 else (20, 20, 20)
                 for i, block in enumerate(blocks):
                     row_top = step_top + i * step_h
-                    rect(slide, badge_l, row_top, badge, badge, badge_fill, rounded=True, radius=0.28)
-                    numbox = slide.shapes.add_textbox(Inches(badge_l), Inches(row_top), Inches(badge), Inches(badge))
-                    ntf = numbox.text_frame
+                    # Раньше цифра была ОТДЕЛЬНЫМ textbox, положенным поверх плашки день в день
+                    # в тех же координатах - две независимые фигуры, которые должны отрисоваться
+                    # обе и ровно друг на друге. Предпросмотр документов в Telegram (в отличие от
+                    # PowerPoint/Google Slides/LibreOffice) на части файлов рисовал только нижний
+                    # слой - плашка оставалась пустой, без номера. Пишем цифру прямо в text_frame
+                    # ТОЙ ЖЕ фигуры (rect() возвращает автофигуру - у неё уже есть свой text_frame),
+                    # то есть это теперь одна фигура, а не две наложенные - рендерить нечего "поверх".
+                    badge_shape = rect(slide, badge_l, row_top, badge, badge, badge_fill, rounded=True, radius=0.28)
+                    ntf = badge_shape.text_frame
                     ntf.word_wrap = False
+                    ntf.margin_left = ntf.margin_right = ntf.margin_top = ntf.margin_bottom = 0
                     np_ = ntf.paragraphs[0]
                     np_.text = str(i + 1)
                     np_.alignment = PP_ALIGN.CENTER
@@ -5091,11 +5342,17 @@ async def _build_presentation(m: Message, state: FSMContext):
                 # а не рвёт раскладку.
                 row_top, footer_top, badge = 2.0, 6.7, 0.5
                 row_h = (footer_top - row_top) / max(len(blocks), 1)
-                badge_fill = card_fill_for(sc, factor=0.7)
+                # Маркер раньше собирался из ДВУХ наложенных фигур - светлый квадрат-подложка
+                # и поверх него, ровно по центру, маленькая цветная точка (сам "значок"). Тот же
+                # класс проблемы, что чинили выше в layout 7: предпросмотр документов в Telegram
+                # на части файлов рисовал только нижнюю фигуру, и точка (то есть весь смысл
+                # маркера) пропадала. Один сплошной акцентный квадрат вместо пары "подложка+точка"
+                # решает то же визуально (разбивает текст на пункты) одной фигурой, без риска,
+                # что верхний слой не отрисуется - и заодно контрастнее на фоне слайда.
+                badge_fill = safe_line(sc)
                 for i, block in enumerate(blocks):
                     top = row_top + i * row_h
                     rect(slide, 0.7, top, badge, badge, badge_fill, rounded=True, radius=0.3)
-                    rect(slide, 0.7 + badge / 2 - 0.06, top + badge / 2 - 0.06, 0.12, 0.12, sc["line"], rounded=True, radius=0.5)
                     box = slide.shapes.add_textbox(Inches(0.7 + badge + 0.4), Inches(top - 0.1), Inches(11.0 - badge), Inches(row_h))
                     tf = box.text_frame
                     tf.word_wrap = True
@@ -6554,6 +6811,7 @@ def excel_mode_kb(lang="ru"):
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text=tr("btn_ai_generate", lang))],
         [KeyboardButton(text=tr("btn_own_data", lang))],
+        [KeyboardButton(text=tr("btn_back", lang))],
         [KeyboardButton(text=tr("btn_main_menu", lang))],
     ], resize_keyboard=True)
 
@@ -6642,6 +6900,17 @@ async def excel_mode_user(m: Message, state: FSMContext):
     await state.update_data(excel_mode="user")
     await m.answer(excel_kind_hint(kind, "user", lang), reply_markup=cancel_kb(lang))
     await state.set_state(Form.waiting_excel_data)
+
+
+@dp.message(Form.waiting_excel_mode, F.text.in_(ALL_BTN_BACK_LABELS))
+async def excel_mode_back(m: Message, state: FSMContext):
+    """"Назад" со способа сборки таблицы - возвращает к выбору вида таблицы внутри уже
+    выбранной категории (excel_category в data не трогаем)."""
+    lang = user_lang(m.from_user.id)
+    data = await state.get_data()
+    cat = data.get("excel_category", "physical")
+    await m.answer(tr("msg_which_table", lang), reply_markup=excel_kind_kb(cat, lang))
+    await state.set_state(Form.waiting_excel_kind)
 
 
 @dp.message(Form.waiting_excel_mode)
@@ -6941,7 +7210,7 @@ async def word_kind(m: Message, state: FSMContext):
     hint = tr("msg_how_build_doc", lang)
     if show_template:
         hint += tr("msg_template_hint_suffix", lang)
-    await m.answer(hint, reply_markup=mode_kb(show_template, lang=lang))
+    await m.answer(hint, reply_markup=mode_kb(show_template, lang=lang, show_back=True))
     await state.set_state(Form.waiting_word_mode)
 
 
@@ -7450,7 +7719,7 @@ async def word_mode_template(m: Message, state: FSMContext):
     kind = data.get("word_kind", "doc")
     uid = m.from_user.id
     if kind in STUDY_KINDS:
-        await m.answer(tr("msg_no_template_study", lang), reply_markup=mode_kb(False, lang=lang))
+        await m.answer(tr("msg_no_template_study", lang), reply_markup=mode_kb(False, lang=lang, show_back=True))
         return
     ok, reason = start_job(uid)
     if not ok:
@@ -7480,12 +7749,23 @@ async def word_mode_template(m: Message, state: FSMContext):
         finish_job(uid)
 
 
+@dp.message(Form.waiting_word_mode, F.text.in_(ALL_BTN_BACK_LABELS))
+async def word_mode_back(m: Message, state: FSMContext):
+    """"Назад" со способа сборки документа - возвращает к выбору вида документа внутри
+    уже выбранной категории (word_category в data не трогаем)."""
+    lang = user_lang(m.from_user.id)
+    data = await state.get_data()
+    cat = data.get("word_category", "physical")
+    await m.answer(tr("msg_which_doc", lang), reply_markup=word_kind_kb(cat, lang=lang))
+    await state.set_state(Form.waiting_word_kind)
+
+
 @dp.message(Form.waiting_word_mode)
 async def waiting_word_mode_fallback(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
     show_template = data.get("word_kind", "doc") not in STUDY_KINDS
-    await m.answer(tr("msg_didnt_understand", lang), reply_markup=mode_kb(show_template, lang=lang))
+    await m.answer(tr("msg_didnt_understand", lang), reply_markup=mode_kb(show_template, lang=lang, show_back=True))
 
 
 # Выбор объёма (короткий/средний/подробный) имеет смысл только там, где объём реально
@@ -7567,6 +7847,23 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
     await state.set_state(Form.waiting_word_confirm)
 
 
+@dp.message(Form.waiting_word_size, F.text.in_(ALL_BTN_BACK_LABELS))
+async def word_size_back(m: Message, state: FSMContext):
+    """"Назад" с выбора объёма - возвращает к вводу темы/своего текста. Зарегистрирован
+    ДО word_size() ниже: у неё безусловный фильтр по состоянию и парсинг цифр из текста -
+    без этого хендлера "Назад" (в котором цифр нет) тихо превратился бы в "2 страницы"
+    вместо того, чтобы дать пользователю переписать вводные."""
+    lang = user_lang(m.from_user.id)
+    data = await state.get_data()
+    kind = data.get("word_kind", "doc")
+    if data.get("mode") == "user":
+        await m.answer(word_hint(kind, "user", lang), reply_markup=cancel_kb(lang))
+        await state.set_state(Form.waiting_word_text)
+    else:
+        await m.answer(word_hint(kind, "ai", lang), reply_markup=cancel_kb(lang))
+        await state.set_state(Form.waiting_word_topic)
+
+
 @dp.message(Form.waiting_word_size)
 async def word_size(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
@@ -7578,6 +7875,9 @@ async def word_size(m: Message, state: FSMContext):
     size = "short" if pages <= 3 else "long"
     await state.update_data(word_pages=pages, word_size=size)
     data = await state.get_data()
+    warning = thin_long_doc_warning(pages, data.get("user_text") or data.get("topic") or "", lang)
+    if warning:
+        await m.answer(warning)
     await word_build_draft(m, state, data, size)
 
 
@@ -7915,7 +8215,12 @@ async def my_plan(m: Message, state: FSMContext):
         await m.answer(tr("msg_plan_info", lang, credits="∞"))
         return
     await m.answer(tr("msg_plan_info", lang, credits=u.get("credits", STARTING_CREDITS)))
-    await show_topup_packages(m, lang, state)
+    # Раньше здесь безусловно вызывался show_topup_packages(), который СРАЗУ переводил
+    # пользователя в режим ожидания суммы пополнения (Form.waiting_topup_amount) - то есть
+    # "Мой тариф" молча навязывал пополнение, даже если человек просто хотел посмотреть
+    # баланс. Теперь только мягкое предложение с готовыми суммами - в режим ожидания текста
+    # пользователь попадает лишь по явному нажатию "Своя сумма" (см. topup_custom_callback).
+    await m.answer(tr("msg_topup_offer", lang), reply_markup=topup_offer_kb(lang))
 
 
 @dp.message(F.text.in_(ALL_BTN_HELP_LABELS))
@@ -7998,6 +8303,9 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
             return
         kind = guess_word_kind(text)
         await state.update_data(word_kind=kind, word_size="short" if pages <= 3 else "long", word_pages=pages, topic=text, user_text="", extra="")
+        warning = thin_long_doc_warning(pages, text, lang)
+        if warning:
+            await bot.send_message(m.from_user.id, warning)
         await bot.send_message(m.from_user.id, tr("msg_request_accepted", lang))
         await word_build(m, state)
         return
@@ -8202,19 +8510,25 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
 
     if action == "gen_word":
         raw_pages = payload.get("pages") or payload.get("size")
-        pages = normalize_word_pages(raw_pages if str(raw_pages).isdigit() else (4 if payload.get("size") == "long" else 2))
+        # 2/6 стр. - те же значения по умолчанию, что и в чатовом меню (word_build_draft),
+        # чтобы цена за "Короче"/"Подробнее" совпадала в Mini App и в чате (см. WORD_CREDITS_PER_PAGE).
+        pages = normalize_word_pages(raw_pages if str(raw_pages).isdigit() else (6 if payload.get("size") == "long" else 2))
         if not can_afford(m.from_user.id, word_cost(pages)):
             await send_no_credits_notice(m, state, lang)
             return
         content = (payload.get("content") or "").strip()
         if not content:
             return
+        extra = (payload.get("extra") or "").strip()
         await state.update_data(
             word_kind=payload.get("kind") or "doc",
             word_size="short" if pages <= 3 else "long",
             word_pages=pages,
-            topic=content, user_text="", extra=(payload.get("extra") or "").strip(),
+            topic=content, user_text="", extra=extra,
         )
+        warning = thin_long_doc_warning(pages, f"{content} {extra}".strip(), lang)
+        if warning:
+            await bot.send_message(m.from_user.id, warning)
         await word_build(m, state)
         return
 
