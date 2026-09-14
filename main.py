@@ -4,6 +4,7 @@ import json
 import random
 import html
 import base64
+import textwrap
 from urllib.parse import urlencode
 import re
 import time
@@ -2822,6 +2823,177 @@ async def classify_uncertain_intent(text: str) -> str | None:
         return None
 
 
+import ast as _ast_mod
+import math as _math_mod
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo
+except Exception:
+    _ZoneInfo = None
+
+# Таблица городов -> IANA-таймзона для вопросов вида "который час в Лондоне" - без неё
+# модель просто ГАДАЛА реальное время (см. разбор бага: уверенно назвала неверное время,
+# а на переспрос "уверен?" сразу призналась, что не знает) - здесь же оно считается по
+# настоящим часам сервера, а не придумывается. Ключи - нормализованные (нижний регистр,
+# без окончаний падежа) названия городов, несколько вариантов на город под разные падежи.
+CITY_TIMEZONES = {
+    "москв": "Europe/Moscow", "лондон": "Europe/London", "париж": "Europe/Paris",
+    "берлин": "Europe/Berlin", "нью-йорк": "America/New_York", "нью йорк": "America/New_York",
+    "лос-анджелес": "America/Los_Angeles", "лос анджелес": "America/Los_Angeles",
+    "токио": "Asia/Tokyo", "пекин": "Asia/Shanghai", "шанхай": "Asia/Shanghai",
+    "дубай": "Asia/Dubai", "стамбул": "Europe/Istanbul", "рим": "Europe/Rome",
+    "мадрид": "Europe/Madrid", "амстердам": "Europe/Amsterdam", "варшав": "Europe/Warsaw",
+    "прага": "Europe/Prague", "вена": "Europe/Vienna", "цюрих": "Europe/Zurich",
+    "хельсинки": "Europe/Helsinki", "стокгольм": "Europe/Stockholm", "осло": "Europe/Oslo",
+    "киев": "Europe/Kyiv", "минск": "Europe/Minsk", "ташкент": "Asia/Tashkent",
+    "алматы": "Asia/Almaty", "астан": "Asia/Almaty", "баку": "Asia/Baku",
+    "ереван": "Asia/Yerevan", "тбилиси": "Asia/Tbilisi", "дели": "Asia/Kolkata",
+    "мумбаи": "Asia/Kolkata", "сингапур": "Asia/Singapore", "гонконг": "Asia/Hong_Kong",
+    "сеул": "Asia/Seoul", "сидней": "Australia/Sydney", "мельбурн": "Australia/Melbourne",
+    "торонто": "America/Toronto", "чикаго": "America/Chicago", "майами": "America/New_York",
+    "сан-франциско": "America/Los_Angeles", "мехико": "America/Mexico_City",
+    "рио-де-жанейро": "America/Sao_Paulo", "сан-паулу": "America/Sao_Paulo",
+    "каир": "Africa/Cairo", "йоханнесбург": "Africa/Johannesburg",
+    "новосибирск": "Asia/Novosibirsk", "екатеринбург": "Asia/Yekaterinburg",
+    "владивосток": "Asia/Vladivostok", "калининград": "Europe/Kaliningrad",
+    "санкт-петербург": "Europe/Moscow", "питер": "Europe/Moscow",
+}
+
+
+def _match_city_timezone(text_low: str):
+    """Ищет упоминание известного города в тексте - по корню названия с учётом падежа
+    ("в Лондоне", "лондона"), но ТОЛЬКО с начала слова (лукбихайнд на не-букву перед
+    корнем) - иначе короткие корни вроде "рим" ложно находятся посреди случайных слов
+    (например "эксПЕРИМент" содержит "рим" как подстроку, хотя города там нет)."""
+    for root, tz in CITY_TIMEZONES.items():
+        if re.search(r"(?<![а-яёa-z])" + re.escape(root), text_low):
+            return tz
+    return None
+
+
+def try_local_time_answer(text: str) -> str | None:
+    """Если вопрос явно про текущее время/дату в конкретном городе - считает его по
+    реальному системному времени и таблице таймзон, а не отдаёт модели гадать.
+    Возвращает готовую фразу-ответ или None, если это не такой вопрос (тогда сообщение
+    уходит в обычный чат с моделью, как раньше)."""
+    low = text.strip().lower()
+    if not any(kw in low for kw in ("который час", "сколько времени", "время в ", "время сейчас", "какое время")):
+        return None
+    tz_name = _match_city_timezone(low)
+    if not tz_name or _ZoneInfo is None:
+        return None
+    try:
+        now = datetime.now(_ZoneInfo(tz_name))
+    except Exception as e:
+        print("try_local_time_answer tz error:", e)
+        return None
+    return f"Сейчас там {now.strftime('%H:%M')} ({now.strftime('%d.%m.%Y')})."
+
+
+# Разрешённые узлы AST для безопасного вычисления арифметики - никакого произвольного
+# кода, только числа и математические операции/функции из белого списка.
+_SAFE_MATH_FUNCS = {
+    "sqrt": _math_mod.sqrt, "abs": abs, "factorial": _math_mod.factorial,
+    "log": _math_mod.log, "log10": _math_mod.log10, "sin": _math_mod.sin,
+    "cos": _math_mod.cos, "round": round,
+}
+_SAFE_MATH_NODES = (
+    _ast_mod.Expression, _ast_mod.BinOp, _ast_mod.UnaryOp, _ast_mod.Constant,
+    _ast_mod.Add, _ast_mod.Sub, _ast_mod.Mult, _ast_mod.Div, _ast_mod.Pow,
+    _ast_mod.Mod, _ast_mod.FloorDiv, _ast_mod.USub, _ast_mod.UAdd, _ast_mod.Call,
+    _ast_mod.Name, _ast_mod.Load,
+)
+
+
+def _safe_math_eval(expr: str):
+    """Считает арифметическое выражение через AST с белым списком узлов - НЕ eval().
+    Кидает исключение на что угодно вне чисел/операторов/функций из _SAFE_MATH_FUNCS."""
+    tree = _ast_mod.parse(expr, mode="eval")
+    for node in _ast_mod.walk(tree):
+        if not isinstance(node, _SAFE_MATH_NODES):
+            raise ValueError(f"disallowed node {type(node).__name__}")
+        if isinstance(node, _ast_mod.Name) and node.id not in _SAFE_MATH_FUNCS:
+            raise ValueError(f"disallowed name {node.id}")
+        if isinstance(node, _ast_mod.Call):
+            if not isinstance(node.func, _ast_mod.Name) or node.func.id not in _SAFE_MATH_FUNCS:
+                raise ValueError("disallowed call")
+    code = compile(tree, "<safe_math>", "eval")
+    return eval(code, {"__builtins__": {}}, dict(_SAFE_MATH_FUNCS))
+
+
+def try_local_math_answer(text: str) -> str | None:
+    """Если сообщение по сути арифметический вопрос (точное число, а не 'прикинь на
+    глаз') - считает его в Python и возвращает готовый ответ, минуя модель.
+    Раньше такие вопросы шли прямиком в LLM, а она считает многозначные числа в уме
+    ненадёжно (см. разбор бага: корень из 16-значного числа модель посчитала с ошибкой
+    почти в 25, а когда переспросили - вместо исправления просто сдалась). Возвращает
+    None для всего, что не выглядит однозначно арифметикой - тогда вопрос, как и раньше,
+    уходит в обычный чат с моделью."""
+    raw = text.strip()
+    if len(raw) > 200:
+        return None
+    low = raw.lower()
+    # Явное намерение посчитать - без него рискуем принять за арифметику номер телефона,
+    # диапазон дат/лет или адрес (в них тоже есть цифры и дефисы, легко спутать с "минус").
+    had_trigger = bool(re.search(
+        r"сколько|посчита|вычисли|реши|чему рав|корень|факториал|процент|квадрат|куб|"
+        r"плюс|минус|раздели|умнож", low))
+    expr = low
+    # Частые русские обороты -> питоновский синтаксис. Порядок важен: более длинные/
+    # специфичные фразы заменяем раньше более общих. "корень из X" сразу оборачиваем
+    # в sqrt(X) со скобками - без захвата числа получилось бы "sqrtX", это не вызов
+    # функции, а один идентификатор, и вычисление просто не сработает.
+    expr = re.sub(r"(?:квадратный\s+)?корень\s+из\s*(\d+(?:[.,]\d+)?)", r"sqrt(\1)", expr)
+    expr = re.sub(r"(\d+(?:[.,]\d+)?)\s+в\s+квадрате", r"(\1)**2", expr)
+    expr = re.sub(r"(\d+(?:[.,]\d+)?)\s+в\s+кубе", r"(\1)**3", expr)
+    expr = re.sub(r"(\d+)\s+факториал", r"factorial(\1)", expr)
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*%?\s*процент(?:ов|а)?\s+от\s+(\d+(?:[.,]\d+)?)", expr)
+    if m:
+        expr = f"({m.group(1)}/100)*{m.group(2)}"
+    else:
+        expr = re.sub(r"(\d+(?:[.,]\d+)?)\s*%\s*от\s+(\d+(?:[.,]\d+)?)", r"(\1/100)*\2", expr)
+    # Операторы словами - частый способ спросить, особенно голосом/на ходу.
+    expr = re.sub(r"разделить\s+на", "/", expr)
+    expr = re.sub(r"умножить\s+на", "*", expr)
+    expr = re.sub(r"\bплюс\b", "+", expr)
+    expr = re.sub(r"\bминус\b", "-", expr)
+    expr = expr.replace(",", ".").replace("х", "*").replace("×", "*").replace("÷", "/").replace("^", "**")
+    # Всё, что осталось кириллицей (вводные слова вроде "ладно", "кстати", "слушай",
+    # обращения) - убираем целиком: к этому моменту всё содержательное (корень/степень/
+    # проценты/факториал) уже переведено в латинские имена функций, а лишние слова вокруг
+    # вопроса не несут математического смысла и раньше просто ломали разбор выражения.
+    expr = re.sub(r"[а-яё]+", " ", expr)
+    expr = re.sub(r"\s+", "", expr)
+    expr = expr.strip(" ?!.")
+    if not expr:
+        return None
+    if not had_trigger:
+        # Ни одного слова-триггера - разрешаем только "голое" выражение без единой
+        # кириллической буквы (например "25*4+10", "2+2"), да и то не похожее на
+        # телефонный номер (несколько дефисов подряд без пробелов).
+        if re.search(r"[а-яё]", low) or expr.count("-") >= 3:
+            return None
+    # Должно остаться ТОЛЬКО арифметикой (цифры/операторы/разрешённые имена функций) -
+    # иначе это не однозначный числовой вопрос, а обычный текст, который лучше отдать модели.
+    if not re.fullmatch(r"[0-9\.\+\-\*/\(\)%a-z]+", expr):
+        return None
+    if not re.search(r"\d", expr) or not re.search(r"[+\-*/]|sqrt|factorial", expr):
+        return None
+    try:
+        result = _safe_math_eval(expr)
+    except Exception:
+        return None
+    if isinstance(result, complex) or result != result:  # NaN
+        return None
+    if isinstance(result, float):
+        if result == int(result) and abs(result) < 1e15:
+            result_str = f"{int(result):,}".replace(",", " ")
+        else:
+            result_str = f"{result:,.4f}".rstrip("0").rstrip(".").replace(",", " ")
+    else:
+        result_str = f"{result:,}".replace(",", " ")
+    return result_str
+
+
 async def ask_grok_chat(user_text: str, lang: str = "ru", history: list = None,
                          summary: str = "", facts: list = None, recent_generations: list = None) -> str:
     """Отдельная функция для бесплатного чат-помощника (кнопка "Чат" в Mini App и
@@ -2881,7 +3053,18 @@ async def ask_grok_chat(user_text: str, lang: str = "ru", history: list = None,
                 "коротко откажись: в чате этими темами не занимаешься. Без лекции и без спора. "
                 "Презентацию, Word или Excel на любую тему, в том числе такую, делать можно: "
                 "это файл, не совет. Тогда ответь по-человечески и направь в меню или одну фразу в чат. "
-                "Ответ держи коротким, как в переписке."
+                "Ответ держи коротким, как в переписке. "
+                "У тебя нет часов и календаря в реальном времени и нет надёжного счётчика для арифметики "
+                "в уме - точное текущее время/дата и точные вычисления с многозначными числами обрабатываются "
+                "до тебя отдельным кодом, если сообщение похоже на такой запрос, поэтому до тебя они почти "
+                "никогда не доходят. Но если всё же попадётся то, чего ты объективно не можешь знать точно "
+                "(текущее время, курс валют прямо сейчас, точный результат сложных вычислений) и живой поиск "
+                "не дал ответа - сразу честно скажи, что не можешь посчитать/проверить это точно, вместо того "
+                "чтобы назвать правдоподобную на вид цифру. Не выдумывай уверенным тоном то, в чём не уверен. "
+                "Если человек спрашивает «ты уверен?» или сомневается в твоём ответе - не соглашайся с ним "
+                "автоматически из вежливости: если ответ был верным, спокойно подтверди его и объясни, почему "
+                "он верный, а не сдавайся; если ты действительно не проверял или мог ошибиться - признавай "
+                "это сразу в первом ответе, а не только когда переспросят."
                 f"{memory_block}"
             )},
         ]
@@ -3148,8 +3331,50 @@ def _blend_toward(color_tuple, target_tuple, factor):
 
 def card_fill_for(colors, factor=0.88):
     """Заливка карточки в цвете темы - акцентный цвет, смешанный с фоном темы, а не
-    с белым - одинаково хорошо смотрится и на светлых, и на тёмных темах."""
-    return _blend_toward(colors["line"], colors["bg"], factor)
+    с белым - одинаково хорошо смотрится и на светлых, и на тёмных темах.
+
+    Смешивать с bg безопасно, только если line и bg по яркости заметно различаются.
+    invert_colors() (см. sandwich_colors) не трогает line - у тем, где исходно
+    ink == line (например "fashion", "nature"), у тёмного "сэндвич"-варианта
+    bg = исходный ink, который совпадает с line. Блендинг цвета САМОГО С СОБОЙ
+    даёт тот же цвет - плашка становится не "мягким акцентом", а точной копией
+    фона слайда и визуально пропадает (см. layout 8 на тёмном слайде - тот же
+    класс бага, что был с цветом номера в layout 7, только тут пропадает не
+    цифра на плашке, а сама плашка). Если контраста с bg нет - блендим к ink:
+    ink и bg гарантированно контрастны (иначе был бы нечитаем весь текст темы),
+    так что это всегда безопасный запасной ориентир для контраста."""
+    line = colors["line"]
+    bg = colors["bg"]
+    target = bg if abs(_relative_luminance(line) - _relative_luminance(bg)) >= 0.15 else colors["ink"]
+    return _blend_toward(line, target, factor)
+
+
+def text_on_fill(colors, fill, factor=0.25):
+    """Цвет текста, который лежит ПРЯМО НА плашке card_fill_for(), а не на фоне слайда -
+    поэтому sc["mid"]/sc["mute"] здесь не годятся: они посчитаны под контраст с sc["bg"],
+    а card_fill_for() на тёмном "сэндвич"-варианте темы (см. её докстринг) отдаёт светлую
+    плашку даже там, где сам слайд тёмный - на такой светлой плашке sc["mid"] (светло-серый,
+    рассчитанный на тёмный фон) становится светлым по светлому и практически нечитаем.
+    Берём контраст от цвета самой плашки: из ink/bg темы (они всегда контрастны друг другу
+    по построению) берём тот, что даёт больший контраст с fill, и слегка смешиваем с fill
+    для мягкости, как это делает "mid" с фоном слайда."""
+    ink, bg = colors["ink"], colors["bg"]
+    fill_lum = _relative_luminance(fill)
+    base = ink if abs(_relative_luminance(ink) - fill_lum) >= abs(_relative_luminance(bg) - fill_lum) else bg
+    return _blend_toward(base, fill, factor)
+
+
+def safe_line(colors):
+    """colors["line"] как самостоятельный акцентный цвет НА фоне слайда (не смешанный
+    с чем-то другим, как в card_fill_for/text_on_fill выше) - гарантированно контрастен
+    с bg только в светлом варианте темы. invert_colors() не трогает line, поэтому у
+    тёмного "сэндвич"-варианта тем, где исходно ink совпадает с line (fashion, nature),
+    line оказывается равен bg - и акцент того же цвета, что фон, визуально пропадает
+    (тот же класс бага, что был у номера в layout 7 и заливки в card_fill_for). Используется
+    там, где line красит что-то видимое прямо на фоне слайда: палитра графиков (add_chart),
+    декоративная полоска на обложке."""
+    line, bg = colors["line"], colors["bg"]
+    return line if abs(_relative_luminance(line) - _relative_luminance(bg)) >= 0.15 else colors["ink"]
 
 
 def invert_colors(colors):
@@ -3217,6 +3442,23 @@ def rect(slide, l, t, w, h, color, rounded=False, radius=0.08):
     s.fill.fore_color.rgb = RGBColor(*color)
     s.line.fill.background()
     return s
+
+
+def _estimate_wrapped_lines(text: str, size_pt: float, box_width_in: float, bold_serif=True) -> int:
+    """Грубая оценка, на сколько строк реально разобьётся жирный заголовок при заданном
+    размере шрифта и ширине textbox - нужна ТОЛЬКО чтобы решить, сколько отступа заложить
+    ПОД заголовком (см. обложку в _build_presentation: раньше номер страницы стоял на
+    фиксированной высоте, рассчитанной на одну строку, и у длинных заголовков, которые
+    оборачивались в 2 строки, вторая строка утыкалась вплотную в номер страницы без
+    всякого зазора). Средняя ширина символа жирного serif-заголовка (Georgia/Cambria и
+    т.п.) эмпирически около 0.52 от кегля - точность здесь не нужна, только чтобы не
+    ошибиться на целую строку."""
+    text = (text or "").strip()
+    if not text:
+        return 1
+    char_w_in = size_pt * (0.52 if bold_serif else 0.46) / 72
+    chars_per_line = max(6, int(box_width_in / char_w_in))
+    return max(1, len(textwrap.wrap(text, width=chars_per_line)))
 
 
 def slide_paragraphs(content: str, limit: int = 2):
@@ -3289,7 +3531,7 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
     compact = w < 5.0
     title_sz, legend_sz, label_sz, tick_sz = (13, 9, 9, 9) if compact else (15, 11, 11, 10)
 
-    palette = [colors["line"], colors["mid"], colors["mute"], colors["ink"]]
+    palette = [safe_line(colors), colors["mid"], colors["mute"], colors["ink"]]
 
     if chart_data_dict.get("title"):
         chart.has_title = True
@@ -3484,7 +3726,14 @@ ANTI_AI_DETECTOR_STYLE = (
     "'нельзя переоценить', 'играет важную роль', 'подводя итог'). "
     "Формулировки должны звучать как у обычного студента: где уместно — чуть менее "
     "выверенные обороты, конкретные примеры и детали по теме, живая логика рассуждения, "
-    "а не шаблонная академическая гладкость."
+    "а не шаблонная академическая гладкость. "
+    "Весь текст пиши только на русском языке: не переключайся на английские слова или "
+    "термины посреди русского предложения, даже отдельным словом - если нужен иностранный "
+    "термин, дай его русский перевод или транслитерацию. "
+    "Не выдумывай гиперточные цифры, даты, названия конкретных исследований, институтов или "
+    "экспедиций, которых не было в исходных данных - это не звучит правдоподобно, а выглядит "
+    "как галлюцинация. Если нужен пример для иллюстрации, пиши обобщённо ('по разным оценкам', "
+    "'как правило') вместо точных чисел и ссылок на несуществующие источники."
 )
 
 # Минимальный суммарный объём (в словах) для проверки после генерации - см.
@@ -4365,6 +4614,15 @@ async def _build_presentation(m: Message, state: FSMContext):
     - Текст: ровно 2 абзаца, каждый 2-4 предложения. Первый абзац - конкретный факт, пример или наблюдение,
       второй - что это значит или почему это важно. Никаких вводных фраз типа "в этом слайде" или "стоит отметить".
     - Между слайдами не повторяй одну и ту же структуру фразы - разнообразь подачу (факт, вопрос, сравнение, история).
+      Это касается не только формулировок, но и роли абзацев: если на каждом слайде без исключения первый
+      абзац - это "факт", а второй - обобщающий вывод, вся презентация читается как штамповка по шаблону,
+      даже если сами факты разные. Хотя бы на части слайдов стройте абзацы иначе (два факта подряд, факт без
+      вывода, сравнение "было/стало" без морали в конце).
+    - Название презентации (title) должно честно отражать то, что реально показывают слайды. Если тема или
+      угол наводят на интригующий заголовок вроде "вопросы без ответа" или "тайны, которые не разгаданы" - а
+      по факту каждый слайд даёт уверенный законченный ответ с конкретной цифрой - не используйте такой
+      заголовок, он будет противоречить содержанию. Либо заголовок отражает, что слайды дают ответы, либо
+      среди слайдов реально должны быть настоящие открытые вопросы без разрешения.
     - Никаких общих фраз без содержания ("это важная тема", "мир меняется") - только конкретика: цифры, имена,
       примеры, детали, если они есть в материале или логично следуют из темы.
     - Фото: описание живого кадра (реальная сцена, человек, объект, место), не стоковый шаблон и не абстракция.
@@ -4400,6 +4658,22 @@ async def _build_presentation(m: Message, state: FSMContext):
     - Текст: ровно 2 абзаца, каждый 2-4 предложения. Первый абзац - конкретный факт, пример или наблюдение,
       второй - что это значит или почему это важно. Никаких вводных фраз типа "в этом слайде" или "стоит отметить".
     - Между слайдами не повторяй одну и ту же структуру фразы - разнообразь подачу (факт, вопрос, сравнение, история).
+      Это касается не только формулировок, но и роли абзацев: если на каждом слайде без исключения первый
+      абзац - это "факт", а второй - обобщающий вывод, вся презентация читается как штамповка по шаблону,
+      даже если сами факты разные. Хотя бы на части слайдов стройте абзацы иначе (два факта подряд, факт без
+      вывода, сравнение "было/стало" без морали в конце).
+    - Название презентации (title) должно честно отражать то, что реально показывают слайды. Если угол
+      наводит на интригующий заголовок вроде "вопросы без ответа" или "тайны, которые не разгаданы" - а по
+      факту каждый слайд даёт уверенный законченный ответ с конкретной цифрой - не используйте такой
+      заголовок, он будет противоречить содержанию. Либо заголовок отражает, что слайды дают ответы, либо
+      среди слайдов реально должны быть настоящие открытые вопросы без разрешения.
+    - Здесь у вас нет исходного текста пользователя - все факты вы придумываете или вспоминаете сами, а
+      значит риск выше: НЕ приписывайте конкретным годам, процентам, институтам, экспедициям или названиям
+      исследований точность, в которой вы не уверены - выдуманная деталь вроде "в 2022 году экспедиция X
+      зафиксировала Y на глубине Z метров" звучит как проверяемый факт, а на деле может им не быть, и это
+      подрывает доверие ко всей презентации, если кто-то захочет проверить. Используйте либо широко известные,
+      действительно достоверные факты, либо формулируйте мягче ("по некоторым данным", "предположительно"),
+      не выдавая догадку за точный отчёт с датой и источником.
     - Никаких общих фраз без содержания ("это важная тема", "мир меняется") - только конкретика: цифры, имена,
       примеры, детали, логично следующие из темы.
     - Фото: описание живого кадра (реальная сцена, человек, объект, место), не стоковый шаблон и не абстракция.
@@ -4473,8 +4747,17 @@ async def _build_presentation(m: Message, state: FSMContext):
         if cover_own:
             user_photo_originals.append(cover_own)
             cover_own = prepare_user_photo(cover_own, colors, user_photos_luminance)
+        # Раньше промпт обложки состоял только из общего названия презентации - для
+        # заголовков вроде "Акулы: вопросы, которые остаются без ответа" это слишком
+        # абстрактно (там нет ни одного предметного слова), и генератор картинки уезжал
+        # в общий пейзаж/закат под стиль темы вместо самой темы. У каждого обычного слайда
+        # есть свой image_prompt с конкретным предметом съёмки (см. цикл генерации фото
+        # ниже) - для обложки берём image_prompt первого слайда как якорь предмета, а
+        # заголовок добавляем поверх для контекста и настроения кадра.
+        cover_subject = (slides_data[0].get("image_prompt") if slides_data else None) or content.get("title")
         cover_ok = bool(cover_own) or await generate_image(
-            f"{content.get('title')}, wide cinematic opening shot, {colors['photo']}", cover_src
+            f"{cover_subject}, wide cinematic opening shot inspired by \"{content.get('title')}\", {colors['photo']}",
+            cover_src,
         )
         # Два стиля обложки, выбираются случайно - чтобы первый (самый запоминающийся) слайд
         # тоже не был всегда одинаковым в каждой презентации:
@@ -4549,20 +4832,35 @@ async def _build_presentation(m: Message, state: FSMContext):
 
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         slide_background(slide, dark_colors)
+        cover_title = content.get("title", "Презентация")
         if cover_panel_img:
             photo_x = 0 if cover_split_side == "left" else 6.933
             panel_x = 6.933 if cover_split_side == "left" else 0
             slide.shapes.add_picture(cover_panel_img, Inches(photo_x), Inches(0), width=Inches(6.4), height=Inches(7.5))
             rect(slide, panel_x, 0, 6.4, 7.5, dark_colors["bg"])
-            txt(slide, panel_x + 0.5, 2.6, 5.4, 2.4, content.get("title", "Презентация"), 40, dark_colors["ink"], True, font_name=dark_colors["heading_font"])
-            rect(slide, panel_x + 0.5, 4.9, 0.85, 0.05, dark_colors["line"])
-            txt(slide, panel_x + 0.5, 6.6, 5.4, 0.4, f"01  /  {n + 1:02}", 13, dark_colors["mute"])
+            txt(slide, panel_x + 0.5, 2.6, 5.4, 2.4, cover_title, 40, dark_colors["ink"], True, font_name=dark_colors["heading_font"])
+            # Раньше акцентная линия и номер страницы стояли на фиксированной высоте,
+            # рассчитанной на заголовок в одну строку - у длинного заголовка (3+ строки
+            # при 40pt в колонке 5.4") текст мог утыкаться в линию/номер без зазора (см.
+            # тот же баг ниже, в band-варианте обложки, где это реально произошло). Сдвигаем
+            # обе отметки вниз пропорционально числу реальных строк заголовка.
+            title_lines = _estimate_wrapped_lines(cover_title, 40, 5.4)
+            extra = max(0, title_lines - 2) * 0.5
+            rect(slide, panel_x + 0.5, min(4.9 + extra, 6.0), 0.85, 0.05, safe_line(dark_colors))
+            txt(slide, panel_x + 0.5, min(6.6 + extra, 6.9), 5.4, 0.4, f"01  /  {n + 1:02}", 13, dark_colors["mute"])
         else:
             if cover_img:
                 slide.shapes.add_picture(cover_img, Inches(0), Inches(0), width=Inches(13.333), height=Inches(7.5))
                 rect(slide, 0, 4.55, 13.333, 2.95, dark_colors["bg"])
-            txt(slide, 0.7, 4.85, 12, 1.75, content.get("title", "Презентация"), 48, dark_colors["ink"], True, font_name=dark_colors["heading_font"])
-            txt(slide, 0.7, 6.6, 12, 0.4, f"01  /  {n + 1:02}", 13, dark_colors["mute"])
+            txt(slide, 0.7, 4.85, 12, 1.75, cover_title, 48, dark_colors["ink"], True, font_name=dark_colors["heading_font"])
+            # Заголовок в 1 строку укладывался в высоту плашки (1.75") с большим запасом,
+            # но у двустрочного (частый случай - см. "Акулы: вопросы, которые остаются без
+            # ответа") реальная высота текста почти равна всей плашке, а номер страницы
+            # стоял ровно на границе плашки (6.6") без зазора - вторая строка утыкалась
+            # прямо в "01 / N". Сдвигаем номер страницы вниз на высоту лишних строк.
+            title_lines = _estimate_wrapped_lines(cover_title, 48, 12)
+            page_num_top = min(6.6 + max(0, title_lines - 1) * 0.55, 7.05)
+            txt(slide, 0.7, page_num_top, 12, 0.4, f"01  /  {n + 1:02}", 13, dark_colors["mute"])
 
         for idx, s in enumerate(slides_data):
             slide = prs.slides.add_slide(prs.slide_layouts[6])
@@ -4693,6 +4991,10 @@ async def _build_presentation(m: Message, state: FSMContext):
                 # пустоту под коротким текстом.
                 card_w, gap, card_top, card_h = 5.85, 0.3, 2.0, 3.0
                 card_fill = card_fill_for(sc)
+                # Текст внутри карточки красим от контраста с card_fill, а не sc["mid"] -
+                # см. докстринг text_on_fill(): sc["mid"] посчитан под фон слайда, а не
+                # под саму плашку, чьи цвет и яркость зависят от темы (card_fill_for).
+                card_text_color = text_on_fill(sc, card_fill)
                 for i, block in enumerate(blocks):
                     card_l = 0.7 + i * (card_w + gap)
                     rect(slide, card_l, card_top, card_w, card_h, card_fill, rounded=True, radius=0.05)
@@ -4703,7 +5005,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                     p = tf.paragraphs[0]
                     p.text = block
                     p.font.size = Pt(16)
-                    p.font.color.rgb = RGBColor(*sc["mid"])
+                    p.font.color.rgb = RGBColor(*card_text_color)
                     p.font.name = "Calibri"
                 txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
             elif layout == 7:
@@ -4713,23 +5015,34 @@ async def _build_presentation(m: Message, state: FSMContext):
                 # стиля - зрительно куда динамичнее плоского списка).
                 txt(slide, 0.7, 0.5, 11.9, 1.0, s.get("title", ""), 32, sc["ink"], True, font_name=sc["heading_font"])
                 blocks = slide_paragraphs(s.get("content"), 3)
-                step_top, step_h, badge = 2.1, 1.55, 0.55
+                # step_h раньше был жёстко 1.55" вне зависимости от того, сколько пунктов
+                # реально пришло (2 или 3) - при 2 пунктах (это происходит чаще всего, см.
+                # common_rules у Grok: "ровно 2 абзаца") весь список утрамбовывался в верхнюю
+                # треть слайда, а нижние ~55% высоты оставались голым полем - слайд выглядел
+                # перекошенным вверх. Растягиваем шаг на всё доступное место между заголовком
+                # и футером, а не только на то, что реально занимает текст - тогда 2 пункта
+                # смотрятся как осознанная раскладка, а не недоделанная страница с 3 пунктами.
+                step_top, footer_top, badge = 2.1, 6.7, 0.55
+                step_h = (footer_top - step_top) / max(len(blocks), 1)
                 badge_l = 0.7
                 line_l = badge_l + badge / 2 - 0.012
                 if len(blocks) > 1:
                     rect(slide, line_l, step_top + badge, 0.024, step_h * (len(blocks) - 1), sc["mute"])
-                # Цифра в бейдже раньше красилась в sc["bg"] в расчёте на то, что это всегда
-                # контрастно с заливкой бейджа (sc["line"]) - верно для светлого варианта темы,
-                # но "line" - единственный цвет, который invert_colors() НЕ трогает при
-                # построении тёмного варианта (см. sandwich_colors/invert_colors выше). У тем,
-                # где ink совпадает с line (fashion, nature), тёмный sc["bg"] оказывается
-                # равен sc["line"] - и номер становится того же цвета, что и сам бейдж, то
-                # есть невидимым. Берём цвет цифры от яркости самой заливки бейджа, а не от
-                # фона слайда - тогда контраст гарантирован в любой теме и на любом варианте.
-                badge_num_color = (255, 255, 255) if _relative_luminance(sc["line"]) < 0.5 else (20, 20, 20)
+                # Сама заливка бейджа: sc["line"] на тёмном "сэндвич"-варианте темы может
+                # совпасть с sc["bg"] (см. docstring safe_line() и card_fill_for() выше) -
+                # тогда квадрат-плашка сливается с фоном слайда. safe_line() тут я в прошлый
+                # раз забыл применить, хотя цифру внутри уже подстраховывал отдельно.
+                badge_fill = safe_line(sc)
+                # Цифра в бейдже раньше красилась по яркости sc["line"] НАПРЯМУЮ - это было
+                # верно, пока сама плашка красилась в sc["line"]. Теперь плашка красится в
+                # safe_line(sc), который на тёмном варианте темы может оказаться СВЕТЛЫМ (а не
+                # тёмным, как исходный sc["line"]) - если считать контраст цифры по-старому от
+                # sc["line"], можно получить белую цифру на светлой плашке (тот же класс бага,
+                # просто с другой стороны). Считаем контраст от ФАКТИЧЕСКОГО цвета плашки.
+                badge_num_color = (255, 255, 255) if _relative_luminance(badge_fill) < 0.5 else (20, 20, 20)
                 for i, block in enumerate(blocks):
                     row_top = step_top + i * step_h
-                    rect(slide, badge_l, row_top, badge, badge, sc["line"], rounded=True, radius=0.28)
+                    rect(slide, badge_l, row_top, badge, badge, badge_fill, rounded=True, radius=0.28)
                     numbox = slide.shapes.add_textbox(Inches(badge_l), Inches(row_top), Inches(badge), Inches(badge))
                     ntf = numbox.text_frame
                     ntf.word_wrap = False
@@ -4758,11 +5071,15 @@ async def _build_presentation(m: Message, state: FSMContext):
                 # разбивает стену текста на читаемые смысловые блоки).
                 txt(slide, 0.7, 0.5, 11.9, 1.0, s.get("title", ""), 32, sc["ink"], True, font_name=sc["heading_font"])
                 blocks = slide_paragraphs(s.get("content"), 2)
-                # row_h был 2.3" - для обычных 2-3-строчных абзацев (Pt(16), textbox шириной
-                # ~10") это в 3-4 раза больше, чем реально занимает текст: под каждым пунктом
-                # оставалась пустая полоса высотой почти в пол-слайда, и раскладка выглядела
-                # не "воздушной", а полупустой/сломанной. 1.4" вплотную под содержимое.
-                row_top, row_h, badge = 2.0, 1.4, 0.5
+                # row_h был жёстко 1.4" - при обычных 2-3-строчных абзацах этого хватало
+                # впритык под сам текст, но здесь ровно 2 пункта (slide_paragraphs(...,2)) -
+                # то есть список ВСЕГДА заканчивался на 2.8" ниже верха, а нижние ~50% слайда
+                # оставались пустыми (тот же перекос, что чинил выше в layout 7). Тянем строки
+                # на всё место между заголовком и футером - при 2 пунктах это ощутимо больше
+                # 1.4", но текст внутри всё равно верхним краем, лишний воздух уходит под него,
+                # а не рвёт раскладку.
+                row_top, footer_top, badge = 2.0, 6.7, 0.5
+                row_h = (footer_top - row_top) / max(len(blocks), 1)
                 badge_fill = card_fill_for(sc, factor=0.7)
                 for i, block in enumerate(blocks):
                     top = row_top + i * row_h
@@ -4891,14 +5208,46 @@ def _p(doc, text, size=12, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT, before=0, 
     return p
 
 
-def _tabbed_line(doc, parts, tabs_cm=(9, 13), size=12, before=0, after=0):
+def _vspace(doc, pt=36):
+    """Точный вертикальный отступ в pt одним пустым абзацем с обнулённым межстрочным
+    интервалом - в отличие от нескольких doc.add_paragraph() подряд без своих настроек:
+    те наследуют интервал документа по умолчанию (styles.xml: after=200 twips + межстрочный
+    1.15 от 11pt, то есть больше 20pt КАЖДЫЙ), и блок из 5 таких пустых абзацев на титульном
+    листе легко тянет на 1.5+ дюйма. Несколько таких блоков в сумме перекрывают всю страницу
+    и часть титульного листа "утекает" на пустую вторую страницу перед разрывом на раздел -
+    именно так гарантированно контролируем итоговую высоту титульника."""
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = DocxPt(0)
+    p.paragraph_format.space_after = DocxPt(pt)
+    p.paragraph_format.line_spacing = 1.0
+    return p
+
+
+def _tabbed_line(doc, parts, tabs_cm=(7, 10), size=12, before=0, after=0):
     """Строка с элементами по табуляции - для строк вида 'подпись ___ И.О. Фамилия'.
-    parts: список (текст, bold)."""
+    parts: список (текст, bold). Табы сдвинуты ближе к началу строки (было 9/13 см), чтобы
+    оставить колонке с ФИО (последний элемент, часто длинный и жирный) больше места до
+    правого поля - иначе она переносится на новую строку, разваливая ровный вид блока подписи.
+    Дополнительно: если текст ДО первого таба (например, длинный незаполненный плейсхолдер
+    от модели вроде "студент [указать номер группы] группы") сам не помещается до первого
+    таб-стопа, сдвигаем оба таб-стопа вправо на разницу - иначе первый таб проваливается
+    мимо своей позиции и вся строка после него съезжает и переносится."""
     p = doc.add_paragraph()
     p.paragraph_format.space_before = DocxPt(before)
     p.paragraph_format.space_after = DocxPt(after)
-    for cm in tabs_cm:
-        p.paragraph_format.tab_stops.add_tab_stop(Cm(cm))
+    tabs = list(tabs_cm)
+    if parts:
+        char_w_cm = size * 0.0175  # грубая оценка ширины символа Times New Roman
+        needed = len(parts[0][0] or "") * char_w_cm + 0.3
+        if tabs and needed > tabs[0]:
+            shift = needed - tabs[0]
+            tabs[0] = needed
+            if len(tabs) > 1:
+                tabs[1] += shift
+    sec = doc.sections[0]
+    usable_cm = (sec.page_width - sec.left_margin - sec.right_margin) / 360000
+    for cm in tabs:
+        p.paragraph_format.tab_stops.add_tab_stop(Cm(min(cm, max(usable_cm - 2.5, 0.5))))
     for i, (text, bold) in enumerate(parts):
         if i > 0:
             p.add_run("\t")
@@ -4911,14 +5260,12 @@ def _student_title_page(doc, kind_label, title, meta):
     слева, линия подписи с ФИО справа от неё, мелкие подписи (подпись)/(ФИО) под линией."""
     _p(doc, meta.get("org") or "Министерство образования", 13, align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
     _p(doc, meta.get("school") or "[Название учебного заведения]", 13, align=WD_ALIGN_PARAGRAPH.CENTER)
-    for _ in range(5):
-        doc.add_paragraph()
+    _vspace(doc, 54)
     _p(doc, title, 16, True, WD_ALIGN_PARAGRAPH.CENTER, after=10)
     _p(doc, kind_label, 14, True, WD_ALIGN_PARAGRAPH.CENTER, after=10)
     if meta.get("discipline"):
         _p(doc, f"по предмету/дисциплине: {meta.get('discipline')}", 12, True, WD_ALIGN_PARAGRAPH.CENTER)
-    for _ in range(5):
-        doc.add_paragraph()
+    _vspace(doc, 54)
     _p(doc, "ВЫПОЛНИЛ", 12, True, after=0)
     _tabbed_line(
         doc,
@@ -4934,7 +5281,7 @@ def _student_title_page(doc, kind_label, title, meta):
         after=0,
     )
     _tabbed_line(doc, [("", False), ("(подпись)", False), ("(ФИО)", False)], size=9, after=8)
-    doc.add_paragraph()
+    _vspace(doc, 14)
     _p(doc, "ОЦЕНКА", 12, True, after=0)
     _tabbed_line(doc, [("", False), ("__________________________", False)], after=16)
     _p(doc, "«___»____________ 20___ г.", 12, after=30)
@@ -5249,16 +5596,13 @@ def build_word(path, title, sections, kind="doc", meta=None, extra_data=None):
         _p(doc, meta.get("school") or "[Название учебного заведения]", 14, align=WD_ALIGN_PARAGRAPH.CENTER)
         if meta.get("specialty"):
             _p(doc, f"Специальность: {meta.get('specialty')}", 12, align=WD_ALIGN_PARAGRAPH.CENTER)
-        for _ in range(4):
-            doc.add_paragraph()
+        _vspace(doc, 48)
         _p(doc, "КУРСОВАЯ РАБОТА", 20, True, WD_ALIGN_PARAGRAPH.CENTER, after=8)
         _p(doc, title, 16, True, WD_ALIGN_PARAGRAPH.CENTER)
-        for _ in range(6):
-            doc.add_paragraph()
+        _vspace(doc, 60)
         _p(doc, f"Выполнил: {meta.get('author') or '[ФИО студента]'}", 14, align=WD_ALIGN_PARAGRAPH.RIGHT, after=0)
         _p(doc, f"Научный руководитель: {meta.get('teacher') or '[ФИО преподавателя]'}", 14, align=WD_ALIGN_PARAGRAPH.RIGHT)
-        for _ in range(6):
-            doc.add_paragraph()
+        _vspace(doc, 60)
         _p(doc, f"{meta.get('city') or '[Город]'} {meta.get('year') or '2026'}", 14, align=WD_ALIGN_PARAGRAPH.CENTER)
         doc.add_page_break()
         _body(doc, sections, indent=True, head_center=True, size=14, line=1.2, first=1.0, head_size=14)
@@ -5568,11 +5912,27 @@ def _xl_style_sheet(ws, colors, n_cols, col_widths=None):
     ws.sheet_properties.tabColor = _xl_hex(colors["line"])
 
 
-def _xl_name_col_width(rows, key="name", min_w=18, max_w=44, pad=4):
+def _xl_name_col_width(rows, key="name", min_w=18, max_w=50, pad=4):
     """Подбирает ширину текстовой колонки под самое длинное реальное значение в данных,
-    а не держит её фиксированной - иначе длинные названия статей обрезались визуально."""
+    а не держит её фиксированной - иначе длинные названия статей обрезались визуально.
+    Потолок max_w нужен, чтобы одна колонка не растягивала лист на весь экран - реальные
+    названия статей часто длиннее его (50-60+ символов), поэтому сам по себе он не
+    гарантирует, что текст поместится в одну строку без переноса (см. _xl_body_row: там
+    для этой колонки включён wrap_text и авто-высота строки под число строк)."""
     longest = max((len(str(r.get(key, ""))) for r in rows), default=min_w)
     return max(min_w, min(max_w, longest + pad))
+
+
+def _xl_estimate_lines(text, col_width_chars):
+    """Грубая оценка, на сколько строк перенесётся текст в ячейке с переносом при заданной
+    ширине колонки (в "символах" Excel - единица ширины колонки openpyxl) - нужна, чтобы
+    выставить высоту строки под реальное число строк, а не оставлять её фиксированной в 1
+    строку, как раньше (из-за чего длинный текст без переноса визуально обрезался)."""
+    text = str(text or "")
+    if not text:
+        return 1
+    chars_per_line = max(4, int(col_width_chars or 18))
+    return max(1, -(-len(text) // chars_per_line))
 
 
 def _xl_finalize_table(ws, colors, header_row, first_data_row, last_data_row, n_cols):
@@ -5602,10 +5962,22 @@ def _xl_body_row(ws, row_idx, values, colors, number_cols=None, money_cols=None,
     if zebra:
         zebra_fill = PatternFill(start_color=_xl_hex(_xl_tint(colors["line"], 0.9)),
                                   end_color=_xl_hex(_xl_tint(colors["line"], 0.9)), fill_type="solid")
+    max_lines = 1
     for i, v in enumerate(values, 1):
         c = ws.cell(row=row_idx, column=i, value=v)
         c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
-        c.alignment = Alignment(horizontal="left" if i == 1 else "center", vertical="center")
+        if i == 2 and isinstance(v, str) and v:
+            # Колонка "Статья"/"Наименование"/"Показатель" - самый длинный текст в таблице,
+            # часто длиннее ширины колонки (реальные названия статей - 50-60+ символов).
+            # Раньше она была по центру без переноса строк - если текст не помещался в одну
+            # строку, центрирование обрезало его визуально с обеих сторон СРАЗУ (пропадали и
+            # первые, и последние буквы), а не переносило на вторую строку. Левый край + перенос
+            # решает это: если строка не влезает, она просто продолжается ниже, а не обрубается.
+            c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            col_w = ws.column_dimensions[get_column_letter(i)].width
+            max_lines = max(max_lines, _xl_estimate_lines(v, col_w))
+        else:
+            c.alignment = Alignment(horizontal="left" if i == 1 else "center", vertical="center")
         if zebra_fill:
             c.fill = zebra_fill
         # Формулы (вычисляемые колонки вроде "Сумма") остаются защищёнными при
@@ -5617,7 +5989,9 @@ def _xl_body_row(ws, row_idx, values, colors, number_cols=None, money_cols=None,
             c.number_format = '0.0%'
         elif number_cols and i in number_cols:
             c.number_format = '#,##0.##'
-    ws.row_dimensions[row_idx].height = 20
+    # Высота строки под реальное число строк переноса - раньше была жёстко зафиксирована
+    # в 20pt, что тоже мешало переносу быть видимым, даже если бы wrap_text был включён.
+    ws.row_dimensions[row_idx].height = 20 if max_lines <= 1 else 14 * max_lines + 8
 
 
 def _xl_total_row(ws, row_idx, label, values, colors, n_cols, money_cols=None, percent_cols=None):
@@ -7359,7 +7733,11 @@ async def word_build(m: Message, state: FSMContext):
 Если в данных пользователя есть даты, ФИО, паспортные данные, суммы, названия сторон - подставь их в meta и в текст
 точно как есть, ничего не меняя и не придумывая.
 Никогда не выдумывай паспортные данные, суммы, даты или ФИО, которых нет в данных пользователя -
-для недостающих данных ставь [указать ...].
+для недостающих данных в тексте документа ставь [указать ...].
+Для полей meta (school, discipline, group, teacher, city и т.п.), если данных нет - НЕ сочиняй свою формулировку
+плейсхолдера и не добавляй к ней слово "указать": верни ровно то короткое значение в квадратных скобках, что
+дано для этого поля в примере схемы meta ниже (например "[учебное заведение]", а не "[указать наименование
+учебного заведения]") - иначе короткая подпись на титульном листе не помещается в строку и переносится некрасиво.
 Для содержательных документов (реферат, коммерческое предложение, заявление) разделы должны раскрывать
 тему конкретно и по существу, без воды и общих фраз.
 Не создавай в sections отдельный раздел «Титульный лист» - обложка (организация, учебное заведение, ФИО
@@ -7615,7 +7993,14 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
     uid = m.from_user.id
     u = get_user(uid)
     recent_generations = (u.get("history") or [])[-3:]
-    reply = await ask_grok_chat(
+    # Точное время и арифметику считаем сами (см. try_local_time_answer/try_local_math_answer) -
+    # раньше это всё шло прямиком в модель, которая для таких вопросов либо выдумывала
+    # правдоподобную на вид цифру, либо считала многозначные числа в уме с ошибкой,
+    # а на "ты уверен?" просто сдавалась вместо того чтобы назвать верный ответ.
+    local_reply = None
+    if lang == "ru":
+        local_reply = try_local_time_answer(text) or try_local_math_answer(text)
+    reply = local_reply or await ask_grok_chat(
         text, lang, history=get_chat_history(uid),
         summary=u.get("chat_summary") or "", facts=u.get("known_facts") or [],
         recent_generations=recent_generations,
