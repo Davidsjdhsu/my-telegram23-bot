@@ -4113,26 +4113,13 @@ async def sync_menu_button(chat_id: int, u: dict, lang: str):
     """Настраивает нативную кнопку меню Telegram (та, что сидит слева от поля ввода
     сообщения, а не внутри Mini App).
 
-    Раньше была отключена намеренно: системная кнопка меню запускает Mini App
-    способом, при котором Telegram.WebApp.sendData() не работает (ограничение
-    платформы - sendData поддерживается только при запуске через кнопку в
-    reply-клавиатуре, см. main_kb/btn_open_miniapp), а обходного пути через свой
-    API не было, пока сервис был Background Worker без входящего HTTP.
-
-    Теперь, когда WEB_BASE_URL настроен (сервис переключён на Web Service), Mini
-    App умеет отправлять действия через /api/action вместо sendData (см. sendAction
-    в index.html) - значит и запуск через системную кнопку меню становится рабочим,
-    поэтому включаем MenuButtonWebApp. Если WEB_BASE_URL ещё не задан - остаёмся на
-    старом безопасном поведении (MenuButtonDefault + кнопка в клавиатуре)."""
+    Раньше здесь включалась MenuButtonWebApp, из-за чего кнопка "✨ Открыть меню"
+    дублировалась: один раз - нативной "таблеткой" у поля ввода, второй раз - тем же
+    пунктом внутри обычной reply-клавиатуры (см. main_kb/btn_open_miniapp), который
+    и остаётся единственным рабочим способом открыть Mini App. Поэтому нативную кнопку
+    меню теперь всегда возвращаем к стандартному виду (MenuButtonDefault) - лишнюю
+    "таблетку" убираем, а кнопка в клавиатуре продолжает работать как раньше."""
     try:
-        if WEB_BASE_URL:
-            miniapp_url = build_miniapp_url(u)
-            if miniapp_url:
-                await bot.set_chat_menu_button(
-                    chat_id=chat_id,
-                    menu_button=MenuButtonWebApp(text=tr("btn_open_miniapp", lang), web_app=WebAppInfo(url=miniapp_url)),
-                )
-                return
         await bot.set_chat_menu_button(chat_id=chat_id, menu_button=MenuButtonDefault())
     except Exception as e:
         print("Не удалось установить кнопку меню чата:", chat_id, e)
