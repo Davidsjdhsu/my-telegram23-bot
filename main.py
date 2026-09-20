@@ -3118,6 +3118,73 @@ _SAFE_MATH_NODES = (
 )
 
 
+# Лимиты, чтобы одно сообщение вроде 9**9**9**9 не могло надолго заморозить весь бот:
+# расчёт идёт прямо в event loop, а Python не прерывает уже начатое возведение в степень.
+_MATH_MAX_BITS = 10000      # ~3000 десятичных цифр - с запасом ниже лимита Python на str(int) (4300)
+_MATH_MAX_EXP = 1000        # максимальная степень
+_MATH_MAX_FACTORIAL = 1000  # 1000! - около 2500 цифр
+
+
+def _math_check_size(v):
+    if isinstance(v, int) and not isinstance(v, bool) and v.bit_length() > _MATH_MAX_BITS:
+        raise ValueError("number too large")
+    return v
+
+
+def _eval_math_node(node):
+    """Обход AST с проверкой размера на КАЖДОМ шаге (до самой тяжёлой операции)."""
+    if isinstance(node, _ast_mod.Expression):
+        return _eval_math_node(node.body)
+    if isinstance(node, _ast_mod.Constant):
+        if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+            raise ValueError("bad constant")
+        return _math_check_size(node.value)
+    if isinstance(node, _ast_mod.UnaryOp):
+        v = _eval_math_node(node.operand)
+        if isinstance(node.op, _ast_mod.USub):
+            return -v
+        if isinstance(node.op, _ast_mod.UAdd):
+            return +v
+        raise ValueError("bad unary op")
+    if isinstance(node, _ast_mod.BinOp):
+        left = _eval_math_node(node.left)
+        right = _eval_math_node(node.right)
+        op = node.op
+        if isinstance(op, _ast_mod.Add):
+            res = left + right
+        elif isinstance(op, _ast_mod.Sub):
+            res = left - right
+        elif isinstance(op, _ast_mod.Mult):
+            res = left * right
+        elif isinstance(op, _ast_mod.Div):
+            res = left / right
+        elif isinstance(op, _ast_mod.Mod):
+            res = left % right
+        elif isinstance(op, _ast_mod.FloorDiv):
+            res = left // right
+        elif isinstance(op, _ast_mod.Pow):
+            if abs(right) > _MATH_MAX_EXP:
+                raise ValueError("exponent too large")
+            if isinstance(left, int) and isinstance(right, int) and right > 0:
+                if abs(left).bit_length() * right > _MATH_MAX_BITS:
+                    raise ValueError("power result too large")
+            res = left ** right
+        else:
+            raise ValueError("bad binary op")
+        return _math_check_size(res)
+    if isinstance(node, _ast_mod.Call):
+        if node.keywords or not isinstance(node.func, _ast_mod.Name):
+            raise ValueError("bad call")
+        name = node.func.id
+        args = [_eval_math_node(a) for a in node.args]
+        if name == "factorial":
+            if len(args) != 1 or not isinstance(args[0], int) or isinstance(args[0], bool) \
+                    or not (0 <= args[0] <= _MATH_MAX_FACTORIAL):
+                raise ValueError("factorial argument out of range")
+        return _math_check_size(_SAFE_MATH_FUNCS[name](*args))
+    raise ValueError(f"unsupported node {type(node).__name__}")
+
+
 def _safe_math_eval(expr: str):
     """Считает арифметическое выражение через AST с белым списком узлов - НЕ eval().
     Кидает исключение на что угодно вне чисел/операторов/функций из _SAFE_MATH_FUNCS."""
@@ -3130,8 +3197,7 @@ def _safe_math_eval(expr: str):
         if isinstance(node, _ast_mod.Call):
             if not isinstance(node.func, _ast_mod.Name) or node.func.id not in _SAFE_MATH_FUNCS:
                 raise ValueError("disallowed call")
-    code = compile(tree, "<safe_math>", "eval")
-    return eval(code, {"__builtins__": {}}, dict(_SAFE_MATH_FUNCS))
+    return _eval_math_node(tree)
 
 
 def try_local_math_answer(text: str) -> str | None:
@@ -3198,13 +3264,18 @@ def try_local_math_answer(text: str) -> str | None:
         return None
     if isinstance(result, complex) or result != result:  # NaN
         return None
-    if isinstance(result, float):
-        if result == int(result) and abs(result) < 1e15:
-            result_str = f"{int(result):,}".replace(",", " ")
+    if isinstance(result, float) and not _math_mod.isfinite(result):  # inf: int(inf) бросил бы OverflowError
+        return None
+    try:
+        if isinstance(result, float):
+            if result == int(result) and abs(result) < 1e15:
+                result_str = f"{int(result):,}".replace(",", " ")
+            else:
+                result_str = f"{result:,.4f}".rstrip("0").rstrip(".").replace(",", " ")
         else:
-            result_str = f"{result:,.4f}".rstrip("0").rstrip(".").replace(",", " ")
-    else:
-        result_str = f"{result:,}".replace(",", " ")
+            result_str = f"{result:,}".replace(",", " ")
+    except (ValueError, OverflowError):
+        return None
     return result_str
 
 
