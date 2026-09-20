@@ -12,7 +12,7 @@ import threading
 import uuid
 import hmac
 import hashlib
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlparse
 from aiohttp import web as _aiohttp_web
 import colorsys
 from collections import deque
@@ -277,6 +277,83 @@ client = AsyncOpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1", timeou
 whisper_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
+
+
+@dp.message(Command("stats"))
+async def cmd_stats(m: Message):
+    """Админ-команда /stats: сколько пользователей в боте. Только для ADMIN_IDS, остальным - тишина
+    (как у /grant и /addcredits). Показывает только числа, без имён и переписки. Зарегистрирована в самом
+    начале, до всех хендлеров состояний: иначе в некоторых состояниях (ввод суммы пополнения, выбор языка)
+    команду перехватил бы обычный ввод текста.
+    Считает всех, кто есть в users.json; дат регистрации и активности бот не хранит, поэтому "новые за
+    сегодня" тут показать нельзя."""
+    if m.from_user.id not in ADMIN_IDS:
+        return
+    users = list(users_db.values())
+    total = len(users)
+    started = sum(1 for u in users if u.get("lang_chosen"))
+    generated = sum(1 for u in users if int(u.get("generations") or 0) > 0)
+    gens = sum(int(u.get("generations") or 0) for u in users)
+    busy = sum(1 for u in users if u.get("busy"))
+    by_lang = {}
+    for u in users:
+        if u.get("lang_chosen"):
+            code = u.get("lang") or "ru"
+            by_lang[code] = by_lang.get(code, 0) + 1
+    lang_line = ", ".join(
+        f"{LANGS.get(c, {}).get('flag', '')} {LANGS.get(c, {}).get('name', c)} - {n}".strip()
+        for c, n in sorted(by_lang.items(), key=lambda x: -x[1])
+    ) or "нет данных"
+    await m.answer(
+        "📊 Статистика бота\n\n"
+        f"👥 Всего пользователей: {total}\n"
+        f"✅ Прошли начало (выбрали язык): {started}\n"
+        f"📄 Сделали хотя бы одну генерацию: {generated}\n"
+        f"🧾 Всего генераций (файлы, картинки, разбор фото): {gens}\n"
+        f"⏳ Сейчас собирают файл: {busy}\n"
+        f"🌐 Языки: {lang_line}"
+    )
+
+
+# Хендлер действий Mini App зарегистрирован ПЕРВЫМ намеренно: aiogram берёт первый подошедший
+# хендлер, а хендлеры состояний (Form.waiting_*) без фильтра по типу сообщения подходят и
+# для web_app_data. Пока он стоял в конце файла, действие из меню во время открытого сценария
+# (тема презентации, сумма пополнения и т.д.) перехватывалось им как пустой текстовый ввод.
+@dp.message(F.web_app_data)
+async def handle_miniapp_data(m: Message, state: FSMContext):
+    """Обрабатывает нажатия в Mini App - каждый пункт меню там при нажатии вызывает
+    Telegram.WebApp.sendData(...), и Telegram доставляет это боту как обычное сообщение
+    с заполненным m.web_app_data.data (JSON-строка вида {"action": "..."}). Дальше просто
+    вызывает ТЕ ЖЕ САМЫЕ функции, что и обычные текстовые кнопки - никакой отдельной
+    логики для Mini App не заводится, чтобы не дублировать и не рассинхронизировать
+    поведение между двумя способами навигации."""
+    try:
+        payload = json.loads(m.web_app_data.data)
+        action = (payload.get("action") or "").strip()
+    except Exception:
+        return
+    try:
+        await _handle_miniapp_payload(m, state, payload, action)
+    except Exception as e:
+        print("Ошибка Mini App:", repr(e))
+        import traceback
+        traceback.print_exc()
+        uid = m.from_user.id if m.from_user else None
+        if uid:
+            try:
+                await bot.send_message(
+                    uid,
+                    "Что-то пошло не так при обработке запроса из меню. Попробуйте ещё раз.",
+                )
+            except Exception:
+                pass
+
+
+def _clip_text(value, limit: int) -> str:
+    """Текстовое поле из Mini App с ограничением длины. В чате есть лимиты (500/800/4000 символов),
+    а через /api/action и sendData они не действовали: в платный Grok можно было отправить любой объём."""
+    return str(value or "").strip()[:limit]
+
 # На Render диск сервиса сбрасывается при деплое. Если задан DATA_DIR
 # (persistent disk), база пользователей живёт там.
 USERS_FILE = os.path.join(os.getenv("DATA_DIR", BASE_DIR), "users.json")
@@ -1565,13 +1642,14 @@ ALL_BTN_OWN_DATA_LABELS = set(TR["btn_own_data"].values())
 ALL_BTN_CHANGE_TOPIC_LABELS = set(TR["btn_change_topic"].values())
 ALL_BTN_CHANGE_STYLE_LABELS = set(TR["btn_change_style"].values())
 ALL_BTN_ADD_INFO_LABELS = set(TR["btn_add_info"].values())
-ALL_BTN_FULL_VERSION_LABELS = set(TR["btn_full_version"].values()) | {"делай", "да", "ок", "yes", "ok"}
+_CONFIRM_WORDS = {"делай", "да", "ок", "yes", "ok", "Делай", "Да", "Ок", "Yes", "Ok", "OK", "ДА", "ОК"}
+ALL_BTN_FULL_VERSION_LABELS = set(TR["btn_full_version"].values()) | _CONFIRM_WORDS
 ALL_BTN_AI_PHOTOS_LABELS = set(TR["btn_ai_photos"].values())
 ALL_BTN_OWN_PHOTOS_LABELS = set(TR["btn_own_photos"].values())
 ALL_BTN_PHOTOS_DONE_LABELS = set(TR["btn_photos_done"].values())
 ALL_BTN_CHANGE_QUERY_LABELS = set(TR["btn_change_query"].values())
-ALL_BTN_BUILD_TABLE_LABELS = set(TR["btn_build_table"].values()) | {"делай", "да", "ок", "yes", "ok"}
-ALL_BTN_BUILD_DOC_LABELS = set(TR["btn_build_doc"].values()) | {"делай", "да", "ок", "yes", "ok"}
+ALL_BTN_BUILD_TABLE_LABELS = set(TR["btn_build_table"].values()) | _CONFIRM_WORDS
+ALL_BTN_BUILD_DOC_LABELS = set(TR["btn_build_doc"].values()) | _CONFIRM_WORDS
 ALL_BTN_TEMPLATE_LABELS = set(TR["btn_template"].values())
 
 
@@ -1808,12 +1886,12 @@ ANGLES = [
 def pick_theme(topic: str):
     t = (topic or "").lower()
     rules = [
-        ("nature", ["животн", "природ", "океан", "кит", "лес", "моря", "птиц", "растен"]),
+        ("nature", ["животн", "природ", "океан", r"кит(?:а|ы|у|ов|ом|ах|ам|е)?(?![а-яё])", r"лес(?:а|у|е|ом|ов|ах|ам|н\w*)?(?![а-яё])", "моря", "птиц", "растен"]),
         ("business", ["бизнес", "компани", "продаж", "финанс", "инвест", "стартап", "рынок"]),
-        ("tech", ["крипт", "техно", "ai", "ии", "робот", "софт", "нейро", "код", "гаджет"]),
+        ("tech", ["крипт", "техно", r"ai(?![a-z])", r"ии(?![а-яё])", "робот", "софт", "нейро", r"код(?:а|у|ом|е|ы|ов)?(?![а-яё])", "гаджет"]),
         ("school", ["школ", "универ", "урок", "студент", "доклад", "класс"]),
-        ("fashion", ["мод", "стиль", "бренд", "одежд"]),
-        ("history", ["истори", "войн", "древн", "импери", "век"]),
+        ("fashion", [r"мод(?:а|ы|е|у|ой|ные|ный|ных)?(?![а-яё])", "стиль", "бренд", "одежд"]),
+        ("history", ["истори", "войн", "древн", "импери", "средневеков", "доистор", r"век(?:а|у|е|ом|и|ов|ах|ам)?(?![а-яё])"]),
         ("space", ["космос", "вселенн", "галактик", "планет", "астроном"]),
         ("medicine", ["медицин", "больниц", "врач", "лечен", "пациент"]),
         ("science", ["наук", "физик", "хими", "биологи"]),
@@ -1833,8 +1911,10 @@ def pick_theme(topic: str):
         ("luxury", ["роскош", "люкс", "элитн"]),
         ("minimal", ["минимал", "чисто", "просто"]),
     ]
+    # Ключи ищем с НАЧАЛА слова: раньше это была подстрока, и "ии" находилось в "истории"/"России"
+    # (тема "история России" получала стиль tech), "век" - в "человек", "кит" - в "Китай", "мод" - в "модель".
     for name, keys in rules:
-        if any(k in t for k in keys):
+        if any(re.search(r"(?<![а-яёa-z0-9])(?:" + k + ")", t) for k in keys):
             return name, THEMES[name]
     return "default", THEMES["default"]
 
@@ -1988,8 +2068,11 @@ WORD_KIND_KEYWORDS = [
 # слишком общие и встречаются в рефератах/эссе на посторонние темы, поэтому одного
 # совпадения недостаточно - должен быть ещё явный признак купли-продажи.
 DKP_CONTEXT_KEYWORDS = ("купли-продажи", "купли продажи", "продаж", "куплю", "продаю", "покупк")
-DKP_CAR_SUBJECT_KEYWORDS = ("машин", "автомобил", "авто")
-DKP_REALTY_SUBJECT_KEYWORDS = ("квартир", "недвиж", "участ", "дом")
+# Предмет ищем по границе слова: подстрока "авто" находилась в "автор"/"автоматизация", а "дом" -
+# в "домашний"/"вдомёк", из-за чего доклад про автоматизацию превращался в договор продажи авто.
+DKP_CAR_RE = re.compile(r"\bавто(?:мобил\w*)?(?![а-яёa-z])|\bмашин\w*")
+DKP_REALTY_RE = re.compile(r"\bквартир\w*|\bнедвижим\w*|\bучаст(?:ок|ка|ку|ком|ке)(?![а-яё])|\bдом(?:а|у|ом|е)?(?![а-яё])")
+_STUDY_WORK_RE = re.compile(r"\b(?:доклад|реферат|эссе|курсов|конспект)")
 
 EXCEL_KIND_KEYWORDS = [
     (("смета проекта", "бизнес-план", "бизнес план"), "project_budget"),
@@ -2002,10 +2085,13 @@ EXCEL_KIND_KEYWORDS = [
 
 def guess_word_kind(text: str) -> str:
     t = (text or "").lower()
-    if any(kw in t for kw in DKP_CONTEXT_KEYWORDS):
-        if any(kw in t for kw in DKP_CAR_SUBJECT_KEYWORDS):
+    # Учебная работа НА ТЕМУ сделок ("доклад про продажи автомобилей") - не договор купли-продажи.
+    # Если же в тексте прямо сказано "договор", то это договор.
+    is_study_topic = bool(_STUDY_WORK_RE.search(t)) and "договор" not in t
+    if any(kw in t for kw in DKP_CONTEXT_KEYWORDS) and not is_study_topic:
+        if DKP_CAR_RE.search(t):
             return "dkp_car"
-        if any(kw in t for kw in DKP_REALTY_SUBJECT_KEYWORDS):
+        if DKP_REALTY_RE.search(t):
             return "dkp_realty"
         return "dkp"
     for keywords, kind in WORD_KIND_KEYWORDS:
@@ -2152,6 +2238,12 @@ async def transcribe_voice(voice, uid) -> str | None:
     except Exception as e:
         print("Ошибка распознавания голоса:", e)
         return None
+    finally:
+        try:
+            if os.path.exists(local_path):
+                os.remove(local_path)
+        except OSError:
+            pass
 
 
 async def maybe_send_voice_reply(m: Message, text: str):
@@ -2182,6 +2274,30 @@ async def maybe_send_voice_reply(m: Message, text: str):
             pass
 
 
+# Лимит на расшифровку голоса: каждое голосовое - платный запрос к Whisper (OpenAI), а лимит на
+# свободный чат (chat_rate_limited) срабатывает только ПОСЛЕ расшифровки, то есть Whisper не защищал.
+VOICE_MIN_INTERVAL_SECONDS = 1
+VOICE_MAX_PER_HOUR = 40
+_voice_request_times: dict = {}
+
+
+def voice_rate_limited(uid) -> bool:
+    """True, если голосовое нужно отклонить, не расшифровывая. Админы не ограничиваются;
+    отклонённое сообщение в счётчик не записывается."""
+    if uid in ADMIN_IDS:
+        return False
+    now = time.monotonic()
+    times = _voice_request_times.setdefault(uid, deque())
+    while times and now - times[0] > 3600:
+        times.popleft()
+    if times and now - times[-1] < VOICE_MIN_INTERVAL_SECONDS:
+        return True
+    if len(times) >= VOICE_MAX_PER_HOUR:
+        return True
+    times.append(now)
+    return False
+
+
 class VoiceToTextMiddleware(BaseMiddleware):
     """Если пользователь прислал голосовое сообщение там, где обработчик ждёт текст -
     расшифровывает через Whisper и подменяет message.text расшифровкой ДО того, как
@@ -2203,6 +2319,9 @@ class VoiceToTextMiddleware(BaseMiddleware):
         if isinstance(event, Message) and event.voice and not event.text:
             uid = event.from_user.id
             lang = user_lang(uid)
+            if voice_rate_limited(uid):
+                await event.answer(tr("msg_chat_rate_limited", lang))
+                return
             listening_msg = await event.answer(tr("msg_voice_transcribing", lang))
             transcript = await transcribe_voice(event.voice, uid)
             try:
@@ -2866,6 +2985,34 @@ def extract_slide_count(text: str):
     return None
 
 
+_PAGE_WORDS = {**_SLIDE_WORDS, "один": 1, "одна": 1, "одну": 1, "два": 2, "две": 2}
+# Единица измерения после числа. Отрицательный просмотр вперёд (?![а-яa-z]) вместо \b, чтобы
+# "стр." и "стр" в конце строки находились, а "листовок" и "стрижка" - нет.
+_PAGE_UNIT = r"(?:страниц\w*|стр\.?|лист(?:ов|а\w*)?|pages?)(?![а-яa-z])"
+
+
+def extract_page_count(text: str):
+    """Число страниц Word из фразы: "реферат на 10 страниц", "курсовая 30 стр", "пять листов",
+    "10-15 страниц". None, если не указано. Диапазон читаем по меньшему числу: платить за
+    верхнюю границу неожиданно. Раньше для этого использовалась extract_slide_count(), которая
+    ищет только слово "слайд" и для документов всегда возвращала None."""
+    t = (text or "").lower()
+    m = re.search(rf"(?<!\d)(\d{{1,3}})\s*[-–—]\s*(\d{{1,3}})\s*{_PAGE_UNIT}", t)
+    if m:
+        n = min(int(m.group(1)), int(m.group(2)))
+        if n >= 1:
+            return n
+    m = re.search(rf"(?<!\d)(\d{{1,3}})\s*{_PAGE_UNIT}", t)
+    if m:
+        n = int(m.group(1))
+        if n >= 1:
+            return n
+    for word, n in sorted(_PAGE_WORDS.items(), key=lambda x: -len(x[0])):
+        if re.search(rf"\b{word}\b\s*{_PAGE_UNIT}", t):
+            return n
+    return None
+
+
 # Простое сопоставление обиходных слов со стилями презентации (ключи THEMES). Не
 # претендует на полный разбор языка - ловит самые ходовые формулировки, остальное
 # просто останется нераспознанным и попадёт в список "уточнить".
@@ -2887,9 +3034,12 @@ STYLE_KEYWORDS = [
 
 
 def extract_style(text: str):
-    t = " " + (text or "").lower() + " "
+    t = (text or "").lower()
     for kw, style in STYLE_KEYWORDS:
-        if kw in t:
+        key = kw.strip()
+        # С начала слова, как в pick_theme. "еда" - только целым словом: подстрока была в "победа"/"беседа".
+        pat = r"еда(?![а-яё])" if key == "еда" else re.escape(key)
+        if re.search(r"(?<![а-яёa-z0-9])" + pat, t):
             return style
     return None
 
@@ -2952,8 +3102,8 @@ def grok_failed(text: str) -> bool:
 # в этом случае человек просто получит обычный ответ чат-помощника, что тоже не страшно.
 DOCUMENT_INTENT_KEYWORDS = [
     "презентац", "слайд", "доклад", "pptx", "power point", "powerpoint",
-    "word", "ворд", "докс", "docx", "реферат", "договор", "заявлени", "резюме",
-    "таблиц", "excel", "эксель", "xlsx", "смету", "смета", "формул",
+    "ворд", "докс", "docx", "реферат", "договор", "заявлени", "резюме",
+    "таблиц", "excel", "эксель", "xlsx", "смету", "смета",
     "шаблон", "бланк",
     "presentation", "slide", "spreadsheet", "resume", "cv ",
 ]
@@ -3009,7 +3159,8 @@ def looks_like_document_request(text: str) -> bool:
     t = (text or "").lower()
     if any(neg in t for neg in NEGATION_PATTERNS):
         return False
-    has_keyword = any(kw in t for kw in DOCUMENT_INTENT_KEYWORDS)
+    # "word" - только целым словом: подстрока находилась в "password" ("generate a password" запускал Word)
+    has_keyword = any(kw in t for kw in DOCUMENT_INTENT_KEYWORDS) or bool(re.search(r"\bword\b", t))
     has_verb = any(v in t for v in DOCUMENT_ACTION_VERBS)
     return has_keyword and has_verb
 
@@ -3225,7 +3376,7 @@ def try_local_math_answer(text: str) -> str | None:
     # диапазон дат/лет или адрес (в них тоже есть цифры и дефисы, легко спутать с "минус").
     had_trigger = bool(re.search(
         r"сколько|посчита|вычисли|реши|чему рав|корень|факториал|процент|квадрат|куб|"
-        r"плюс|минус|раздели|умнож", low))
+        r"плюс|минус|раздели|умнож|%\s*от", low))
     expr = low
     # Частые русские обороты -> питоновский синтаксис. Порядок важен: более длинные/
     # специфичные фразы заменяем раньше более общих. "корень из X" сразу оборачиваем
@@ -3259,7 +3410,7 @@ def try_local_math_answer(text: str) -> str | None:
         # Ни одного слова-триггера - разрешаем только "голое" выражение без единой
         # кириллической буквы (например "25*4+10", "2+2"), да и то не похожее на
         # телефонный номер (несколько дефисов подряд без пробелов).
-        if re.search(r"[а-яё]", low) or expr.count("-") >= 3:
+        if re.search(r"[а-яё]", low) or expr.count("-") >= 2:
             return None
     # Должно остаться ТОЛЬКО арифметикой (цифры/операторы/разрешённые имена функций) -
     # иначе это не однозначный числовой вопрос, а обычный текст, который лучше отдать модели.
@@ -3369,12 +3520,14 @@ async def ask_grok_chat(user_text: str, lang: str = "ru", history: list = None,
         # делало заведомо неудачный запрос с этим параметром, а потом повторяло его без поиска -
         # это давало лишнюю задержку и лишний запрос. Теперь запрос один и обычный.
         # Если понадобится поиск, его нужно подключать через Agent Tools API отдельно.
+        t_start = time.monotonic()
         r = await client.chat.completions.create(
             model="grok-4.3",  # grok-3 отправлен на пенсию xAI 15.05.2026, см. комментарий в update_long_term_memory()
             messages=messages,
             temperature=0.95,
             max_tokens=1200,
         )
+        print(f"[chat] ответ Grok за {time.monotonic() - t_start:.1f} с")  # чтобы видеть, на что уходят секунды ответа
         return r.choices[0].message.content
     except Exception as e:
         print("Grok API error (chat):", e)
@@ -3890,7 +4043,7 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
 # изменился, если сама ссылка выглядит одинаково. Добавляя это число в query-параметры,
 # каждая новая версия HTML получает технически другой адрес, и кэш Telegram больше не
 # может ошибочно посчитать её той же самой страницей.
-MINIAPP_VERSION = 15
+MINIAPP_VERSION = 16
 
 
 def build_miniapp_url(u):
@@ -4056,6 +4209,8 @@ ANTI_AI_DETECTOR_STYLE = (
 # Минимальный суммарный объём (в словах) для проверки после генерации - см.
 # комментарий у WORD_MIN_TOTAL_WORDS.get(...) в word_build. Соответствует нижней
 # границе из length_hint, но отдельной константой, чтобы не парсить текст промпта.
+# УСТАРЕЛО: эти две таблицы больше не используются. Объём теперь считается от числа
+# оплаченных страниц (word_target_words / word_section_min ниже), а не по типу работы.
 WORD_MIN_TOTAL_WORDS = {
     ("coursework", "long"): 6000,
     ("coursework", "short"): 2000,
@@ -4079,6 +4234,26 @@ WORD_SECTION_MIN_WORDS = {
     ("essay", "long"): 250,
     ("essay", "short"): 100,
 }
+WORDS_PER_PAGE = 280  # ориентир для оплаты: страница Word в оформлении учебной работы
+# Сколько содержательных разделов (без титульного листа, содержания и списка литературы)
+# обычно в работе такого типа - чтобы разделить общий объём на минимум слов на раздел.
+WORD_CONTENT_SECTIONS = {"coursework": 6, "referat": 5, "report": 4, "essay": 3}
+
+
+def word_target_words(pages) -> int:
+    return int(pages) * WORDS_PER_PAGE
+
+
+def word_section_min(kind, words_total) -> int:
+    """Минимум слов на содержательный раздел в промпте - от объёма, а не константой:
+    раньше стояло 600 слов на раздел даже для курсовой на 4 страницы (требовалось ~21 стр.)."""
+    return max(60, int(words_total * 0.85 / WORD_CONTENT_SECTIONS.get(kind, 4)))
+
+
+def word_expand_section_min(min_total, n_expandable) -> int:
+    return max(60, int(min_total * 0.9 / max(n_expandable, 1)))
+
+
 # Заголовки, которые не нужно искусственно раздувать при довыворота (оглавление,
 # список источников - у них естественно фиксированный, а не текстовый объём).
 _WORD_SECTION_SKIP_EXPAND = ("содержание", "список литератур", "список источник", "титульный лист", "задание")
@@ -4425,6 +4600,9 @@ async def sync_menu_button(chat_id: int, u: dict, lang: str):
         print("Не удалось установить кнопку меню чата:", chat_id, e)
 
 
+_welcome_banner_file_id = {"value": None}  # file_id баннера после первой отправки: не заливать видео заново на каждый /start
+
+
 async def send_welcome(m: Message, u: dict, lang: str, first_time: bool = False):
     """Приветствие с именем и балансом кредитов - используется и при /start
     у уже знакомых пользователей (короткая форма), и сразу после выбора языка/режима
@@ -4443,20 +4621,30 @@ async def send_welcome(m: Message, u: dict, lang: str, first_time: bool = False)
     # не ломается. caption обрезан до 1024 символов - это жёсткий лимит Telegram для
     # подписи к медиа (у обычных текстовых сообщений лимит намного больше).
     banner = None
-    for name in ("welcome.mp4", "welcome.gif"):
+    for name in ("welcome.mp4", "welcome.gif", "добро пожаловать.mp4"):
         path = os.path.join(BASE_DIR, name)
         if os.path.exists(path):
             banner = path
             break
     if banner:
-        await m.answer_animation(
-            FSInputFile(banner),
-            caption=text[:1024],
-            parse_mode="HTML",
-            reply_markup=kb,
-        )
-    else:
-        await m.answer(text, parse_mode="HTML", reply_markup=kb)
+        try:
+            media = _welcome_banner_file_id["value"] or FSInputFile(banner)
+            sent = await m.answer_animation(media, caption=text[:1024], parse_mode="HTML", reply_markup=kb)
+            try:
+                if _welcome_banner_file_id["value"] is None:
+                    media_obj = (getattr(sent, "animation", None) or getattr(sent, "video", None)
+                                 or getattr(sent, "document", None))
+                    if media_obj is not None and getattr(media_obj, "file_id", None):
+                        _welcome_banner_file_id["value"] = media_obj.file_id
+            except Exception:
+                pass
+            return
+        except Exception as e:
+            # Не вышло отправить видео (слишком большой файл, битый формат) - приветствие всё равно
+            # должно дойти, иначе /start вообще не отвечал бы.
+            print("Не удалось отправить приветственный баннер, отправляю текст:", e)
+            _welcome_banner_file_id["value"] = None
+    await m.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
 @dp.message(Command("start"))
@@ -4591,8 +4779,8 @@ async def process_topic(m: Message, state: FSMContext):
         return
     name, _ = pick_theme(text)
     await state.update_data(topic=text, extra="", extra_used=0, theme_name=name)
-    if is_thin_input(text):
-        await m.answer(tr("msg_thin_input", lang))
+    # Предупреждение "мало вводных" здесь убрано: сам бот просит "можно коротко, например: киты, крипта,
+    # школа", и тут же ругал за короткую тему. (Для собственного текста и Word/Excel оно осталось.)
     style_label = THEME_LABELS_I18N.get(name, {}).get(lang, THEME_LABELS.get(name, name))
     await m.answer(
         tr("msg_style_fits_topic", lang, style=style_label),
@@ -4664,7 +4852,6 @@ async def slides_back(m: Message, state: FSMContext):
     await state.set_state(Form.waiting_theme)
 
 
-@dp.message(Form.waiting_slides)
 async def process_slides(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
@@ -4727,6 +4914,15 @@ async def process_slides(m: Message, state: FSMContext):
         reply_markup=confirm_kb(lang)
     )
     await state.set_state(Form.waiting_confirm)
+
+
+@dp.message(Form.waiting_slides)
+async def process_slides_button(m: Message, state: FSMContext):
+    """Шаг с кнопками выбора числа слайдов. process_slides() берёт уже сохранённое число, если оно
+    есть (так нужно для форм Mini App и быстрой сборки из чата), а в кнопочном сценарии оно оставалось
+    от прошлого прохода: после "Изменить тему" новый выбор (например, 16 вместо 8) игнорировался."""
+    await state.update_data(slides=None)
+    await process_slides(m, state)
 
 
 @dp.message(Form.waiting_confirm, F.text.in_(ALL_BTN_CHANGE_TOPIC_LABELS))
@@ -5140,6 +5336,17 @@ async def _build_presentation(m: Message, state: FSMContext):
                 charts.append(c)
             else:
                 charts.append(None)
+
+        # График рисуют только раскладки 0-5. Раскладки 6-8 ("карточки", "шаги", "бейджи") -
+        # текстовые, без картинки, и график в них не выводится вовсе: слайд, которому модель дала
+        # график, терял его. Для таких слайдов подменяем раскладку на одну из 0-5, стараясь не
+        # повторять соседние слайды.
+        for i in range(n):
+            if charts[i] and layout_sequence[i] in (6, 7, 8):
+                prev_l = layout_sequence[i - 1] if i > 0 else None
+                next_l = layout_sequence[i + 1] if i + 1 < n else None
+                options = [l for l in range(6) if l not in (prev_l, next_l)] or list(range(6))
+                layout_sequence[i] = random.choice(options)
 
         images = []
         raw_sources = []
@@ -7869,6 +8076,13 @@ async def waiting_word_mode_fallback(m: Message, state: FSMContext):
 # параметром. Для юридических документов (договоров, доверенностей, актов и т.п.) объём
 # определяется их обязательной структурой по ГК РФ, а не пожеланием пользователя.
 WORD_SIZE_KINDS = {"referat", "report", "essay", "coursework"}
+# Где пользователь сам выбирает число страниц: учебные работы + "обычный документ" и конспект (там формат
+# свободный). У договоров, заявлений, доверенностей и прочих официальных документов объём определяет сама
+# структура, поэтому там всегда WORD_DEFAULT_PAGES - иначе можно заказать (и оплатить) договор на 30 страниц.
+WORD_PAGE_CHOICE_KINDS = WORD_SIZE_KINDS | {"doc", "notes"}
+
+
+WORD_DEFAULT_PAGES = 2  # объём (и цена: WORD_CREDITS_PER_PAGE за страницу) для документов без выбора объёма
 
 
 async def word_after_input(m: Message, state: FSMContext):
@@ -7876,6 +8090,22 @@ async def word_after_input(m: Message, state: FSMContext):
     data = await state.get_data()
     if is_thin_input(data.get("user_text") or data.get("topic") or ""):
         await m.answer(tr("msg_thin_input", lang))
+    kind = data.get("word_kind", "doc")
+    if kind not in WORD_PAGE_CHOICE_KINDS:
+        # Вопрос "сколько страниц" нужен только там, где объём выбирается свободно (см. WORD_PAGE_CHOICE_KINDS).
+        # Для договоров, заявлений, доверенностей, резюме и т.п. объём определяет сама структура документа,
+        # а вопрос давал возможность случайно заказать (и оплатить) договор аренды на 30 страниц. word_pages задаём явно, чтобы не подхватить значение из прошлой попытки.
+        pages = normalize_word_pages(WORD_DEFAULT_PAGES)
+        if not can_afford(m.from_user.id, word_cost(pages)):
+            await send_no_credits_notice(m, state, lang)
+            return
+        await state.update_data(word_pages=pages, word_size="short")
+        # Состояние как на шаге выбора объёма: если Grok не ответит, пользователь получит клавиатуру
+        # с кнопками подтверждения, и нажатие должно работать как повтор, а не как ввод новой темы.
+        await state.set_state(Form.waiting_word_size)
+        data = await state.get_data()
+        await word_build_draft(m, state, data, "short")
+        return
     await m.answer(tr("msg_which_size", lang), reply_markup=word_size_kb(lang))
     await state.set_state(Form.waiting_word_size)
 
@@ -8072,15 +8302,14 @@ async def word_build(m: Message, state: FSMContext):
     # игнорирует и всё равно пишет коротко, даже с большим лимитом токенов -
     # нужны точные числовые ориентиры по объёму на раздел, иначе она работает
     # по привычке писать компактно, независимо от того, сколько токенов доступно.
-    words_total = pages * 280
+    words_total = word_target_words(pages)
     if kind in WORD_SIZE_KINDS and pages >= 4:
         # Курсовые/рефераты/доклады/эссе на серьёзный объём (4+ страниц - явно не
         # "коротко для галочки") - плоская формула "страницы×280 слов" тут не годится:
         # без явного минимума на раздел модель может размазать общий объём неровно,
         # оставив часть разделов формальными 2-3 предложениями вместо полноценного
         # раскрытия. Пороги примерно как для реальных учебных работ такого типа.
-        section_min_map = {"coursework": 600, "referat": 350, "report": 220, "essay": 220}
-        section_min = section_min_map.get(kind, 250)
+        section_min = word_section_min(kind, words_total)
         length_hint = (
             f"\nЭто полноценная работа для сдачи (не черновик и не план), целевой объём — "
             f"примерно {words_total} слов ({pages} страниц Word). Каждый содержательный "
@@ -8175,8 +8404,10 @@ async def word_build(m: Message, state: FSMContext):
     # фактический объём и, если он далеко от цели, просим модель дописать черновик
     # подробнее - раздел за разделом, с явной цифрой по каждому разделу отдельно
     # (общая просьба "дописать подробнее" на практике не даёт нужного прироста).
-    min_total = WORD_MIN_TOTAL_WORDS.get((kind, size))
-    section_min = WORD_SECTION_MIN_WORDS.get((kind, size))
+    # Минимум - ровно то, за что заплатил пользователь (страницы * WORDS_PER_PAGE). Раньше он брался
+    # по типу работы и не зависел от страниц: курсовая на 4 стр. дописывалась до ~6000 слов (~21 стр.),
+    # а на 40 стр. проверка проходила уже на 4200 словах.
+    min_total = words_total if (kind in WORD_SIZE_KINDS and pages >= 3) else None
     if min_total:
         actual_words = sum(len((b.get("content") or "").split()) for b in content.get("sections", []))
         attempts = 0
@@ -8185,6 +8416,11 @@ async def word_build(m: Message, state: FSMContext):
             msg = tr("msg_writing_more", lang) if attempts == 1 else tr("msg_writing_a_bit_more", lang)
             await m.answer(msg)
             orig_sections = content.get("sections", [])
+            n_expandable = sum(
+                1 for b in orig_sections
+                if not any(k in (b.get('title') or '').lower() for k in _WORD_SECTION_SKIP_EXPAND)
+            )
+            section_min = word_expand_section_min(min_total, n_expandable)
             targets_text = "\n".join(
                 f"{i}. «{(b.get('title') or '').strip()}» — сейчас {len((b.get('content') or '').split())} слов, "
                 + ("оставь как есть." if any(k in (b.get('title') or '').lower() for k in _WORD_SECTION_SKIP_EXPAND)
@@ -8339,8 +8575,8 @@ async def start_collab(m: Message, state: FSMContext):
 # намерений), при этом кредиты за чат не списываются. Без ограничения частоты можно
 # спамить чат за счёт владельца. Защита от флуда в start_job() относится только к
 # генерации файлов и сюда не попадает.
-CHAT_MIN_INTERVAL_SECONDS = 1   # не чаще одного сообщения в 2 секунды
-CHAT_MAX_PER_HOUR = 60          # и не больше 30 сообщений в скользящий час на пользователя
+CHAT_MIN_INTERVAL_SECONDS = 1   # не чаще одного сообщения в секунду
+CHAT_MAX_PER_HOUR = 60          # и не больше 60 сообщений в скользящий час на пользователя
 _chat_request_times: dict = {}  # uid -> deque монотонных меток последних принятых сообщений
 
 
@@ -8421,7 +8657,7 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
             await bot.send_message(m.from_user.id, tr("msg_request_accepted", lang))
             await excel_build(m, state)
             return
-        pages = extract_slide_count(text) or 2
+        pages = extract_page_count(text) or 2
         pages = normalize_word_pages(pages)
         if not can_afford(m.from_user.id, word_cost(pages)):
             await send_no_credits_notice(m, state, lang)
@@ -8458,6 +8694,9 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
     await update_long_term_memory(uid)
 
 
+INIT_DATA_MAX_AGE_SECONDS = 7 * 24 * 3600
+
+
 def verify_telegram_init_data(init_data: str) -> dict | None:
     """Проверяет подлинность initData, которую Mini App передаёт в /api/action -
     без этого кто угодно мог бы прислать чужой user_id и подделать действие от
@@ -8475,6 +8714,14 @@ def verify_telegram_init_data(init_data: str) -> dict | None:
         secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
         computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(computed_hash, received_hash):
+            return None
+        # Свежесть: подпись initData не протухает сама, и украденную строку можно было бы
+        # использовать бесконечно. Неделя - с большим запасом для открытого Mini App.
+        try:
+            auth_date = int(pairs.get("auth_date") or 0)
+        except (TypeError, ValueError):
+            auth_date = 0
+        if auth_date and time.time() - auth_date > INIT_DATA_MAX_AGE_SECONDS:
             return None
         if "user" in pairs:
             pairs["user"] = json.loads(pairs["user"])
@@ -8541,6 +8788,11 @@ class _AnswerableProxy:
     async def answer_photo(self, photo, caption=None, **kw):
         return await bot.send_photo(self._chat_id, photo, caption=caption, **kw)
 
+    async def answer_animation(self, animation, caption=None, **kw):
+        # Нужен send_welcome() для действий из Mini App через /api/action: у _FakeMessageForApi
+        # этого метода нет, и приветствие с баннером падало бы с AttributeError.
+        return await bot.send_animation(self._chat_id, animation, caption=caption, **kw)
+
 
 def ensure_answerable(m: Message):
     """Сообщения, которые приходят от Mini App через web_app_data, эмпирически ведут себя
@@ -8555,36 +8807,6 @@ def ensure_answerable(m: Message):
     прозрачно проксируется на настоящее сообщение."""
     chat_id = m.chat.id if getattr(m, "chat", None) else m.from_user.id
     return _AnswerableProxy(m, chat_id)
-
-
-@dp.message(F.web_app_data)
-async def handle_miniapp_data(m: Message, state: FSMContext):
-    """Обрабатывает нажатия в Mini App - каждый пункт меню там при нажатии вызывает
-    Telegram.WebApp.sendData(...), и Telegram доставляет это боту как обычное сообщение
-    с заполненным m.web_app_data.data (JSON-строка вида {"action": "..."}). Дальше просто
-    вызывает ТЕ ЖЕ САМЫЕ функции, что и обычные текстовые кнопки - никакой отдельной
-    логики для Mini App не заводится, чтобы не дублировать и не рассинхронизировать
-    поведение между двумя способами навигации."""
-    try:
-        payload = json.loads(m.web_app_data.data)
-        action = (payload.get("action") or "").strip()
-    except Exception:
-        return
-    try:
-        await _handle_miniapp_payload(m, state, payload, action)
-    except Exception as e:
-        print("Ошибка Mini App:", repr(e))
-        import traceback
-        traceback.print_exc()
-        uid = m.from_user.id if m.from_user else None
-        if uid:
-            try:
-                await bot.send_message(
-                    uid,
-                    f"Меню дошло, но обработка упала: {type(e).__name__}: {e}",
-                )
-            except Exception:
-                pass
 
 
 async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, action: str):
@@ -8610,11 +8832,11 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         return
 
     if action == "gen_presentation":
-        topic = (payload.get("topic") or "").strip()
+        topic = _clip_text(payload.get("topic"), 500)
         if not topic:
             await bot.send_message(m.from_user.id, "Не вижу тему презентации. Напиши её в чат или открой меню с клавиатуры «Открыть меню».")
             return
-        user_text = (payload.get("user_text") or "").strip()
+        user_text = _clip_text(payload.get("user_text"), 4000)
         slides = payload.get("slides")
         try:
             slides = max(3, min(30, int(slides)))
@@ -8634,19 +8856,24 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         return
 
     if action == "gen_word":
+        kind = str(payload.get("kind") or "doc")
         raw_pages = payload.get("pages") or payload.get("size")
         # 2/6 стр. - те же значения по умолчанию, что и в чатовом меню (word_build_draft),
         # чтобы цена за "Короче"/"Подробнее" совпадала в Mini App и в чате (см. WORD_CREDITS_PER_PAGE).
         pages = normalize_word_pages(raw_pages if str(raw_pages).isdigit() else (6 if payload.get("size") == "long" else 2))
+        if kind not in WORD_PAGE_CHOICE_KINDS:
+            # Число страниц из формы для договоров и официальных документов не принимаем, что бы ни прислали
+            # (в том числе прямым запросом к /api/action): объём у них задан структурой, а не выбором.
+            pages = normalize_word_pages(WORD_DEFAULT_PAGES)
         if not can_afford(m.from_user.id, word_cost(pages)):
             await send_no_credits_notice(m, state, lang)
             return
-        content = (payload.get("content") or "").strip()
+        content = _clip_text(payload.get("content"), 4000)
         if not content:
             return
-        extra = (payload.get("extra") or "").strip()
+        extra = _clip_text(payload.get("extra"), 800)
         await state.update_data(
-            word_kind=payload.get("kind") or "doc",
+            word_kind=kind,
             word_size="short" if pages <= 3 else "long",
             word_pages=pages,
             topic=content, user_text="", extra=extra,
@@ -8661,12 +8888,12 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         if not can_afford(m.from_user.id, CREDIT_COSTS["excel"]):
             await send_no_credits_notice(m, state, lang)
             return
-        content = (payload.get("content") or "").strip()
+        content = _clip_text(payload.get("content"), 4000)
         if not content:
             return
         await state.update_data(
             excel_kind=payload.get("kind") or "calc_table", excel_topic=content,
-            extra=(payload.get("extra") or "").strip(), excel_mode=payload.get("mode") or "ai",
+            extra=_clip_text(payload.get("extra"), 800), excel_mode=payload.get("mode") or "ai",
         )
         await excel_build(m, state)
         return
@@ -8680,7 +8907,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         return
 
     if action == "chat":
-        text = (payload.get("text") or "").strip()
+        text = _clip_text(payload.get("text"), 4000)
         if not text:
             return
         try:
@@ -8806,7 +9033,7 @@ async def addcredits(m: Message):
 async def build_word_from_upload(m: Message, state: FSMContext, source_text: str, instruction: str):
     lang = user_lang(m.from_user.id)
     uid = m.from_user.id
-    pages = extract_slide_count(instruction) or 4
+    pages = extract_page_count(instruction) or 4
     pages = normalize_word_pages(pages)
     if not can_afford(uid, word_cost(pages)):
         await send_no_credits_notice(m, state, lang)
@@ -9235,6 +9462,28 @@ async def global_error_handler(event):
     return True
 
 
+def _cors_headers() -> dict:
+    """Заголовки CORS для /api/action. Mini App лежит на другом адресе (например, GitHub Pages), а
+    fetch с Content-Type: application/json браузер сначала проверяет запросом OPTIONS - без ответа на
+    него запрос вообще не отправляется. Разрешаем только адрес самой Mini App (из MINIAPP_URL): запрос
+    всё равно авторизуется подписью initData в теле, куки не используются."""
+    origin = "*"
+    if MINIAPP_URL:
+        p = urlparse(MINIAPP_URL)
+        if p.scheme and p.netloc:
+            origin = f"{p.scheme}://{p.netloc}"
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Max-Age": "86400",
+    }
+
+
+async def api_action_options(request):
+    return _aiohttp_web.Response(status=204, headers=_cors_headers())
+
+
 async def api_action_handler(request):
     """Приём действий из Mini App через свой HTTP - работает при ЛЮБОМ способе
     открытия Mini App, включая системную кнопку меню чата (где Telegram.WebApp.
@@ -9247,17 +9496,17 @@ async def api_action_handler(request):
     try:
         body = await request.json()
     except Exception:
-        return _aiohttp_web.json_response({"error": "bad json"}, status=400)
+        return _aiohttp_web.json_response({"error": "bad json"}, status=400, headers=_cors_headers())
     init_data = body.get("initData") or ""
     action = (body.get("action") or "").strip()
     payload = body.get("payload") or {}
     parsed = verify_telegram_init_data(init_data)
     if not parsed:
-        return _aiohttp_web.json_response({"error": "invalid init data"}, status=401)
+        return _aiohttp_web.json_response({"error": "invalid init data"}, status=401, headers=_cors_headers())
     user = parsed.get("user") or {}
     uid = user.get("id")
     if not uid or not action:
-        return _aiohttp_web.json_response({"error": "missing uid/action"}, status=400)
+        return _aiohttp_web.json_response({"error": "missing uid/action"}, status=400, headers=_cors_headers())
     try:
         fake_m = _FakeMessageForApi(uid, user.get("first_name", ""))
         m_proxy = ensure_answerable(fake_m)
@@ -9271,7 +9520,7 @@ async def api_action_handler(request):
             await bot.send_message(uid, "Что-то пошло не так при обработке запроса из меню. Попробуйте ещё раз.")
         except Exception:
             pass
-    return _aiohttp_web.json_response({"ok": True})
+    return _aiohttp_web.json_response({"ok": True}, headers=_cors_headers())
 
 
 async def create_yookassa_payment(uid: int, amount_rub: int, credits: int, payment_method: str | None = None) -> str | None:
@@ -9412,8 +9661,11 @@ async def _miniapp_static_handler(request):
     репозитории (см. MINIAPP_STATIC_DIR) - опционально, GitHub Pages как хостинг
     Mini App продолжает работать одновременно и независимо от этого."""
     filename = request.match_info.get("filename", "index.html") or "index.html"
-    path = os.path.join(MINIAPP_STATIC_DIR, filename)
-    if not os.path.isdir(MINIAPP_STATIC_DIR) or not os.path.isfile(path):
+    root = os.path.realpath(MINIAPP_STATIC_DIR)
+    path = os.path.realpath(os.path.join(MINIAPP_STATIC_DIR, filename))
+    # realpath + проверка префикса: иначе "../" (в том числе закодированное) выводило за пределы public/
+    # к любым файлам сервера, включая users.json.
+    if not os.path.isdir(root) or not path.startswith(root + os.sep) or not os.path.isfile(path):
         return _aiohttp_web.Response(status=404, text="Not found")
     return _aiohttp_web.FileResponse(path)
 
@@ -9432,6 +9684,10 @@ async def start_web_server():
     app.router.add_get("/index.html", _miniapp_static_handler)
     app.router.add_get("/{filename:.+}", _miniapp_static_handler)
     app.router.add_post("/api/action", api_action_handler)
+    try:
+        app.router.add_options("/api/action", api_action_options)
+    except Exception as e:  # CORS - дополнение, из-за него сервер не должен не стартовать
+        print("Не удалось зарегистрировать OPTIONS для /api/action:", e)
     app.router.add_post("/yookassa-webhook", yookassa_webhook_handler)
     runner = _aiohttp_web.AppRunner(app)
     await runner.setup()
