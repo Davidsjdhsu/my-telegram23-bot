@@ -1049,6 +1049,15 @@ TR = {
         "es": "No se pudo obtener respuesta, inténtalo de nuevo más tarde.",
         "fr": "Impossible d'obtenir une réponse, réessayez un peu plus tard.",
     },
+    "msg_chat_rate_limited": {
+        "ru": "Слишком много сообщений подряд, подождите немного и попробуйте снова.",
+        "en": "Too many messages in a row, please wait a bit and try again.",
+        "de": "Zu viele Nachrichten hintereinander, bitte warte kurz und versuche es erneut.",
+        "ar": "رسائل كثيرة جداً متتالية، انتظر قليلاً ثم حاول مرة أخرى.",
+        "zh": "连续发送的消息太多，请稍等片刻再试。",
+        "es": "Demasiados mensajes seguidos, espera un momento e inténtalo de nuevo.",
+        "fr": "Trop de messages d'affilée, patientez un peu et réessayez.",
+    },
     "msg_topup_offer": {
         "ru": "Если хотите пополнить баланс — выберите сумму:",
         "en": "If you'd like to top up your balance — pick an amount:",
@@ -8325,11 +8334,42 @@ async def start_collab(m: Message, state: FSMContext):
     await m.answer("\u2060", reply_markup=kb)
 
 
+# --- Лимит на свободный чат ---------------------------------------------------------
+# Каждое свободное сообщение уходит в платный Grok (а длинные - ещё и в классификатор
+# намерений), при этом кредиты за чат не списываются. Без ограничения частоты можно
+# спамить чат за счёт владельца. Защита от флуда в start_job() относится только к
+# генерации файлов и сюда не попадает.
+CHAT_MIN_INTERVAL_SECONDS = 1   # не чаще одного сообщения в 2 секунды
+CHAT_MAX_PER_HOUR = 60          # и не больше 30 сообщений в скользящий час на пользователя
+_chat_request_times: dict = {}  # uid -> deque монотонных меток последних принятых сообщений
+
+
+def chat_rate_limited(uid) -> bool:
+    """True, если сообщение нужно отклонить (слишком часто или превышен часовой лимит).
+    Админы (ADMIN_IDS) не ограничиваются. Отклонённое сообщение в счётчик не записывается,
+    поэтому спам не продлевает блокировку."""
+    if uid in ADMIN_IDS:
+        return False
+    now = time.monotonic()
+    times = _chat_request_times.setdefault(uid, deque())
+    while times and now - times[0] > 3600:
+        times.popleft()
+    if times and now - times[-1] < CHAT_MIN_INTERVAL_SECONDS:
+        return True
+    if len(times) >= CHAT_MAX_PER_HOUR:
+        return True
+    times.append(now)
+    return False
+
+
 async def handle_free_text_request(m: Message, state: FSMContext, text: str):
     """Общая обработка фразы из чата бота и из поля чата Mini App."""
     lang = user_lang(m.from_user.id)
     text = (text or "").strip()
     if not text:
+        return
+    if chat_rate_limited(m.from_user.id):
+        await bot.send_message(m.from_user.id, tr("msg_chat_rate_limited", lang))
         return
     fmt = None
     if looks_like_document_request(text):
