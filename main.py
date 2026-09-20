@@ -3355,27 +3355,17 @@ async def ask_grok_chat(user_text: str, lang: str = "ru", history: list = None,
         ]
         messages.extend(history or [])
         messages.append({"role": "user", "content": user_text})
-        # Живой веб-поиск (актуальные новости, курсы, свежие факты) - параметр специфичен
-        # для xAI API, официально не части общего OpenAI-совместимого SDK, поэтому
-        # передаём через extra_body и на любой сбой (например, если xAI поменяет формат
-        # параметра) откатываемся на обычный запрос без поиска - чат не должен падать
-        # из-за экспериментальной фичи.
-        try:
-            r = await client.chat.completions.create(
-                model="grok-4.3",  # grok-3 отправлен на пенсию xAI 15.05.2026, см. комментарий в update_long_term_memory()
-                messages=messages,
-                temperature=0.95,
-                max_tokens=1200,
-                extra_body={"search_parameters": {"mode": "auto"}},
-            )
-        except Exception as e_search:
-            print("Живой поиск недоступен, отвечаю без него:", e_search)
-            r = await client.chat.completions.create(
-                model="grok-4.3",
-                messages=messages,
-                temperature=0.95,
-                max_tokens=1200,
-            )
+        # Живой веб-поиск (search_parameters) xAI отключила: API отвечает 410 "Live search is
+        # deprecated" и предлагает перейти на Agent Tools API. Раньше каждое сообщение сначала
+        # делало заведомо неудачный запрос с этим параметром, а потом повторяло его без поиска -
+        # это давало лишнюю задержку и лишний запрос. Теперь запрос один и обычный.
+        # Если понадобится поиск, его нужно подключать через Agent Tools API отдельно.
+        r = await client.chat.completions.create(
+            model="grok-4.3",  # grok-3 отправлен на пенсию xAI 15.05.2026, см. комментарий в update_long_term_memory()
+            messages=messages,
+            temperature=0.95,
+            max_tokens=1200,
+        )
         return r.choices[0].message.content
     except Exception as e:
         print("Grok API error (chat):", e)
