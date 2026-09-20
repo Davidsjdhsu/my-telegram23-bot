@@ -223,7 +223,31 @@ MINIAPP_STATIC_DIR = os.path.join(BASE_DIR, "public")
 YOOKASSA_SHOP_ID = (os.getenv("YOOKASSA_SHOP_ID") or "").strip()
 YOOKASSA_SECRET_KEY = (os.getenv("YOOKASSA_SECRET_KEY") or "").strip()
 BOT_USERNAME = (os.getenv("BOT_USERNAME") or "AlixDocBot").strip().lstrip("@")
-_processed_yookassa_payment_ids = set()  # защита от повторной обработки одного и того же вебхука
+PROCESSED_PAYMENTS_FILE = os.path.join(os.getenv("DATA_DIR", BASE_DIR), "processed_payments.json")
+
+
+def _load_processed_payments():
+    try:
+        with open(PROCESSED_PAYMENTS_FILE, "r", encoding="utf-8") as f:
+            return set(json.load(f))
+    except FileNotFoundError:
+        return set()
+    except Exception as e:
+        print("Не удалось прочитать processed_payments.json:", e)
+        return set()
+
+
+def _save_processed_payments():
+    try:
+        tmp = PROCESSED_PAYMENTS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(sorted(_processed_yookassa_payment_ids), f)
+        os.replace(tmp, PROCESSED_PAYMENTS_FILE)
+    except Exception as e:
+        print("Не удалось сохранить processed_payments.json:", e)
+
+
+_processed_yookassa_payment_ids = _load_processed_payments()  # защита от повторной обработки одного и того же вебхука (хранится на диске)
 COLLAB_USERNAME = (os.getenv("COLLAB_USERNAME") or "AlixDocCooperation").strip().lstrip("@")
 
 MAX_UPLOAD_BYTES = 19 * 1024 * 1024  # Telegram Bot API и так режет ~20 МБ
@@ -9220,48 +9244,61 @@ async def _fetch_yookassa_payment(payment_id: str) -> dict | None:
 
 async def yookassa_webhook_handler(request):
     """ЮKassa стучится сюда при изменении статуса платежа - нас интересует только
-    payment.succeeded. Отвечаем 200 почти всегда (в том числе на "непонятные"
-    события) - иначе ЮKassa будет бесконечно повторять доставку одного и того же
-    уведомления, приняв любой другой код ответа за временный сбой на нашей стороне.
+    payment.succeeded. Вебхуки ЮKassa не подписаны, POST на этот адрес может прислать
+    кто угодно, поэтому тело запроса используем только чтобы узнать payment_id, а
+    решение о зачислении кредитов принимаем исключительно по ответу
+    _fetch_yookassa_payment() (прямой запрос к API ЮKassa).
 
-    Тело вебхука используем только чтобы понять, ЗА КАКИМ payment_id идти проверять
-    статус - решение о зачислении кредитов принимаем исключительно по ответу
-    _fetch_yookassa_payment(), а не по event/paid/metadata из самого запроса (это
-    защита от поддельного POST на этот адрес, см. docstring выше)."""
+    payment_id занимаем ДО первого await, чтобы два одновременных вебхука на один
+    платёж не зачислили кредиты дважды. Если платёж не зачислен (проверка не прошла
+    или упала), id освобождается. Если API ЮKassa было недоступно, отвечаем 500 -
+    тогда ЮKassa повторит доставку позже, а не потеряет платёж."""
     try:
         data = await request.json()
     except Exception:
         return _aiohttp_web.Response(status=400, text="bad json")
     obj = data.get("object") or {}
     payment_id = obj.get("id")
-    if data.get("event") == "payment.succeeded" and payment_id:
-        if payment_id not in _processed_yookassa_payment_ids:
-            verified = await _fetch_yookassa_payment(payment_id)
-            if verified and verified.get("status") == "succeeded" and verified.get("paid"):
-                metadata = verified.get("metadata") or {}
+    if data.get("event") != "payment.succeeded" or not payment_id:
+        return _aiohttp_web.Response(status=200, text="ok")
+    if payment_id in _processed_yookassa_payment_ids:
+        return _aiohttp_web.Response(status=200, text="ok")
+
+    _processed_yookassa_payment_ids.add(payment_id)
+    credited = False
+    retry = False
+    try:
+        verified = await _fetch_yookassa_payment(payment_id)
+        if verified is None:
+            retry = True  # сеть/API недоступны - пусть ЮKassa повторит позже
+        elif verified.get("status") == "succeeded" and verified.get("paid"):
+            metadata = verified.get("metadata") or {}
+            try:
+                uid = int(metadata.get("uid"))
+                credits = int(metadata.get("credits"))
+            except (TypeError, ValueError):
+                uid = credits = None
+            if uid and credits:
+                u = get_user(uid)
+                u["credits"] = int(u.get("credits") or 0) + credits
+                credited = True
+                save_users()
+                _save_processed_payments()
+                lang = user_lang(uid)
                 try:
-                    uid = int(metadata.get("uid"))
-                    credits = int(metadata.get("credits"))
-                except (TypeError, ValueError):
-                    uid = credits = None
-                if uid and credits:
-                    # В "обработанные" помечаем только ПОСЛЕ реального зачисления - если
-                    # тут что-то упадёт (например save_users()), ЮKassa повторит вебхук
-                    # позже, и мы не потеряем платёж молча.
-                    _processed_yookassa_payment_ids.add(payment_id)
-                    u = get_user(uid)
-                    u["credits"] = int(u.get("credits") or 0) + credits
-                    save_users()
-                    lang = user_lang(uid)
+                    await bot.send_message(uid, tr("msg_payment_success", lang, credits=credits, balance=u["credits"]))
+                except Exception as e:
+                    print("Не удалось уведомить об оплате:", uid, e)
+                for admin_id in PAYMENT_NOTIFY_IDS:
                     try:
-                        await bot.send_message(uid, tr("msg_payment_success", lang, credits=credits, balance=u["credits"]))
-                    except Exception as e:
-                        print("Не удалось уведомить об оплате:", uid, e)
-                    for admin_id in PAYMENT_NOTIFY_IDS:
-                        try:
-                            await bot.send_message(admin_id, f"💰 Оплата (ЮKassa API): {uid} пополнил на {credits} кредитов.")
-                        except Exception:
-                            pass
+                        await bot.send_message(admin_id, f"💰 Оплата (ЮKassa API): {uid} пополнил на {credits} кредитов.")
+                    except Exception:
+                        pass
+    finally:
+        if not credited:
+            _processed_yookassa_payment_ids.discard(payment_id)
+    if retry:
+        return _aiohttp_web.Response(status=500, text="verify failed, retry later")
     return _aiohttp_web.Response(status=200, text="ok")
 
 
