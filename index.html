@@ -994,7 +994,7 @@
         <input class="field-input" id="wordExtra" type="text" data-i18n-ph="wordExtraPh" placeholder="ФИО, даты, детали для подстановки">
       </div>
 
-      <div class="field-block">
+      <div class="field-block" id="wordPagesBlock">
         <p class="field-label" data-i18n="sizeLabel">Страниц</p>
         <div class="stepper">
           <button class="stepper-btn" id="wordPagesMinus">−</button>
@@ -1865,8 +1865,23 @@
   let wordPages = 2;
   const wordPagesValueEl = document.getElementById('wordPagesValue');
   const wordCostEl = document.getElementById('wordCostLabel');
+  // Виды документов, где число страниц выбирает пользователь (держать в синхроне с WORD_PAGE_CHOICE_KINDS и
+  // WORD_DEFAULT_PAGES в main.py). У договоров и официальных документов объём задаёт сама структура:
+  // раньше и для них можно было выбрать 30 страниц и оплатить их (150 кредитов за договор аренды).
+  const WORD_PAGE_CHOICE_KINDS = ['referat', 'coursework', 'report', 'essay', 'doc', 'notes'];
+  const WORD_DEFAULT_PAGES = 2;
+  function wordPagesChoosable() {
+    const sel = document.getElementById('wordKind');
+    return !!sel && WORD_PAGE_CHOICE_KINDS.includes(sel.value);
+  }
+  function effectiveWordPages() { return wordPagesChoosable() ? wordPages : WORD_DEFAULT_PAGES; }
   function updateWordCostLabel() {
-    if (wordCostEl) wordCostEl.textContent = tpl('costLabel', { n: wordPages * WORD_CREDITS_PER_PAGE });
+    if (wordCostEl) wordCostEl.textContent = tpl('costLabel', { n: effectiveWordPages() * WORD_CREDITS_PER_PAGE });
+  }
+  function refreshWordPagesUI() {
+    const block = document.getElementById('wordPagesBlock');
+    if (block) block.style.display = wordPagesChoosable() ? '' : 'none';
+    updateWordCostLabel();
   }
   document.getElementById('wordPagesMinus').addEventListener('click', () => {
     wordPages = Math.max(WORD_PAGES_MIN, wordPages - 1);
@@ -1878,7 +1893,9 @@
     wordPagesValueEl.textContent = wordPages;
     updateWordCostLabel();
   });
-  updateWordCostLabel();
+  refreshWordPagesUI();
+  const wordKindSelect = document.getElementById('wordKind');
+  if (wordKindSelect) wordKindSelect.addEventListener('change', refreshWordPagesUI);
 
   // --- Отправка формы презентации ---
   document.getElementById('presSubmit').addEventListener('click', () => {
@@ -1901,7 +1918,7 @@
       kind: document.getElementById('wordKind').value,
       content,
       extra: document.getElementById('wordExtra').value.trim(),
-      pages: wordPages,
+      pages: effectiveWordPages(),
     });
   });
 
@@ -1953,6 +1970,16 @@
       size: 'short',
     });
   });
+
+  // Лимиты длины полей - те же, что на сервере (_clip_text в main.py). Без них длинный текст молча обрезался бы.
+  (function applyMaxLengths() {
+    const limits = {
+      presTopic: 500, presUserText: 4000, wordContent: 4000, wordExtra: 800, excelContent: 4000, excelExtra: 800,
+      dkpCarContent: 4000, dkpCarExtra: 800, dkpRealtyContent: 4000, dkpRealtyExtra: 800,
+      resumeContent: 4000, resumeExtra: 800,
+    };
+    Object.keys(limits).forEach(id => { const el = document.getElementById(id); if (el) el.maxLength = limits[id]; });
+  })();
 </script>
 
 </body>
