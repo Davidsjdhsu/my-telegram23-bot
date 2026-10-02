@@ -316,6 +316,92 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 
+# --- Учёт использования чата ----------------------------------------------------------
+# Свободный чат - основная нагрузка на платный Grok, но раньше бот не знал, кто и сколько
+# пишет. Теперь у каждого пользователя считаются сообщения по дням (последние
+# CHAT_STATS_KEEP_DAYS дней), общее число сообщений и дата последней активности.
+# Дни считаются по московскому времени.
+CHAT_STATS_KEEP_DAYS = 14
+_stats_meta = {"since": None}  # с какой даты ведётся учёт (хранится в служебной записи users.json)
+
+
+def _msk_day(offset_days: int = 0) -> str:
+    from datetime import timezone as _tz, timedelta as _td
+    return (datetime.now(_tz(_td(hours=3))) - _td(days=offset_days)).strftime("%Y-%m-%d")
+
+
+def note_chat_message(uid):
+    """Отмечает одно сообщение в свободном чате. Только меняет данные в памяти - на диск
+    они уйдут ближайшим обычным сохранением (в чате оно происходит на каждой реплике)."""
+    try:
+        u = get_user(uid)
+        today = _msk_day()
+        by_day = u.get("chat_by_day")
+        if not isinstance(by_day, dict):
+            by_day = {}
+        by_day[today] = int(by_day.get(today) or 0) + 1
+        if len(by_day) > CHAT_STATS_KEEP_DAYS:
+            for d in sorted(by_day)[:-CHAT_STATS_KEEP_DAYS]:
+                by_day.pop(d, None)
+        u["chat_by_day"] = by_day
+        u["chat_msgs"] = int(u.get("chat_msgs") or 0) + 1
+        u["last_active"] = today
+        if not _stats_meta["since"]:
+            _stats_meta["since"] = today
+    except Exception as e:
+        print("Не удалось учесть сообщение чата:", e)
+
+
+def chat_stats_text() -> str:
+    """Блок статистики чата для /stats: сколько людей и сообщений сегодня и за 7 дней,
+    как сообщения распределены между людьми и кто самые активные."""
+    today = _msk_day()
+    week = {_msk_day(i) for i in range(7)}
+    today_users = today_msgs = week_users = week_msgs = total_msgs = 0
+    new_today = new_week = 0
+    per_user_week = []
+    for uid, u in users_db.items():
+        by_day = u.get("chat_by_day") if isinstance(u.get("chat_by_day"), dict) else {}
+        t = int(by_day.get(today) or 0)
+        w = sum(int(v or 0) for d, v in by_day.items() if d in week)
+        total_msgs += int(u.get("chat_msgs") or 0)
+        if t:
+            today_users += 1
+            today_msgs += t
+        if w:
+            week_users += 1
+            week_msgs += w
+            per_user_week.append((w, uid, u.get("name") or ""))
+        fs = u.get("first_seen")
+        if fs == today:
+            new_today += 1
+        if fs in week:
+            new_week += 1
+    light = sum(1 for w, _, _ in per_user_week if w <= 5)
+    medium = sum(1 for w, _, _ in per_user_week if 6 <= w <= 30)
+    heavy = sum(1 for w, _, _ in per_user_week if w > 30)
+    per_user_week.sort(reverse=True)
+    top = per_user_week[:10]
+    top_share = round(100 * sum(w for w, _, _ in top) / week_msgs) if week_msgs else 0
+    lines = [
+        f"💬 Чат (учёт с {_stats_meta['since'] or 'сегодня'}, дни по Москве)",
+        f"Сегодня: {today_users} чел., {today_msgs} сообщений",
+        f"За 7 дней: {week_users} чел., {week_msgs} сообщений",
+        f"Всего сообщений с начала учёта: {total_msgs}",
+        f"🆕 Новых пользователей: сегодня {new_today}, за 7 дней {new_week}",
+        "",
+        "Кто сколько пишет (за 7 дней):",
+        f"• 1-5 сообщений: {light} чел.",
+        f"• 6-30 сообщений: {medium} чел.",
+        f"• больше 30: {heavy} чел.",
+    ]
+    if top:
+        lines += ["", f"Топ-{len(top)} за 7 дней (их доля: {top_share}% всех сообщений):"]
+        for w, uid, name in top:
+            lines.append(f"• {name[:20] or 'без имени'} (id {uid}): {w}")
+    return "\n".join(lines)
+
+
 @dp.message(Command("stats"))
 async def cmd_stats(m: Message):
     """Админ-команда /stats: сколько пользователей в боте. Только для ADMIN_IDS, остальным - тишина
@@ -348,7 +434,8 @@ async def cmd_stats(m: Message):
         f"📄 Сделали хотя бы одну генерацию: {generated}\n"
         f"🧾 Всего генераций (файлы, картинки, разбор фото): {gens}\n"
         f"⏳ Сейчас собирают файл: {busy}\n"
-        f"🌐 Языки: {lang_line}"
+        f"🌐 Языки: {lang_line}\n\n"
+        + chat_stats_text()
     )
 
 
@@ -501,6 +588,8 @@ def _apply_users_meta(meta):
     try:
         _processed_yookassa_payment_ids.update(str(x) for x in (meta.get("yk") or []))
         _processed_tg_charge_ids.update(str(x) for x in (meta.get("tg") or []))
+        if meta.get("stats_since"):
+            _stats_meta["since"] = str(meta["stats_since"])
     except Exception as e:
         print("Не удалось прочитать служебную запись users.json:", e)
 
@@ -568,9 +657,19 @@ def _build_users_payload():
             "chat_summary": u.get("chat_summary") or "",
             "known_facts": list(u.get("known_facts") or [])[-15:],
         }
+        # Учёт чата - пишем только если есть что писать, чтобы не раздувать файл.
+        if u.get("chat_msgs"):
+            payload[str(uid)]["chat_msgs"] = int(u.get("chat_msgs") or 0)
+        if isinstance(u.get("chat_by_day"), dict) and u["chat_by_day"]:
+            payload[str(uid)]["chat_by_day"] = dict(u["chat_by_day"])
+        if u.get("last_active"):
+            payload[str(uid)]["last_active"] = u["last_active"]
+        if u.get("first_seen"):
+            payload[str(uid)]["first_seen"] = u["first_seen"]
     payload[USERS_META_KEY] = {
         "yk": sorted(_processed_yookassa_payment_ids),
         "tg": sorted(_processed_tg_charge_ids),
+        "stats_since": _stats_meta["since"],
     }
     return payload
 
@@ -2393,7 +2492,8 @@ def get_user(uid):
     if uid not in users_db:
         users_db[uid] = {"name": "", "plan": "premium", "generations": 0, "history": [], "busy": False,
                           "lang": "ru", "lang_chosen": False, "control_mode": "buttons", "control_mode_chosen": False,
-                          "credits": STARTING_CREDITS, "chat_history": [], "chat_summary": "", "known_facts": []}
+                          "credits": STARTING_CREDITS, "chat_history": [], "chat_summary": "", "known_facts": [],
+                          "first_seen": _msk_day()}
         save_users()
     elif "credits" not in users_db[uid]:
         # существующие пользователи с прошлой версии бота - выдаём тот же стартовый баланс один раз
@@ -8961,6 +9061,7 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
     local_reply = None
     if lang == "ru":
         local_reply = try_local_time_answer(text) or try_local_math_answer(text)
+    note_chat_message(uid)
     reply = local_reply or await ask_grok_chat(
         text, lang, history=get_chat_history(uid),
         summary=u.get("chat_summary") or "", facts=u.get("known_facts") or [],
