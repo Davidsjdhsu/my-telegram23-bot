@@ -63,6 +63,7 @@ except Exception:
     # размытие фона просто откатится на центр кадра вместо детекции лица, без падений.
     cv2 = None
     _FACE_CASCADE = None
+_face_cascade_lock = threading.Lock()  # детектор лиц вызывается из рабочих потоков по одному
 import httpx
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -352,6 +353,74 @@ def note_chat_message(uid):
         print("Не удалось учесть сообщение чата:", e)
 
 
+# --- Проверка "живой человек" перед платным чатом -------------------------------------
+# Сотни автоматических аккаунтов пишут боту наборы случайных слов и получают платные ответы
+# Grok, при этом ни один из них не нажимает кнопок. Поэтому свободный чат отвечает только тем,
+# кто хотя бы раз выбрал язык кнопкой. Остальным вместо ответа показываются кнопки языка
+# (это бесплатно), а их последнее сообщение запоминается: как только человек нажмёт кнопку,
+# бот сам ответит на него - ничего писать заново не нужно.
+PENDING_MESSAGE_TTL_SECONDS = 3600
+LANG_GATE_PROMPT_INTERVAL_SECONDS = 30  # кнопки одному и тому же аккаунту не чаще раза в 30 секунд
+_pending_first_message = {}   # uid -> (текст, момент time.monotonic())
+_last_gate_prompt = {}        # uid -> момент последнего показа кнопок
+LANG_GATE_TEXT = (
+    "Чтобы продолжить, выберите язык кнопкой ниже — это нужно сделать один раз. "
+    "На ваше сообщение я отвечу сразу после выбора.\n\n"
+    "To continue, please choose a language with a button below — just once. "
+    "I will answer your message right after that."
+)
+
+
+def note_gated_message(uid):
+    """Учитывает сообщение, остановленное проверкой (для /stats)."""
+    try:
+        u = get_user(uid)
+        today = _msk_day()
+        by_day = u.get("gated_by_day")
+        if not isinstance(by_day, dict):
+            by_day = {}
+        by_day[today] = int(by_day.get(today) or 0) + 1
+        if len(by_day) > CHAT_STATS_KEEP_DAYS:
+            for d in sorted(by_day)[:-CHAT_STATS_KEEP_DAYS]:
+                by_day.pop(d, None)
+        u["gated_by_day"] = by_day
+    except Exception as e:
+        print("Не удалось учесть остановленное сообщение:", e)
+
+
+async def ask_language_first(uid, state, text: str):
+    """Запоминает сообщение и показывает кнопки выбора языка вместо платного ответа."""
+    now = time.monotonic()
+    text = (text or "").strip()
+    if text and text not in LANG_LABEL_TO_CODE:
+        _pending_first_message[uid] = (text[:4000], now)
+    note_gated_message(uid)
+    if state is not None:
+        try:
+            await state.set_state(Form.waiting_language)
+        except Exception as e:
+            print("Не удалось выставить ожидание языка:", uid, e)
+    if now - _last_gate_prompt.get(uid, float("-inf")) < LANG_GATE_PROMPT_INTERVAL_SECONDS:
+        return
+    _last_gate_prompt[uid] = now
+    try:
+        await bot.send_message(uid, LANG_GATE_TEXT, reply_markup=lang_kb())
+    except Exception as e:
+        print("Не удалось показать выбор языка:", uid, e)
+
+
+def take_pending_message(uid):
+    """Возвращает запомненное сообщение (если оно свежее) и забывает его."""
+    item = _pending_first_message.pop(uid, None)
+    _last_gate_prompt.pop(uid, None)
+    if not item:
+        return None
+    text, ts = item
+    if time.monotonic() - ts > PENDING_MESSAGE_TTL_SECONDS:
+        return None
+    return text
+
+
 def chat_stats_text() -> str:
     """Блок статистики чата для /stats: сколько людей и сообщений сегодня и за 7 дней,
     как сообщения распределены между людьми и кто самые активные."""
@@ -377,6 +446,17 @@ def chat_stats_text() -> str:
             new_today += 1
         if fs in week:
             new_week += 1
+    gated_today_users = gated_today_msgs = gated_week_users = gated_week_msgs = 0
+    for u in users_db.values():
+        g = u.get("gated_by_day") if isinstance(u.get("gated_by_day"), dict) else {}
+        gt = int(g.get(today) or 0)
+        gw = sum(int(v or 0) for d, v in g.items() if d in week)
+        if gt:
+            gated_today_users += 1
+            gated_today_msgs += gt
+        if gw:
+            gated_week_users += 1
+            gated_week_msgs += gw
     light = sum(1 for w, _, _ in per_user_week if w <= 5)
     medium = sum(1 for w, _, _ in per_user_week if 6 <= w <= 30)
     heavy = sum(1 for w, _, _ in per_user_week if w > 30)
@@ -389,6 +469,10 @@ def chat_stats_text() -> str:
         f"За 7 дней: {week_users} чел., {week_msgs} сообщений",
         f"Всего сообщений с начала учёта: {total_msgs}",
         f"🆕 Новых пользователей: сегодня {new_today}, за 7 дней {new_week}",
+        "",
+        "🛡 Остановлено проверкой (не выбрали язык, в Grok не ушло):",
+        f"Сегодня: {gated_today_users} акк., {gated_today_msgs} сообщений",
+        f"За 7 дней: {gated_week_users} акк., {gated_week_msgs} сообщений",
         "",
         "Кто сколько пишет (за 7 дней):",
         f"• 1-5 сообщений: {light} чел.",
@@ -664,6 +748,8 @@ def _build_users_payload():
             payload[str(uid)]["chat_by_day"] = dict(u["chat_by_day"])
         if u.get("last_active"):
             payload[str(uid)]["last_active"] = u["last_active"]
+        if isinstance(u.get("gated_by_day"), dict) and u["gated_by_day"]:
+            payload[str(uid)]["gated_by_day"] = dict(u["gated_by_day"])
         if u.get("first_seen"):
             payload[str(uid)]["first_seen"] = u["first_seen"]
     payload[USERS_META_KEY] = {
@@ -709,6 +795,23 @@ async def _save_users_async():
     payload = _build_users_payload()
     async with _save_users_lock:
         return await asyncio.to_thread(_write_users_payload, payload)
+
+
+# Тяжёлая синхронная работа (сборка Word/Excel, обработка фото, чтение PDF, сохранение pptx)
+# раньше выполнялась прямо в основном цикле бота: пока собирался чей-то файл, бот не отвечал
+# вообще никому. Теперь она уходит в отдельные потоки. Потоков два - чтобы две сборки шли
+# одновременно, но память маленького сервера (512 МБ) не кончилась от десятка параллельных.
+# Запись базы пользователей идёт через другой пул и в эту очередь не встаёт.
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+import functools as _functools
+_heavy_pool = _ThreadPoolExecutor(max_workers=2, thread_name_prefix="heavy")
+
+
+async def run_heavy(fn, *args, **kwargs):
+    """Выполняет блокирующую функцию в отдельном потоке и возвращает её результат.
+    Исключения пробрасываются как при обычном вызове."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_heavy_pool, _functools.partial(fn, *args, **kwargs))
 
 
 _pending_save_tasks = set()  # ссылки на фоновые записи: без них задачу может убрать сборщик мусора
@@ -3084,7 +3187,7 @@ async def ask_grok_vision(image_path: str, prompt: str, max_tokens: int = 2500) 
     """Распознаёт печатный и рукописный текст на фото и отвечает по задаче."""
     last_err = None
     try:
-        b64, mime = _prepare_vision_image(image_path)
+        b64, mime = (await run_heavy(_prepare_vision_image, image_path))
     except Exception as e:
         return f"{GROK_ERROR_PREFIX}{e}"
     models = [VISION_MODEL, "grok-4.6"]  # запасной вариант тоже актуальный, не устаревший grok-2-vision-1212/grok-4
@@ -3940,7 +4043,7 @@ async def generate_image(prompt: str, path: str) -> bool:
                     raw = await http.get(str(url))
                     with open(path, "wb") as f:
                         f.write(raw.content)
-                    Image.open(path).convert("RGB").save(path, "PNG")
+                    await run_heavy(lambda: Image.open(path).convert("RGB").save(path, "PNG"))
                     print("Image saved:", path)
                     return True
                 if info.get("status") in ("failed", "canceled"):
@@ -3994,7 +4097,8 @@ def _detect_subject_region(im: Image.Image):
         import numpy as np
         gray = np.asarray(im.convert("L"))
         min_size = max(20, int(min(im.size) * 0.06))
-        faces = _FACE_CASCADE.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(min_size, min_size))
+        with _face_cascade_lock:
+            faces = _FACE_CASCADE.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(min_size, min_size))
         if len(faces) == 0:
             return None
         x1 = min(x for x, y, w, h in faces)
@@ -5049,15 +5153,33 @@ async def cmd_start(m: Message, state: FSMContext):
 async def set_language(m: Message, state: FSMContext):
     code = LANG_LABEL_TO_CODE.get((m.text or "").strip())
     if not code:
+        if not get_user(m.from_user.id).get("lang_chosen"):
+            # Язык ещё ни разу не выбран: запоминаем сообщение и показываем кнопки (без Grok).
+            await ask_language_first(m.from_user.id, state, m.text or "")
+            return
         await m.answer(" / ".join(TR["msg_choose_lang"][c] for c in ("ru", "en", "ar", "zh")), reply_markup=lang_kb())
         return
-    u = get_user(m.from_user.id)
+    await complete_language_choice(m, state, code)
+
+
+async def complete_language_choice(m: Message, state: FSMContext, code: str):
+    """Сохраняет выбранный язык, показывает приветствие и отвечает на сообщение, которое
+    человек написал до выбора языка (если оно было и ещё свежее)."""
+    uid = m.from_user.id
+    u = get_user(uid)
     was_new = not u.get("lang_chosen")
     u["lang"] = code
     u["lang_chosen"] = True
     save_users()
-    await state.clear()
+    if state is not None:
+        await state.clear()
     await send_welcome(m, u, code, first_time=was_new)
+    pending = take_pending_message(uid) if was_new else None
+    if pending:
+        try:
+            await handle_free_text_request(m, state, pending)
+        except Exception as e:
+            print("Не удалось ответить на запомненное сообщение:", uid, repr(e))
 
 
 # Голос (кнопками/голосом) больше не спрашивается отдельным обязательным шагом при /start -
@@ -5663,7 +5785,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         user_photos = list(data.get("user_photos") or [])
         # Общий уровень яркости по ВСЕМ присланным фото - ориентир для enhance_user_photo(),
         # чтобы фото с разных камер/освещения в одной презентации смотрелись как единый комплект.
-        user_photos_luminance = average_luminance(user_photos) if user_photos else None
+        user_photos_luminance = (await run_heavy(average_luminance, user_photos)) if user_photos else None
 
         cover_img = None
         cover_panel_img = None
@@ -5672,7 +5794,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         user_photo_originals = []
         if cover_own:
             user_photo_originals.append(cover_own)
-            cover_own = prepare_user_photo(cover_own, colors, user_photos_luminance)
+            cover_own = (await run_heavy(prepare_user_photo, cover_own, colors, user_photos_luminance))
         # Раньше промпт обложки состоял только из общего названия презентации - для
         # заголовков вроде "Акулы: вопросы, которые остаются без ответа" это слишком
         # абстрактно (там нет ни одного предметного слова), и генератор картинки уезжал
@@ -5694,11 +5816,11 @@ async def _build_presentation(m: Message, state: FSMContext):
         if cover_ok:
             if cover_style == "split":
                 cover_panel = f"/tmp/{uid}_cover_panel.png"
-                cover(cover_own or cover_src, cover_panel, 1280, 1500)
+                (await run_heavy(cover, cover_own or cover_src, cover_panel, 1280, 1500))
                 cover_panel_img = cover_panel
             else:
                 cover_wide = f"/tmp/{uid}_cover_w.png"
-                cover(cover_own or cover_src, cover_wide, 1920, 1080)
+                (await run_heavy(cover, cover_own or cover_src, cover_wide, 1920, 1080))
                 cover_img = cover_wide
 
         # Если модель дала валидный chart для слайда - фото для него не генерируем вообще
@@ -5745,7 +5867,7 @@ async def _build_presentation(m: Message, state: FSMContext):
             own = user_photos.pop(0) if user_photos else None
             if own:
                 user_photo_originals.append(own)
-                src, ok = prepare_user_photo(own, colors, user_photos_luminance), True
+                src, ok = (await run_heavy(prepare_user_photo, own, colors, user_photos_luminance)), True
             else:
                 src = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}.png"
                 prompt = f"{s.get('image_prompt') or s.get('title')}, {colors['photo']}, unique composition"
@@ -5760,9 +5882,9 @@ async def _build_presentation(m: Message, state: FSMContext):
                 # просто растягивал его под чужие пропорции - искажение доходило до ~39%, лица и
                 # предметы визуально "расплющивало". Теперь готовим кадр сразу под нужное соотношение.
                 banner = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}_b.png"
-                cover(src, wide, 1920, 1080)
-                cover(src, tall, 1260, 1500)
-                cover(src, banner, 1920, 655)
+                (await run_heavy(cover, src, wide, 1920, 1080))
+                (await run_heavy(cover, src, tall, 1260, 1500))
+                (await run_heavy(cover, src, banner, 1920, 655))
                 images.append((wide, tall, banner))
             else:
                 images.append(None)
@@ -6046,7 +6168,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                 txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
 
         pptx_path = f"/tmp/pres_{uid}.pptx"
-        prs.save(pptx_path)
+        await run_heavy(prs.save, pptx_path)
         pdf_path = f"/tmp/pres_{uid}.pdf"
         pdf = canvas.Canvas(pdf_path, pagesize=A4)
         w, h = A4
@@ -7733,7 +7855,7 @@ async def excel_build(m: Message, state: FSMContext):
                 )
 
             xlsx_path = f"/tmp/xl_{uid}.xlsx"
-            build_excel_startup(xlsx_path, parsed.get("title") or "Финансовая модель", colors, parsed)
+            (await run_heavy(build_excel_startup, xlsx_path, parsed.get("title") or "Финансовая модель", colors, parsed))
             title_for_name = parsed.get("title") or "Финмодель"
         else:
             schema = EXCEL_ROW_SCHEMA[kind]
@@ -7805,7 +7927,7 @@ async def excel_build(m: Message, state: FSMContext):
             if topic and data.get("excel_mode") != "user":
                 topic_short = topic if len(topic) <= 60 else topic[:57] + "..."
                 xl_subtitle += f" · Тема: {topic_short}"
-            build_excel_items(xlsx_path, parsed.get("title") or EXCEL_KIND_DESC.get(kind, "Таблица"), kind, colors, rows, subtitle=xl_subtitle)
+            (await run_heavy(build_excel_items, xlsx_path, parsed.get("title") or EXCEL_KIND_DESC.get(kind, "Таблица"), kind, colors, rows, subtitle=xl_subtitle))
             title_for_name = parsed.get("title") or EXCEL_KIND_DESC.get(kind)
 
         fname = safe_filename(title_for_name, fallback=EXCEL_KIND_DESC.get(kind, "Таблица"))
@@ -8415,7 +8537,7 @@ async def word_mode_template(m: Message, state: FSMContext):
             meta = json.loads(META_SCHEMAS.get(kind, META_SCHEMAS["doc"]))
         except Exception:
             meta = {}
-        build_word(tpl_path, "Документ", template_sections_for(kind), kind, meta)
+        (await run_heavy(build_word, tpl_path, "Документ", template_sections_for(kind), kind, meta))
         await m.answer_document(FSInputFile(tpl_path), caption=tr("msg_template_caption", lang))
         try:
             os.remove(tpl_path)
@@ -8845,14 +8967,14 @@ async def word_build(m: Message, state: FSMContext):
 
     try:
         docx_path = f"/tmp/doc_{uid}.docx"
-        build_word(
+        (await run_heavy(build_word, 
             docx_path,
             content.get("title", "Документ"),
             content.get("sections", []),
             kind,
             content.get("meta") or {},
             extra_data={"skills": content.get("skills"), "languages": content.get("languages")}
-        )
+        ))
 
         pdf_path = f"/tmp/doc_{uid}.pdf"
         pdf = canvas.Canvas(pdf_path, pagesize=A4)
@@ -8984,6 +9106,15 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
     lang = user_lang(m.from_user.id)
     text = (text or "").strip()
     if not text:
+        return
+    if not get_user(m.from_user.id).get("lang_chosen"):
+        # Состояние "жду язык" хранится в памяти и теряется при перезапуске бота, поэтому
+        # нажатие кнопки языка может прийти сюда - тогда просто засчитываем выбор.
+        code = LANG_LABEL_TO_CODE.get(text)
+        if code:
+            await complete_language_choice(m, state, code)
+        else:
+            await ask_language_first(m.from_user.id, state, text)
         return
     if chat_rate_limited(m.from_user.id):
         await bot.send_message(m.from_user.id, tr("msg_chat_rate_limited", lang))
@@ -9463,7 +9594,7 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
     u = get_user(uid)
     docx_path = f"/tmp/upload_result_{uid}_{random.randint(1000, 9999)}.docx"
     try:
-        build_word(docx_path, content.get("title") or kind_name, content["sections"], kind, content.get("meta") or {})
+        (await run_heavy(build_word, docx_path, content.get("title") or kind_name, content["sections"], kind, content.get("meta") or {}))
         fname = safe_filename(content.get("title"), fallback=kind_name)
         await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
         u["generations"] += 1
@@ -9500,7 +9631,7 @@ async def build_presentation_with_copied_style(m: Message, state: FSMContext, pp
         except Exception:
             pass
         return
-    custom_colors = extract_pptx_style(pptx_path)
+    custom_colors = (await run_heavy(extract_pptx_style, pptx_path))
     try:
         os.remove(pptx_path)
     except Exception:
@@ -9730,7 +9861,7 @@ async def document_upload(m: Message, state: FSMContext):
         await build_presentation_with_copied_style(m, state, local_path, caption)
         return
 
-    source_text, err = extract_text_from_upload(local_path, filename)
+    source_text, err = (await run_heavy(extract_text_from_upload, local_path, filename))
     if source_text and len(source_text) > MAX_SOURCE_TEXT_CHARS:
         source_text = source_text[:MAX_SOURCE_TEXT_CHARS]
 
@@ -10047,18 +10178,63 @@ async def _health_handler(request):
     return _aiohttp_web.Response(text="OK")
 
 
+_STATIC_TEXT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+}
+_ROOT_STATIC_ALLOWED = re.compile(
+    r"^(index\.html|offer\.html|terms\.html|telegram-web-app\.js|preview-\d+\.jpg"
+    r"|examples/[^/\\]+\.(pptx|docx|xlsx))$"
+)
+_static_gzip_cache = {}  # путь -> ((mtime, size), сжатые байты)
+
+
 async def _miniapp_static_handler(request):
     """Отдаёт файлы Mini App с этого же сервера, если папка public/ существует в
     репозитории (см. MINIAPP_STATIC_DIR) - опционально, GitHub Pages как хостинг
     Mini App продолжает работать одновременно и независимо от этого."""
     filename = request.match_info.get("filename", "index.html") or "index.html"
-    root = os.path.realpath(MINIAPP_STATIC_DIR)
-    path = os.path.realpath(os.path.join(MINIAPP_STATIC_DIR, filename))
+    static_dir = MINIAPP_STATIC_DIR
+    if not os.path.isdir(static_dir):
+        # Папки public/ нет - отдаём меню прямо из корня проекта, но ТОЛЬКО файлы из белого
+        # списка (страницы меню, картинки-превью, примеры). Код бота и всё остальное по этому
+        # адресу недоступно: любое другое имя получает 404.
+        if not _ROOT_STATIC_ALLOWED.match(filename):
+            return _aiohttp_web.Response(status=404, text="Not found")
+        static_dir = BASE_DIR
+    root = os.path.realpath(static_dir)
+    path = os.path.realpath(os.path.join(static_dir, filename))
     # realpath + проверка префикса: иначе "../" (в том числе закодированное) выводило за пределы public/
     # к любым файлам сервера, включая users.json.
     if not os.path.isdir(root) or not path.startswith(root + os.sep) or not os.path.isfile(path):
         return _aiohttp_web.Response(status=404, text="Not found")
-    return _aiohttp_web.FileResponse(path)
+    ext = os.path.splitext(path)[1].lower()
+    text_type = _STATIC_TEXT_TYPES.get(ext)
+    if text_type:
+        # Страницы и скрипты: всегда свежая версия (no-cache = браузер перепроверяет), а по сети
+        # идут сжатыми - index.html так весит в несколько раз меньше. Сжатый вариант считается
+        # один раз и пересчитывается сам, когда файл на диске меняется.
+        if "gzip" in (request.headers.get("Accept-Encoding") or "").lower():
+            try:
+                st = os.stat(path)
+                key = (st.st_mtime_ns, st.st_size)
+                cached = _static_gzip_cache.get(path)
+                if not cached or cached[0] != key:
+                    import gzip as _gzip
+                    with open(path, "rb") as f:
+                        cached = (key, _gzip.compress(f.read(), 6))
+                    _static_gzip_cache[path] = cached
+                return _aiohttp_web.Response(body=cached[1], headers={
+                    "Content-Type": text_type, "Content-Encoding": "gzip",
+                    "Cache-Control": "no-cache", "Vary": "Accept-Encoding",
+                })
+            except Exception as e:
+                print("Не удалось сжать статический файл, отдаю как есть:", path, e)
+        return _aiohttp_web.FileResponse(path, headers={"Cache-Control": "no-cache"})
+    # Картинки и примеры файлов меняются редко - разрешаем браузеру хранить их сутки,
+    # тогда при повторном открытии меню они не скачиваются заново.
+    return _aiohttp_web.FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
 
 
 async def start_web_server():
