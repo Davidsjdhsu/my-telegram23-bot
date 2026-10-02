@@ -248,6 +248,43 @@ def _save_processed_payments():
 
 
 _processed_yookassa_payment_ids = _load_processed_payments()  # защита от повторной обработки одного и того же вебхука (хранится на диске)
+# Уже зачисленные платежи Telegram Payments (telegram_payment_charge_id) - защита от повторного
+# начисления, если Telegram доставит одно и то же обновление дважды (например, после рестарта).
+_processed_tg_charge_ids = set()
+
+# Журнал платежей: одна строка JSON на платёж, только дозапись. Нужен, чтобы спор с
+# пользователем ("я платил, а кредитов нет") разбирался по файлу, а не по памяти.
+PAYMENTS_LOG_FILE = os.path.join(os.getenv("DATA_DIR", BASE_DIR), "payments.jsonl")
+# Резервные копии users.json: при старте и раз в час, храним последние BACKUP_KEEP штук
+# (и не больше BACKUP_MAX_TOTAL_BYTES суммарно, чтобы копии не съели весь диск).
+BACKUP_DIR = os.path.join(os.getenv("DATA_DIR", BASE_DIR), "backups")
+BACKUP_KEEP = 48
+BACKUP_MAX_TOTAL_BYTES = 300 * 1024 * 1024
+BACKUP_INTERVAL_SECONDS = 3600
+# Раз в сутки свежая копия базы уходит документом первому админу - копия вне сервера.
+# Отключается переменной окружения BACKUP_SEND_DAILY=0.
+BACKUP_SEND_DAILY = (os.getenv("BACKUP_SEND_DAILY") or "1").strip() not in ("0", "false", "no", "")
+
+
+def log_payment(provider: str, uid, payment_id, amount_rub, credits, balance_after):
+    """Дописывает строку в журнал платежей и сразу сбрасывает её на диск. Ошибка журнала
+    не должна мешать начислению - поэтому только печатаем её в лог."""
+    try:
+        rec = {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "provider": provider,
+            "uid": uid,
+            "payment_id": payment_id,
+            "amount_rub": amount_rub,
+            "credits": credits,
+            "balance_after": balance_after,
+        }
+        with open(PAYMENTS_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception as e:
+        print("Не удалось записать платёж в журнал:", e)
 COLLAB_USERNAME = (os.getenv("COLLAB_USERNAME") or "AlixDocCooperation").strip().lstrip("@")
 
 MAX_UPLOAD_BYTES = 19 * 1024 * 1024  # Telegram Bot API и так режет ~20 МБ
@@ -416,28 +453,100 @@ PAYMENT_CURRENCY = "RUB"
 
 # Три пакета с прогрессивной скидкой за объём. price_rub - в рублях (не в копейках,
 # перевод в копейки для Telegram Payments происходит в момент отправки инвойса).
-def load_users():
-    """Читает users.json после рестарта, чтобы не обнулялись язык, тариф и история."""
+USERS_META_KEY = "__meta__"  # служебная запись внутри users.json (не пользователь)
+_users_load_note = {"restored_from": None, "corrupt_copy": None}
+
+
+def _parse_users_file(path):
+    """Читает файл базы. Бросает исключение, если файл битый - вызывающий код решает, что делать."""
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    if not isinstance(raw, dict):
+        raise ValueError("ожидался JSON-объект")
+    meta = raw.get(USERS_META_KEY)
+    if not isinstance(meta, dict):
+        meta = {}
+    out = {}
+    for k, v in raw.items():
+        try:
+            uid = int(k)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(v, dict):
+            continue
+        v["busy"] = False
+        v["_counted"] = False
+        out[uid] = v
+    return out, meta
+
+
+def _list_user_backups():
+    """Пути резервных копий, от самой свежей к самой старой."""
     try:
-        with open(USERS_FILE, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-        out = {}
-        for k, v in raw.items():
-            try:
-                uid = int(k)
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(v, dict):
-                continue
-            v["busy"] = False
-            v["_counted"] = False
-            out[uid] = v
-        return out
+        names = sorted(
+            (n for n in os.listdir(BACKUP_DIR) if n.startswith("users-") and n.endswith(".json")),
+            reverse=True,
+        )
     except FileNotFoundError:
-        return {}
+        return []
     except Exception as e:
-        print("Не удалось прочитать users.json:", e)
-        return {}
+        print("Не удалось прочитать папку резервных копий:", e)
+        return []
+    return [os.path.join(BACKUP_DIR, n) for n in names]
+
+
+def _apply_users_meta(meta):
+    """Отметки об уже зачисленных платежах лежат в том же файле, что и балансы, - так баланс
+    и отметка "платёж обработан" попадают на диск одной атомарной записью."""
+    try:
+        _processed_yookassa_payment_ids.update(str(x) for x in (meta.get("yk") or []))
+        _processed_tg_charge_ids.update(str(x) for x in (meta.get("tg") or []))
+    except Exception as e:
+        print("Не удалось прочитать служебную запись users.json:", e)
+
+
+def load_users():
+    """Читает users.json после рестарта, чтобы не обнулялись язык, тариф и история.
+
+    Пустая база допустима ТОЛЬКО когда нет ни файла, ни резервных копий (самый первый
+    запуск). Если файл есть, но не читается, раньше возвращался пустой словарь, и первое же
+    сохранение затирало балансы всех пользователей. Теперь: берём самую свежую читаемую
+    резервную копию, а если копий нет - не запускаемся вообще (лучше бот постоит, чем
+    сотрёт купленные кредиты)."""
+    problem = None
+    if os.path.exists(USERS_FILE):
+        try:
+            out, meta = _parse_users_file(USERS_FILE)
+            _apply_users_meta(meta)
+            return out
+        except Exception as e:
+            problem = f"users.json не читается: {e}"
+            print("ВНИМАНИЕ:", problem)
+            try:
+                import shutil as _shutil
+                corrupt = f"{USERS_FILE}.corrupt-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                _shutil.copy2(USERS_FILE, corrupt)
+                _users_load_note["corrupt_copy"] = corrupt
+            except Exception as e2:
+                print("Не удалось сохранить копию битого users.json:", e2)
+    backups = _list_user_backups()
+    if problem is None and not backups:
+        return {}  # первый запуск: нет ни базы, ни копий
+    for bpath in backups:
+        try:
+            out, meta = _parse_users_file(bpath)
+            _apply_users_meta(meta)
+            _users_load_note["restored_from"] = bpath
+            print(f"ВНИМАНИЕ: база пользователей восстановлена из резервной копии {bpath} "
+                  f"({len(out)} пользователей). Причина: {problem or 'файл users.json отсутствует'}")
+            return out
+        except Exception as e:
+            print("Резервная копия не читается:", bpath, e)
+    raise RuntimeError(
+        f"{problem}. Резервных копий в {BACKUP_DIR} нет или они тоже не читаются. Бот НЕ запущен, "
+        "чтобы не затереть базу пустыми данными. Восстановите диск из снимка (Render -> Disk -> "
+        "Snapshots) или положите рабочий users.json на место."
+    )
 
 
 def _build_users_payload():
@@ -459,6 +568,10 @@ def _build_users_payload():
             "chat_summary": u.get("chat_summary") or "",
             "known_facts": list(u.get("known_facts") or [])[-15:],
         }
+    payload[USERS_META_KEY] = {
+        "yk": sorted(_processed_yookassa_payment_ids),
+        "tg": sorted(_processed_tg_charge_ids),
+    }
     return payload
 
 
@@ -466,12 +579,22 @@ def _write_users_payload(payload):
     """Блокирующая часть - реальная запись на диск (atomic replace). Вызывается только
     в отдельном потоке через asyncio.to_thread, никогда напрямую из event loop."""
     try:
+        users_count = sum(1 for k in payload if k != USERS_META_KEY)
+        if users_count == 0 and os.path.exists(USERS_FILE) and os.path.getsize(USERS_FILE) > 2048:
+            # В памяти ни одного пользователя, а на диске непустая база - так бывает только при
+            # сбое. Затирать её пустым файлом нельзя ни при каких обстоятельствах.
+            print("ОТКАЗ В ЗАПИСИ: пустая база не будет записана поверх непустого users.json")
+            return False
         tmp = USERS_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=0)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, USERS_FILE)
+        return True
     except Exception as e:
         print("Не удалось сохранить users.json:", e)
+        return False
 
 
 _save_users_lock = asyncio.Lock()
@@ -486,7 +609,149 @@ async def _save_users_async():
     # на диск РАНЬШЕ, а следом его молча затёр бы более старый снимок.
     payload = _build_users_payload()
     async with _save_users_lock:
-        await asyncio.to_thread(_write_users_payload, payload)
+        return await asyncio.to_thread(_write_users_payload, payload)
+
+
+_pending_save_tasks = set()  # ссылки на фоновые записи: без них задачу может убрать сборщик мусора
+
+
+async def save_users_now() -> bool:
+    """Запись базы на диск С ОЖИДАНИЕМ результата. Используется там, где нельзя полагаться на
+    фоновую запись, - при зачислении оплаты: если процесс перезапустится сразу после платежа,
+    баланс уже должен лежать на диске. Возвращает True, если запись удалась."""
+    try:
+        return bool(await _save_users_async())
+    except Exception as e:
+        print("Не удалось надёжно сохранить users.json:", e)
+        return False
+
+
+def _backup_users_file():
+    """Копирует users.json в папку резервных копий и удаляет лишние старые копии.
+    Блокирующая функция - из асинхронного кода вызывать через asyncio.to_thread."""
+    import shutil as _shutil
+    if not os.path.exists(USERS_FILE):
+        return None
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    dst = os.path.join(BACKUP_DIR, f"users-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json")
+    tmp = dst + ".tmp"
+    _shutil.copy2(USERS_FILE, tmp)
+    os.replace(tmp, dst)
+    backups = _list_user_backups()  # от свежей к старой
+    total = 0
+    for i, path in enumerate(backups):
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            size = 0
+        total += size
+        too_many = i >= BACKUP_KEEP
+        too_big = total > BACKUP_MAX_TOTAL_BYTES and i >= 3  # три самые свежие не трогаем никогда
+        if too_many or too_big:
+            try:
+                os.remove(path)
+            except OSError as e:
+                print("Не удалось удалить старую резервную копию:", path, e)
+    return dst
+
+
+async def _notify_admins(text: str):
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, text)
+        except Exception as e:
+            print("Не удалось написать админу:", admin_id, e)
+
+
+async def _send_daily_backup_if_due():
+    """Раз в календарные сутки отправляет users.json первому админу. Дата последней отправки
+    хранится в файле, поэтому частые перезапуски бота не приводят к повторным отправкам."""
+    if not BACKUP_SEND_DAILY or not ADMIN_IDS or not os.path.exists(USERS_FILE):
+        return
+    marker = os.path.join(BACKUP_DIR, ".last_sent")
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        with open(marker, "r", encoding="utf-8") as f:
+            if f.read().strip() == today:
+                return
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print("Не удалось прочитать отметку отправки копии:", e)
+    if os.path.getsize(USERS_FILE) > 45 * 1024 * 1024:
+        print("users.json больше 45 МБ - ежедневная копия в Telegram не отправлена")
+        return
+    await bot.send_document(
+        ADMIN_IDS[0],
+        FSInputFile(USERS_FILE, filename=f"users-{today}.json"),
+        caption=f"Ежедневная копия базы: {len(users_db)} пользователей. Храните файл, не пересылайте.",
+    )
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    with open(marker, "w", encoding="utf-8") as f:
+        f.write(today)
+
+
+async def _backup_loop():
+    """Фоновая задача: раз в час копия базы на диск, раз в сутки - копия админу."""
+    while True:
+        await asyncio.sleep(BACKUP_INTERVAL_SECONDS)
+        try:
+            await asyncio.to_thread(_backup_users_file)
+        except Exception as e:
+            print("Не удалось сделать резервную копию users.json:", e)
+        try:
+            await _send_daily_backup_if_due()
+        except Exception as e:
+            print("Не удалось отправить ежедневную копию базы:", e)
+
+
+async def _startup_storage_report():
+    """При старте: проверяет, куда пишется база, делает резервную копию и сообщает админам
+    о проблемах (DATA_DIR не задан, в папку нельзя писать, база восстановлена из копии)."""
+    data_dir = os.getenv("DATA_DIR")
+    target = data_dir or BASE_DIR
+    problems = []
+    if not data_dir:
+        problems.append("DATA_DIR не задан - база лежит на временном диске и сотрётся при деплое.")
+    elif not os.path.isdir(data_dir):
+        problems.append(f"Папка DATA_DIR ({data_dir}) не существует.")
+    try:
+        probe = os.path.join(target, ".write_test")
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(probe)
+        writable = True
+    except Exception as e:
+        writable = False
+        problems.append(f"В папку с базой ({target}) нельзя писать: {e}")
+    print(f"Хранилище: DATA_DIR={'задан' if data_dir else 'НЕ задан'}, папка={target}, "
+          f"запись={'да' if writable else 'НЕТ'}, пользователей в базе: {len(users_db)}")
+    if _users_load_note.get("restored_from"):
+        problems.append(
+            "users.json не читался или отсутствовал - база восстановлена из резервной копии "
+            f"{os.path.basename(_users_load_note['restored_from'])}. Изменения после этой копии потеряны, "
+            "сверьте последние оплаты по журналу payments.jsonl и кабинету ЮKassa."
+        )
+        await save_users_now()  # возвращаем восстановленную базу на её обычное место
+    try:
+        await asyncio.to_thread(_backup_users_file)
+    except Exception as e:
+        problems.append(f"Не удалось сделать резервную копию базы: {e}")
+    if problems:
+        await _notify_admins("⚠️ Проблема с хранением данных бота:\n\n" + "\n\n".join(problems))
+
+
+async def flush_users_on_shutdown():
+    """Перед остановкой процесса (Render шлёт SIGTERM при каждом деплое) дожидается фоновых
+    записей и делает финальную запись базы, чтобы последние изменения не потерялись."""
+    try:
+        pending = [t for t in _pending_save_tasks if not t.done()]
+        if pending:
+            await asyncio.wait(pending, timeout=10)
+    except Exception as e:
+        print("Ошибка ожидания фоновых записей:", e)
+    ok = await save_users_now()
+    print("Финальная запись users.json перед остановкой:", "успешно" if ok else "НЕ УДАЛАСЬ")
 
 
 def save_users():
@@ -498,7 +763,9 @@ def save_users():
     должен быть всегда; RuntimeError - подстраховка на случай вызова вне него,
     чтобы данные в любом случае не потерялись."""
     try:
-        asyncio.create_task(_save_users_async())
+        task = asyncio.create_task(_save_users_async())
+        _pending_save_tasks.add(task)
+        task.add_done_callback(_pending_save_tasks.discard)
     except RuntimeError:
         _write_users_payload(_build_users_payload())
 
@@ -799,9 +1066,23 @@ async def successful_payment_handler(m: Message):
         credits_bought = int(payload.split(":")[-1])
     except (ValueError, IndexError):
         credits_bought = 0
+    charge_id = str(getattr(m.successful_payment, "telegram_payment_charge_id", "") or "")
+    if charge_id and charge_id in _processed_tg_charge_ids:
+        print("Повторное уведомление об оплате Telegram проигнорировано:", charge_id)
+        return
     u = get_user(m.from_user.id)
     u["credits"] = int(u.get("credits") or 0) + credits_bought
-    save_users()
+    if charge_id:
+        _processed_tg_charge_ids.add(charge_id)
+    # Ждём реальной записи на диск: баланс и отметка о платеже уходят одним файлом.
+    saved = await save_users_now()
+    log_payment("telegram", m.from_user.id, charge_id, m.successful_payment.total_amount / 100,
+                credits_bought, u["credits"])
+    if not saved:
+        await _notify_admins(
+            f"⚠️ Оплата от {m.from_user.id} на {credits_bought} кредитов зачислена, но базу не удалось "
+            "записать на диск. Проверьте диск и логи."
+        )
     await m.answer(tr("msg_payment_success", lang, credits=credits_bought, balance=u["credits"]))
     if PAYMENT_NOTIFY_IDS:
         uname = f"@{m.from_user.username}" if m.from_user.username else str(m.from_user.id)
@@ -9632,8 +9913,17 @@ async def yookassa_webhook_handler(request):
                 u = get_user(uid)
                 u["credits"] = int(u.get("credits") or 0) + credits
                 credited = True
-                save_users()
+                # Ждём реальной записи на диск: баланс и отметка о платеже уходят одним файлом,
+                # поэтому рестарт сразу после оплаты не оставит "деньги списаны, кредитов нет".
+                saved = await save_users_now()
                 _save_processed_payments()
+                log_payment("yookassa", uid, payment_id, (verified.get("amount") or {}).get("value"),
+                            credits, u["credits"])
+                if not saved:
+                    await _notify_admins(
+                        f"⚠️ Оплата ЮKassa {payment_id} от {uid} на {credits} кредитов зачислена, но базу "
+                        "не удалось записать на диск. Проверьте диск и логи."
+                    )
                 lang = user_lang(uid)
                 try:
                     await bot.send_message(uid, tr("msg_payment_success", lang, credits=credits, balance=u["credits"]))
@@ -9720,7 +10010,16 @@ async def main():
         )
     except Exception as e:
         print("Не удалось обновить описание бота:", e)
-    await dp.start_polling(bot)
+    try:
+        await _startup_storage_report()
+    except Exception as e:
+        print("Ошибка проверки хранилища при старте:", e)
+    backup_task = asyncio.create_task(_backup_loop())
+    try:
+        await dp.start_polling(bot)
+    finally:
+        backup_task.cancel()
+        await flush_users_on_shutdown()
 
 
 if __name__ == "__main__":
