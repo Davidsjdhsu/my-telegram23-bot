@@ -9,6 +9,9 @@ from chat_support import (
 from presentation_support import (
     PresentationValidationError, total_slides, plan_key, validate_plan,
     plan_prompt, format_plan, content_prompt, validate_content, apply_design, PRESENTATION_SYSTEM,
+    CHOOSE_PRESENTATION_LABELS, wants_presentation_defaults, should_clarify_presentation,
+    presentation_audience_known, presentation_brief_prompt, validate_presentation_brief,
+    presentation_brief_message, presentation_reply_hint, expand_presentation_choice,
 )
 import json
 import random
@@ -5165,16 +5168,9 @@ async def process_topic(m: Message, state: FSMContext):
     if len(text) > 500:
         await m.answer(tr("msg_too_long_500", lang))
         return
-    name, _ = pick_theme(text)
-    await state.update_data(topic=text, extra="", extra_used=0, theme_name=name)
-    # Предупреждение "мало вводных" здесь убрано: сам бот просит "можно коротко, например: киты, крипта,
-    # школа", и тут же ругал за короткую тему. (Для собственного текста и Word/Excel оно осталось.)
-    style_label = THEME_LABELS_I18N.get(name, {}).get(lang, THEME_LABELS.get(name, name))
-    await m.answer(
-        tr("msg_style_fits_topic", lang, style=style_label),
-        reply_markup=style_kb(include_keep=True, lang=lang)
-    )
-    await state.set_state(Form.waiting_theme)
+    data = await state.get_data()
+    await _start_presentation_request(m, state, text, lang,
+        settings={"content_lang": data.get("content_lang") or lang})
 
 
 @dp.message(Form.waiting_user_text)
@@ -5238,6 +5234,50 @@ async def slides_back(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     await m.answer(tr("msg_pick_style", lang), reply_markup=style_kb(include_keep=True, lang=lang))
     await state.set_state(Form.waiting_theme)
+
+
+def presentation_brief_kb(lang):
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text=CHOOSE_PRESENTATION_LABELS.get(lang, CHOOSE_PRESENTATION_LABELS["en"]))],
+        [KeyboardButton(text=tr("btn_main_menu", lang))],
+    ], resize_keyboard=True)
+
+
+async def _start_presentation_request(m, state, text, lang, settings=None):
+    data = {
+        "topic": text, "pres_topic": text, "user_text": "", "extra": "", "extra_used": 0,
+        "theme_name": extract_style(text) or pick_theme(text)[0],
+        "slides": extract_slide_count(text) or 8, "photo_mode": extract_photo_mode(text) or "ai",
+        "mode": "ai", "content_lang": lang, "pres_plan": None, "pres_plan_key": None,
+        "sample": None, "custom_colors": None, "user_photos": [], "pres_brief_options": [],
+        "pres_request_id": str(uuid.uuid4()),
+    }
+    data.update(settings or {})
+    if not can_afford(m.from_user.id, presentation_cost(data["slides"])):
+        await send_no_credits_notice(m, state, lang)
+        return
+    await state.update_data(**data)
+    if should_clarify_presentation(data):
+        # Mark the state before awaiting the model so an early reply is not treated as a new topic.
+        await state.set_state(Form.waiting_pres_clarify)
+        try:
+            raw = await asyncio.wait_for(ask_grok(
+                presentation_brief_prompt(text, grok_json_lang_instruction(lang)),
+                max_tokens=650, system_prompt=PRESENTATION_SYSTEM, temperature=0.2,
+            ), timeout=10)
+            brief = validate_presentation_brief(extract_json(raw), text)
+        except Exception:
+            # A clarification helper failure must not block the user from choosing defaults.
+            brief = {"needs_audience": not presentation_audience_known(text),
+                     "needs_focus": True, "options": []}
+        if (await state.get_data()).get("pres_request_id") != data["pres_request_id"]:
+            return
+        if brief["needs_audience"] or brief["needs_focus"]:
+            await state.update_data(pres_brief_options=brief["options"])
+            await m.answer(presentation_brief_message(brief, lang, data["slides"]),
+                reply_markup=presentation_brief_kb(lang), parse_mode=None)
+            return
+    await process_slides(m, state)
 
 
 async def _create_presentation_plan(data, lang):
@@ -9007,31 +9047,7 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
             if not can_afford(m.from_user.id, presentation_cost(PRESENTATION_MIN_SLIDES)):
                 await send_no_credits_notice(m, state, lang)
                 return
-            slides = extract_slide_count(text)
-            style = extract_style(text)
-            photo_mode = extract_photo_mode(text)
-            missing = []
-            if slides is None:
-                missing.append("slides")
-            if style is None:
-                missing.append("style")
-            if photo_mode is None:
-                missing.append("photo")
-            if missing:
-                await state.update_data(pres_topic=text)
-                await state.set_state(Form.waiting_pres_clarify)
-                await bot.send_message(
-                    m.from_user.id,
-                    tr("msg_pres_clarify", lang, missing=build_missing_list(missing, lang)),
-                )
-                return
-            await state.update_data(
-                topic=text, user_text="", extra="", extra_used=0,
-                theme_name=style, slides=slides, mode="ai", content_lang=lang,
-                photo_mode=photo_mode,
-            )
-            await bot.send_message(m.from_user.id, "Принял запрос. Собираю черновик.")
-            await process_slides(m, state)
+            await _start_presentation_request(m, state, text, lang)
             return
         if fmt == "excel":
             if not can_afford(m.from_user.id, CREDIT_COSTS["excel"]):
@@ -9209,14 +9225,12 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         if not can_afford(m.from_user.id, presentation_cost(slides)):
             await send_no_credits_notice(m, state, lang)
             return
-        await state.update_data(
-            topic=topic, user_text=user_text, extra="", extra_used=0,
-            theme_name=payload.get("style") or "default", slides=slides,
-            mode="user" if user_text else "ai", content_lang=lang,
-            photo_mode=payload.get("photo_mode") or "ai",
-        )
-        await bot.send_message(m.from_user.id, "Приняла из меню — собираю черновик, покажу план перед полной сборкой.")
-        await process_slides(m, state)
+        await _start_presentation_request(m, state, topic, lang, settings={
+            "user_text": user_text,
+            "theme_name": payload.get("style") or "default", "slides": slides,
+            "mode": "user" if user_text else "ai", "content_lang": lang,
+            "photo_mode": payload.get("photo_mode") or "ai",
+        })
         return
 
     if action == "gen_word":
@@ -9756,18 +9770,26 @@ async def document_upload(m: Message, state: FSMContext):
 
 @dp.message(Form.waiting_pres_clarify)
 async def pres_clarify_handler(m: Message, state: FSMContext):
-    """Ответ на уточняющий вопрос про слайды/стиль/фото. Текст уже расшифрован из
-    голоса outer_middleware'ом, если пришёл голосом. Что не удалось распознать даже
-    здесь - берём по умолчанию: спрашивать бесконечно не нужно, один раз уточнили,
-    дальше разумные значения лучше, чем бесконечный диалог."""
+    """One content clarification, then the plan; never re-enter the clarification helper."""
     lang = user_lang(m.from_user.id)
     reply_text = (m.text or "").strip()
+    if not reply_text:
+        await m.answer(presentation_reply_hint(lang), reply_markup=presentation_brief_kb(lang))
+        return
+    if len(reply_text) > 800:
+        await m.answer(tr("msg_too_long_800", lang), reply_markup=presentation_brief_kb(lang))
+        return
     data = await state.get_data()
-    topic = data.get("pres_topic", "")
-
-    slides = extract_slide_count(reply_text) or extract_slide_count(topic) or 8
-    style = extract_style(reply_text) or extract_style(topic) or "default"
-    photo_mode = extract_photo_mode(reply_text) or extract_photo_mode(topic) or "ai"
+    topic = data.get("pres_topic") or data.get("topic", "")
+    reply_text = expand_presentation_choice(reply_text, data.get("pres_brief_options") or [])
+    # Exact button text is a control action, not material for a slide. Free-text preferences remain.
+    auto_button = reply_text in CHOOSE_PRESENTATION_LABELS.values()
+    extra = data.get("extra") or ""
+    if not auto_button:
+        extra = (extra + "\n" + reply_text).strip()
+    slides = extract_slide_count(reply_text) or data.get("slides") or extract_slide_count(topic) or 8
+    style = extract_style(reply_text) or data.get("theme_name") or extract_style(topic) or "default"
+    photo_mode = extract_photo_mode(reply_text) or data.get("photo_mode") or extract_photo_mode(topic) or "ai"
 
     if not can_afford(m.from_user.id, presentation_cost(slides)):
         await state.clear()
@@ -9775,9 +9797,10 @@ async def pres_clarify_handler(m: Message, state: FSMContext):
         return
 
     await state.update_data(
-        topic=topic, user_text="", extra=reply_text, extra_used=0,
-        theme_name=style, slides=slides, mode="ai", content_lang=lang,
-        photo_mode=photo_mode,
+        topic=topic, user_text=data.get("user_text") or "", extra=extra, extra_used=0,
+        theme_name=style, slides=slides, mode=data.get("mode") or "ai",
+        content_lang=data.get("content_lang") or lang, photo_mode=photo_mode,
+        pres_request_id=None, pres_brief_options=[],
     )
     await process_slides(m, state)
 

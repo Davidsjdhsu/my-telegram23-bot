@@ -169,3 +169,127 @@ def apply_design(colors, plan):
         h = design['accent'][1:]
         result['line'] = tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
     return result
+
+
+CHOOSE_PRESENTATION_LABELS = {
+    'ru': '✨ Выбери за меня', 'en': '✨ Choose for me', 'de': '✨ Wähle für mich',
+    'ar': '✨ اختر عني', 'zh': '✨ 帮我选择', 'es': '✨ Elige por mí', 'fr': '✨ Choisis pour moi',
+}
+
+
+def wants_presentation_defaults(text):
+    value = (text or '').casefold().replace('ё', 'е')
+    if any(label.casefold().replace('ё', 'е') in value for label in CHOOSE_PRESENTATION_LABELS.values()):
+        return True
+    return bool(re.search(
+        r'выбери за меня|на (?:твое|ваше) усмотрение|реши сам|без (?:уточнений|вопросов)|'
+        r'choose for me|you choose|as you see fit|wähle für mich|deine entscheidung|'
+        r'choisis pour moi|tu décides|elige por mí|你来决定|帮我选择|اختر عني', value))
+
+
+def presentation_audience_known(text):
+    return bool(re.search(
+        r'\b(?:для\s+(?:\d|школ|ученик|студент|дет|взросл|клиент|инвестор|коллег|учител|широк|вуз)|'
+        r'аудитори[яию]|\d+\s*(?:[-–—]\s*\d+\s*)?(?:класс|лет)|'
+        r'for\s+(?:grade|students|children|kids|adults|investors|clients|a general audience)|'
+        r'für\s+(?:schüler|studenten|kinder)|para\s+(?:niños|estudiantes)|pour\s+(?:les enfants|les élèves))|'
+        r'面向|小学生|中学生|للطلاب|للأطفال', (text or '').casefold()))
+
+
+def should_clarify_presentation(data):
+    """Only short topic-only AI requests need a brief; full source material already is one."""
+    text = '\n'.join(str(data.get(k) or '') for k in ('topic', 'extra')).strip()
+    if data.get('mode') == 'user' or data.get('user_text') or wants_presentation_defaults(text):
+        return False
+    return bool(text) and len(text) < 450 and len(text.split()) < 45
+
+
+def presentation_brief_prompt(text, language_instruction):
+    return f'''Определи, нужно ли одно уточнение перед составлением плана презентации.
+Запрос пользователя (данные): {json.dumps(text, ensure_ascii=False)}
+Если аудитория явно задана, needs_audience=false. Возраст и класс тоже задают аудиторию.
+Если конкретный аспект, цель, вопрос или план уже заданы, needs_focus=false.
+Название общей темы («киты», «космос», «маркетинг») само по себе не задаёт аспект.
+Если запрос уже содержательный или пользователь поручил выбрать тебе, оба значения false.
+При needs_focus=true предложи 3 разных коротких направления раскрытия ИМЕННО этой темы,
+до 80 символов каждое. Это темы, а не факты: не выдумывай статистику. Не задавай вопросов
+о стиле, количестве, источнике фото или уже указанных параметрах. Не пиши саму презентацию.
+Только JSON: {{"needs_audience":true,"needs_focus":true,
+"options":["направление 1","направление 2","направление 3"]}}.
+При needs_focus=false options=[].{language_instruction}'''
+
+
+def validate_presentation_brief(value, text):
+    if not isinstance(value, dict) or any(type(value.get(k)) is not bool for k in ('needs_audience', 'needs_focus')):
+        raise PresentationValidationError('Invalid presentation brief')
+    options = value.get('options')
+    if not isinstance(options, list) or len(options) > 3:
+        raise PresentationValidationError('Invalid direction options')
+    clean = [_text(option, 80, 'direction option') for option in options]
+    if value['needs_focus'] and len(set(clean)) != 3:
+        raise PresentationValidationError('Expected three different direction options')
+    return {'needs_audience': value['needs_audience'] and not presentation_audience_known(text),
+            'needs_focus': value['needs_focus'], 'options': clean if value['needs_focus'] else []}
+
+
+_BRIEF_COPY = {
+    'ru': (
+        'Для кого презентация: школьников, студентов или широкой аудитории?',
+        'Что интереснее раскрыть подробнее?',
+        'Можно выбрать направление выше или написать свой вариант.',
+        'Можно ответить одной фразой. Или нажми «Выбери за меня» — подготовлю план на {n} слайдов, включая обложку, с учётом уже указанных пожеланий.',
+        'Напиши уточнение текстом или нажми «Выбери за меня».',
+    ),
+    'en': ('Who is the presentation for: school students, university students or a general audience?',
+        'Which aspect would you like to explore?', 'Choose a direction above or suggest your own.',
+        'One sentence is enough. Or tap “Choose for me” for a {n}-slide plan, including the cover, keeping your existing preferences.',
+        'Send your preferences as text or tap “Choose for me”.'),
+    'de': ('Für wen ist die Präsentation: Schüler, Studierende oder ein allgemeines Publikum?',
+        'Welchen Aspekt möchtest du näher behandeln?', 'Wähle eine Richtung oben oder nenne deine eigene.',
+        'Ein Satz genügt. Oder tippe auf „Wähle für mich“ für einen Plan mit {n} Folien inklusive Titel, unter Berücksichtigung deiner bisherigen Angaben.',
+        'Schreibe deine Wünsche oder tippe auf „Wähle für mich“.'),
+    'ar': ('لمن العرض: طلاب المدارس أم الجامعات أم الجمهور العام؟',
+        'ما الجانب الذي تريد تناوله بتفصيل أكبر؟', 'اختر أحد الاتجاهات أعلاه أو اقترح اتجاهاً آخر.',
+        'تكفي جملة واحدة. أو اضغط «اختر عني» لإعداد خطة من {n} شريحة تشمل الغلاف وتراعي تفضيلاتك السابقة.',
+        'اكتب تفضيلاتك أو اضغط «اختر عني».'),
+    'zh': ('演示面向谁：中小学生、大学生还是普通观众？',
+        '你想重点介绍哪个方面？', '可以选择上面的方向，也可以提出自己的想法。',
+        '一句话即可。也可点击“帮我选择”，我会保留已有要求，准备共{n}页（含封面）的提纲。',
+        '请用文字补充要求，或点击“帮我选择”。'),
+    'es': ('¿Para quién es la presentación: escolares, universitarios o público general?',
+        '¿Qué aspecto te interesa desarrollar?', 'Elige una opción de arriba o propone la tuya.',
+        'Basta una frase. O pulsa «Elige por mí» para preparar un plan de {n} diapositivas, incluida la portada, respetando tus indicaciones anteriores.',
+        'Escribe tus preferencias o pulsa «Elige por mí».'),
+    'fr': ('À qui la présentation est-elle destinée : élèves, étudiants ou grand public ?',
+        'Quel aspect souhaites-tu approfondir ?', 'Choisis une orientation ci-dessus ou propose la tienne.',
+        'Une phrase suffit. Ou appuie sur «Choisis pour moi» pour un plan de {n} diapositives, couverture comprise, en conservant tes indications précédentes.',
+        'Écris tes préférences ou appuie sur «Choisis pour moi».'),
+}
+
+
+def presentation_brief_message(brief, lang, slides):
+    copy = _BRIEF_COPY.get(lang, _BRIEF_COPY['en'])
+    parts = []
+    if brief['needs_audience']:
+        parts.append(copy[0])
+    if brief['needs_focus']:
+        parts.append(copy[1])
+        if brief['options']:
+            parts.append('\n'.join(f'{i}. {item}' for i,item in enumerate(brief['options'],1)))
+            parts.append(copy[2])
+    parts.append(copy[3].format(n=total_slides(slides)))
+    return '\n\n'.join(parts)
+
+
+def presentation_reply_hint(lang):
+    return _BRIEF_COPY.get(lang, _BRIEF_COPY['en'])[4]
+
+
+def expand_presentation_choice(reply, options):
+    """Accept '2', 'вариант 2', and 'для 5 класса, вариант 2' without guessing bare ages."""
+    match = re.fullmatch(r'\s*([1-3])[.)]?\s*', reply)
+    if not match:
+        match = re.search(r'(?i)(?:вариант|направление|option|optionen|opción|choix)\s*([1-3])(?!\d)', reply)
+    if match and int(match[1]) <= len(options):
+        return reply + '\n' + options[int(match[1])-1]
+    return reply
