@@ -6,6 +6,10 @@ from chat_support import (
     FORMAT_RULES, VISION_RULES, ChatGate, build_chat_messages, chat_notice,
     local_math_answer, memory_excerpt, render_reply, prefers_chat_reply, may_request_document,
 )
+from presentation_support import (
+    PresentationValidationError, total_slides, plan_key, validate_plan,
+    plan_prompt, format_plan, content_prompt, validate_content, apply_design, PRESENTATION_SYSTEM,
+)
 import json
 import random
 import html
@@ -1841,9 +1845,9 @@ TR = {
                         "ar": "اختر نمط التصميم:", "zh": "选择设计风格：", "es": "Elige un estilo de diseño:", "fr": "Choisis un style de design :"},
     "msg_pick_style": {"ru": "Выбери стиль кнопкой ниже.", "en": "Pick a style using the button below.", "de": "Wähle einen Stil mit dem Button unten.",
                        "ar": "اختر نمطاً من الأزرار أدناه.", "zh": "请用下方按钮选择风格。", "es": "Elige un estilo con el botón de abajo.", "fr": "Choisis un style avec le bouton ci-dessous."},
-    "msg_how_many_slides": {"ru": "Сколько слайдов сделать?", "en": "How many slides?", "de": "Wie viele Folien?",
-                            "ar": "كم عدد الشرائح؟", "zh": "需要多少张幻灯片？", "es": "¿Cuántas diapositivas?", "fr": "Combien de diapositives ?"},
-    "msg_building_sample": {"ru": "Секунду, собираю пробный вариант…", "en": "One moment, building a sample…", "de": "Einen Moment, ich erstelle einen Testentwurf…",
+    "msg_how_many_slides": {"ru": "Сколько слайдов сделать всего, включая обложку?", "en": "How many slides in total, including the cover?", "de": "Wie viele Folien insgesamt, inklusive Titelfolie?",
+                            "ar": "كم عدد الشرائح بما فيها الغلاف؟", "zh": "总共需要多少张幻灯片（含封面）？", "es": "¿Cuántas diapositivas en total, incluida la portada?", "fr": "Combien de diapositives au total, couverture comprise ?"},
+    "msg_building_sample": {"ru": "Составляю план слайдов…", "en": "Preparing the slide plan…", "de": "Einen Moment, ich erstelle einen Testentwurf…",
                             "ar": "لحظة، جاري إعداد نسخة تجريبية…", "zh": "请稍等，正在生成样例…", "es": "Un momento, creando una versión de prueba…", "fr": "Un instant, je prépare un aperçu…"},
     "msg_choose_action_below": {"ru": "Выбери действие:", "en": "Choose an action:", "de": "Wähle eine Aktion:",
                                 "ar": "اختر إجراءً:", "zh": "选择操作：", "es": "Elige una acción:", "fr": "Choisis une action :"},
@@ -3318,7 +3322,7 @@ async def _handle_vision_upload_impl(m: Message, state: FSMContext, local_path: 
         finish_job(uid)
 
 
-async def ask_grok(prompt: str, max_tokens: int = 4000) -> str:
+async def ask_grok(prompt: str, max_tokens: int = 4000, *, system_prompt=None, temperature=0.95) -> str:
     """Запрос к Grok с коротким повтором при сетевом сбое — одна ошибка API
     больше не роняет всю сборку документа с первой попытки."""
     last_err = None
@@ -3327,10 +3331,10 @@ async def ask_grok(prompt: str, max_tokens: int = 4000) -> str:
             r = await client.chat.completions.create(
                 model="grok-4.3",  # grok-3 отправлен на пенсию xAI 15.05.2026, см. комментарий в update_long_term_memory()
                 messages=[
-                    {"role": "system", "content": "Ты арт-директор презентаций. Пиши как живой сильный автор, не как нейросеть, и так, чтобы текст не триггерил детекторы ИИ-генерации: без канцелярита и шаблонных фраз («в современном мире», «является», «следует отметить», «данный», «невозможно переоценить», «таким образом», «подводя итог»), без идеально симметричной структуры абзацев и слишком гладких переходов. Чередуй короткие и длинные предложения неравномерно. Заголовки живые. Каждый ответ уникален. Исправляй ошибки. Только русский."},
+                    {"role": "system", "content": system_prompt or "Ты арт-директор презентаций. Пиши как живой сильный автор, не как нейросеть, и так, чтобы текст не триггерил детекторы ИИ-генерации: без канцелярита и шаблонных фраз («в современном мире», «является», «следует отметить», «данный», «невозможно переоценить», «таким образом», «подводя итог»), без идеально симметричной структуры абзацев и слишком гладких переходов. Чередуй короткие и длинные предложения неравномерно. Заголовки живые. Каждый ответ уникален. Исправляй ошибки. Только русский."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.95,
+                temperature=temperature,
                 max_tokens=max_tokens
             )
             content = (r.choices[0].message.content or "").strip()
@@ -4511,12 +4515,8 @@ async def redisplay_pres_confirm(m: Message, state: FSMContext, lang: str):
         return
     theme_name = data.get("theme_name", "default")
     style_label = THEME_LABELS_I18N.get(theme_name, {}).get(lang, THEME_LABELS.get(theme_name, theme_name))
-    await send_draft(
-        m,
-        tr("msg_draft_ready_pres", lang, sample=sample, style=style_label),
-        title=data.get("topic", tr("msg_start_pres_again", lang)),
-        reply_markup=confirm_kb(lang)
-    )
+    await _send_presentation_draft(m,
+        tr("msg_draft_ready_pres", lang, sample=sample, style=style_label), confirm_kb(lang))
     await state.set_state(Form.waiting_confirm)
 
 
@@ -5240,67 +5240,58 @@ async def slides_back(m: Message, state: FSMContext):
     await state.set_state(Form.waiting_theme)
 
 
+async def _create_presentation_plan(data, lang):
+    prompt = plan_prompt(data, grok_json_lang_instruction(content_gen_lang(data, lang) or "ru"))
+    for attempt in range(2):
+        raw = await ask_grok(prompt, max_tokens=6500, system_prompt=PRESENTATION_SYSTEM, temperature=0.35)
+        if grok_failed(raw):
+            raise PresentationValidationError("Plan generation failed")
+        try:
+            return validate_plan(extract_json(raw), data["slides"])
+        except (ValueError, TypeError, KeyError, AttributeError):
+            if attempt:
+                raise PresentationValidationError("Invalid presentation plan") from None
+            prompt += "\nПредыдущий ответ не прошёл проверку. Проверь JSON, число слайдов, порядок номеров и ограничения длины. Верни исправленный полный JSON."
+
+
+async def _send_presentation_draft(m, text, reply_markup):
+    # A 30-slide plan should remain readable in Telegram instead of becoming a PDF.
+    chunks, current = [], ""
+    for paragraph in text.split("\n\n"):
+        if current and len((current + "\n\n" + paragraph).encode("utf-16-le")) // 2 > 3500:
+            chunks.append(current)
+            current = ""
+        current = (current + "\n\n" + paragraph).strip()
+    if current:
+        chunks.append(current)
+    for i, chunk in enumerate(chunks):
+        await m.answer(chunk, parse_mode=None, reply_markup=reply_markup if i == len(chunks) - 1 else None)
+
+
 async def process_slides(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
-    # Если число слайдов уже определено заранее (новые сценарии - форма в Mini App,
-    # мгновенная сборка в чате с уже распознанными деталями) - берём его и не парсим
-    # заново текст сообщения. Иначе (старый пошаговый сценарий) - как раньше, ищем
-    # число прямо в тексте ответа на вопрос "сколько слайдов".
-    slides = data.get("slides")
-    if not slides:
-        slides = 8
-        t = m.text or ""
-        if "16" in t:
-            slides = 16
-        elif "12" in t:
-            slides = 12
-    angle = random.choice(ANGLES)
-    await state.update_data(slides=slides, angle=angle)
+    button_count = re.search(r"(?<!\d)(8|12|16)(?!\d)", m.text or "")
+    slides = data.get("slides") or extract_slide_count(m.text or "") or (int(button_count[1]) if button_count else 8)
+    slides = total_slides(slides)
+    data.update(slides=slides)
     if not can_afford(m.from_user.id, presentation_cost(slides)):
         await send_no_credits_notice(m, state, lang)
         return
     await m.answer(tr("msg_building_sample", lang), reply_markup=cancel_kb(lang))
-    lang_instr = grok_lang_instruction(content_gen_lang(data, lang) or "ru")
-
-    if data.get("mode") == "user":
-        prompt = f"""Ты — редактор презентаций высокого уровня. Пользователь прислал свой текст.
-Исправь ошибки, сохрани смысл и факты, но выстрой драматургию: у презентации должна быть чёткая идея,
-а не пересказ по порядку.
-Текст:
-{data.get('user_text')}
-Слайдов: {slides}
-Угол подачи: {angle}
-Дай короткий план текстом: цепляющее название (не общее, а конкретное и живое) и 3 пункта,
-каждый — не абстрактная категория, а конкретный тезис с сутью, который будет на слайде.
-Без JSON, без вводных фраз, без нумерации "Слайд 1".{lang_instr}"""
-    else:
-        prompt = f"""Ты — редактор презентаций высокого уровня, который умеет находить неочевидный
-и интересный угол в любой теме, избегая шаблонных заголовков вроде "Введение" или "Что это такое".
-Тема: {data.get('topic')}
-Слайдов: {slides}
-Доп: {data.get('extra')}
-Угол подачи: {angle}
-Дай короткий уникальный план текстом: цепляющее конкретное название и 3 пункта — каждый должен быть
-содержательным тезисом (что именно будет рассказано), а не общей категорией.
-Без JSON, без вводных фраз, без нумерации "Слайд 1".{lang_instr}"""
-
-    sample = await ask_grok(prompt)
-    if grok_failed(sample):
-        await m.answer(
-            tr("msg_grok_error", lang),
-            reply_markup=slides_kb(lang)
-        )
+    try:
+        plan = await _create_presentation_plan(data, lang)
+    except PresentationValidationError:
+        await state.update_data(slides=slides)
+        await state.set_state(Form.waiting_slides)
+        await m.answer(tr("msg_grok_error", lang), reply_markup=slides_kb(lang))
         return
+    sample = format_plan(plan, lang)
+    await state.update_data(slides=slides, pres_plan=plan, pres_plan_key=plan_key(data), sample=sample)
     theme_name = data.get("theme_name", "default")
     style_label = THEME_LABELS_I18N.get(theme_name, {}).get(lang, THEME_LABELS.get(theme_name, theme_name))
-    await state.update_data(sample=sample)
-    await send_draft(
-        m,
-        tr("msg_draft_ready_pres", lang, sample=sample, style=style_label),
-        title=data.get("topic", tr("msg_start_pres_again", lang)),
-        reply_markup=confirm_kb(lang)
-    )
+    await _send_presentation_draft(m,
+        tr("msg_draft_ready_pres", lang, sample=sample, style=style_label), confirm_kb(lang))
     await state.set_state(Form.waiting_confirm)
 
 
@@ -5347,11 +5338,18 @@ async def process_style(m: Message, state: FSMContext):
         await m.answer(tr("msg_pick_style", lang), reply_markup=style_kb(lang=lang))
         return
     data = await state.get_data()
-    await state.update_data(theme_name=name)
-    await m.answer(
-        tr("msg_style_changed", lang, style=label, sample=data.get('sample')),
-        reply_markup=confirm_kb(lang)
-    )
+    extra = ((data.get("extra") or "") + "\nОформление: " + label).strip()
+    candidate = {**data, "theme_name": name, "extra": extra}
+    try:
+        plan = await _create_presentation_plan(candidate, lang)
+    except PresentationValidationError:
+        await m.answer(tr("msg_draft_update_failed", lang), reply_markup=style_kb(lang=lang))
+        return
+    sample = format_plan(plan, lang)
+    await state.update_data(theme_name=name, extra=extra, pres_plan=plan,
+        pres_plan_key=plan_key(candidate), sample=sample)
+    await _send_presentation_draft(m,
+        tr("msg_style_changed", lang, style=label, sample=sample), confirm_kb(lang))
     await state.set_state(Form.waiting_confirm)
 
 
@@ -5374,34 +5372,23 @@ async def process_extra(m: Message, state: FSMContext):
         await m.answer(tr("msg_too_long_800", lang))
         return
     extra = ((data.get("extra") or "") + "\n" + text).strip()
-    angle = random.choice(ANGLES)
-    await state.update_data(extra=extra, extra_used=data.get("extra_used", 0) + 1, angle=angle)
+    candidate = {**data, "extra": extra,
+                 "slides": extract_slide_count(text) or data.get("slides", 8)}
+    if not can_afford(m.from_user.id, presentation_cost(candidate["slides"])):
+        await send_no_credits_notice(m, state, lang)
+        return
     await m.answer(tr("msg_updating_draft", lang))
-    lang_instr = grok_lang_instruction(content_gen_lang(data, lang) or "ru")
-    if data.get("mode") == "user":
-        prompt = f"""Исправь и обнови структуру.
-Исходный текст:
-{data.get('user_text')}
-Дополнительно:
-{extra}
-Слайдов: {data.get('slides')}
-Угол: {angle}
-Короткий план: название и 3 пункта. Без JSON.{lang_instr}"""
-    else:
-        prompt = f"""Тема: {data.get('topic')}
-Доп: {extra}
-Угол: {angle}
-Новый короткий план, 3 пункта. Без JSON.{lang_instr}"""
-    sample = await ask_grok(prompt)
-    if grok_failed(sample):
-        await m.answer(
-            tr("msg_draft_update_failed", lang),
-            reply_markup=confirm_kb(lang)
-        )
+    try:
+        plan = await _create_presentation_plan(candidate, lang)
+    except PresentationValidationError:
+        await m.answer(tr("msg_draft_update_failed", lang), reply_markup=confirm_kb(lang))
         await state.set_state(Form.waiting_confirm)
         return
-    await state.update_data(sample=sample)
-    await send_draft(m, tr("msg_draft_updated", lang, sample=sample), title=data.get("topic", tr("msg_start_pres_again", lang)), reply_markup=confirm_kb(lang))
+    sample = format_plan(plan, lang)
+    await state.update_data(extra=extra, slides=candidate["slides"],
+        extra_used=data.get("extra_used", 0) + 1, pres_plan=plan,
+        pres_plan_key=plan_key(candidate), sample=sample)
+    await _send_presentation_draft(m, tr("msg_draft_updated", lang, sample=sample), confirm_kb(lang))
     await state.set_state(Form.waiting_confirm)
 
 
@@ -5516,7 +5503,8 @@ async def _build_presentation(m: Message, state: FSMContext):
     u = get_user(uid)
     # Баланс мог измениться с момента черновика (потрачен в другом месте) - перепроверяем
     # перед тем, как заводить дорогую фоновую задачу (start_job ниже).
-    planned_slides = data.get("slides") or PRESENTATION_MIN_SLIDES
+    planned_slides = total_slides(data.get("slides") or 8)
+    data["slides"] = planned_slides
     if not can_afford(uid, presentation_cost(planned_slides)):
         await send_no_credits_notice(m, state, lang)
         return
@@ -5527,122 +5515,39 @@ async def _build_presentation(m: Message, state: FSMContext):
     await bot.send_message(uid, tr("msg_building_pres_photos", lang))
     try:
 
+        plan = data.get("pres_plan")
+        if not plan or data.get("pres_plan_key") != plan_key(data):
+            # Upload/legacy sessions have no structured preview yet.
+            plan = await _create_presentation_plan(data, lang)
+        plan = validate_plan(plan, planned_slides)
         theme_name = data.get("theme_name") or pick_theme(data.get("topic", ""))[0]
-        # Если пользователь попросил "скопировать стиль" из своего файла - здесь лежит
-        # словарь с реально извлечёнными из .pptx цветами/шрифтом (см. extract_pptx_style),
-        # он приоритетнее любой из 14 встроенных тем.
         colors = data.get("custom_colors") or THEMES.get(theme_name, THEMES["default"])
-        # "Сэндвич"-контраст: обложка и заключительный слайд - тёмный вариант палитры,
-        # основная часть - светлый (или наоборот, если сама тема изначально тёмная) -
-        # раньше вся презентация красилась одним и тем же вариантом от начала до конца.
+        colors = apply_design(colors, plan)
         dark_colors, light_colors = sandwich_colors(colors)
-        angle = data.get("angle") or random.choice(ANGLES)
+        if plan["design"]["background"] != "theme":
+            dark_colors = light_colors = colors
         cgl = content_gen_lang(data, lang)
-
-        if data.get("mode") == "user":
-            common_rules = """
-    Правила качества (обязательны для каждого слайда):
-    - Заголовок слайда: 3-6 слов, конкретный и живой, называет суть тезиса, а не общую категорию
-      (плохо: "Введение", "Общая информация"; хорошо: конкретный факт или вывод).
-    - Текст: ровно 2 абзаца, каждый 2-4 предложения. Первый абзац - конкретный факт, пример или наблюдение,
-      второй - что это значит или почему это важно. Никаких вводных фраз типа "в этом слайде" или "стоит отметить".
-    - Между слайдами не повторяй одну и ту же структуру фразы - разнообразь подачу (факт, вопрос, сравнение, история).
-      Это касается не только формулировок, но и роли абзацев: если на каждом слайде без исключения первый
-      абзац - это "факт", а второй - обобщающий вывод, вся презентация читается как штамповка по шаблону,
-      даже если сами факты разные. Хотя бы на части слайдов стройте абзацы иначе (два факта подряд, факт без
-      вывода, сравнение "было/стало" без морали в конце).
-    - Название презентации (title) должно честно отражать то, что реально показывают слайды. Если тема или
-      угол наводят на интригующий заголовок вроде "вопросы без ответа" или "тайны, которые не разгаданы" - а
-      по факту каждый слайд даёт уверенный законченный ответ с конкретной цифрой - не используйте такой
-      заголовок, он будет противоречить содержанию. Либо заголовок отражает, что слайды дают ответы, либо
-      среди слайдов реально должны быть настоящие открытые вопросы без разрешения.
-    - Никаких общих фраз без содержания ("это важная тема", "мир меняется") - только конкретика: цифры, имена,
-      примеры, детали, если они есть в материале или логично следуют из темы.
-    - Фото: описание живого кадра (реальная сцена, человек, объект, место), не стоковый шаблон и не абстракция.
-    - График (ключ "chart", НЕОБЯЗАТЕЛЬНЫЙ): добавляй его ТОЛЬКО если в тексте пользователя
-      реально ЕСТЬ конкретные цифры, статистика, доли или динамика по времени, которые можно
-      честно визуализировать - НИКОГДА не придумывай цифры от себя ради красивой картинки.
-      Если в присланном тексте нет настоящих числовых данных - не добавляй chart вообще, у слайда
-      остаётся только фото. Не больше 1-2 слайдов с графиком на всю презентацию, и только там, где
-      график реально помогает понять данные быстрее, чем абзац текста.
-      Формат: "chart": {{"chart_type": "bar" | "line" | "pie", "title": "короткий заголовок графика",
-      "categories": ["...", "..."], "series": [{{"name": "...", "values": [12, 34, ...]}}]}} -
-      цифры бери СТРОГО из текста пользователя, ничего не домысливая и не округляя "для красоты".
-      У слайда с графиком image_prompt всё равно укажи (на случай, если график не соберётся), но
-      использоваться будет либо график, либо фото, не оба сразу."""
-            raw = await ask_grok(f"""Собери уникальную презентацию из текста пользователя.
-    Исправь ошибки, сохрани смысл и все факты из текста.
-    Текст:
-    {data.get('user_text')}
-    Доп:
-    {data.get('extra')}
-    Слайдов: {data.get('slides')}
-    Угол: {angle}
-    Стиль: {theme_name}
-    {common_rules}
-    Только JSON (ключ "chart" добавляй лишь на 1-2 слайдах и только если в тексте пользователя
-    есть настоящие числа для него, иначе не пиши его вовсе):
-    {{"title":"...","slides":[{{"title":"...","content":"абзац1\n\nабзац2","image_prompt":"unique cinematic scene","chart":null}}]}}{grok_json_lang_instruction(cgl or "ru")}""")
-        else:
-            common_rules = """
-    Правила качества (обязательны для каждого слайда):
-    - Заголовок слайда: 3-6 слов, конкретный и живой, называет суть тезиса, а не общую категорию
-      (плохо: "Введение", "Общая информация"; хорошо: конкретный факт или вывод).
-    - Текст: ровно 2 абзаца, каждый 2-4 предложения. Первый абзац - конкретный факт, пример или наблюдение,
-      второй - что это значит или почему это важно. Никаких вводных фраз типа "в этом слайде" или "стоит отметить".
-    - Между слайдами не повторяй одну и ту же структуру фразы - разнообразь подачу (факт, вопрос, сравнение, история).
-      Это касается не только формулировок, но и роли абзацев: если на каждом слайде без исключения первый
-      абзац - это "факт", а второй - обобщающий вывод, вся презентация читается как штамповка по шаблону,
-      даже если сами факты разные. Хотя бы на части слайдов стройте абзацы иначе (два факта подряд, факт без
-      вывода, сравнение "было/стало" без морали в конце).
-    - Название презентации (title) должно честно отражать то, что реально показывают слайды. Если угол
-      наводит на интригующий заголовок вроде "вопросы без ответа" или "тайны, которые не разгаданы" - а по
-      факту каждый слайд даёт уверенный законченный ответ с конкретной цифрой - не используйте такой
-      заголовок, он будет противоречить содержанию. Либо заголовок отражает, что слайды дают ответы, либо
-      среди слайдов реально должны быть настоящие открытые вопросы без разрешения.
-    - Здесь у вас нет исходного текста пользователя - все факты вы придумываете или вспоминаете сами, а
-      значит риск выше: НЕ приписывайте конкретным годам, процентам, институтам, экспедициям или названиям
-      исследований точность, в которой вы не уверены - выдуманная деталь вроде "в 2022 году экспедиция X
-      зафиксировала Y на глубине Z метров" звучит как проверяемый факт, а на деле может им не быть, и это
-      подрывает доверие ко всей презентации, если кто-то захочет проверить. Используйте либо широко известные,
-      действительно достоверные факты, либо формулируйте мягче ("по некоторым данным", "предположительно"),
-      не выдавая догадку за точный отчёт с датой и источником.
-    - Никаких общих фраз без содержания ("это важная тема", "мир меняется") - только конкретика: цифры, имена,
-      примеры, детали, логично следующие из темы.
-    - Фото: описание живого кадра (реальная сцена, человек, объект, место), не стоковый шаблон и не абстракция.
-    - Графики (диаграммы) в этом режиме НЕ используем: тема задана вами без исходного текста, а значит любые
-      цифры для графика пришлось бы выдумать - это выглядело бы как настоящие данные, но ими не являлось бы.
-      Ключ "chart" всегда оставляй null."""
-            raw = await ask_grok(f"""Собери уникальную презентацию уровня лучшего журнала на эту тему,
-    найди неочевидный и интересный угол, избегай банальностей.
-    Тема: {data.get('topic')}
-    Слайдов: {data.get('slides')}
-    Доп: {data.get('extra')}
-    Угол: {angle}
-    Стиль: {theme_name}
-    {common_rules}
-    Только JSON (ключ "chart" всегда null в этом режиме):
-    {{"title":"...","slides":[{{"title":"...","content":"абзац1\n\nабзац2","image_prompt":"unique cinematic scene","chart":null}}]}}{grok_json_lang_instruction(cgl or "ru")}""")
-
-        try:
-            content = extract_json(raw)
-            if not isinstance(content.get("slides"), list) or not content["slides"]:
-                raise ValueError("В ответе модели нет слайдов")
-        except Exception as e:
-            print("Presentation JSON parse error:", e)
-            await m.answer(tr("msg_no_text", lang, btn=tr("msg_start_pres_again", lang)), reply_markup=main_kb(lang, uid=m.from_user.id))
-            await state.clear()
-            return
+        prompt = content_prompt(data, plan, grok_json_lang_instruction(cgl or "ru"))
+        for attempt in range(2):
+            raw = await ask_grok(prompt, max_tokens=10000, system_prompt=PRESENTATION_SYSTEM, temperature=0.35)
+            if grok_failed(raw):
+                raise PresentationValidationError("Content generation failed")
+            try:
+                content = validate_content(extract_json(raw), plan)
+                break
+            except (ValueError, TypeError, KeyError, AttributeError):
+                if attempt:
+                    raise PresentationValidationError("Content does not match plan") from None
+                prompt += "\nПредыдущий ответ не прошёл проверку. Верни полный JSON: ровно указанное число содержательных слайдов, без обложки, с номерами из плана и непустым текстом."
 
         prs = Presentation()
         prs.slide_width = Inches(13.333)
         prs.slide_height = Inches(7.5)
         slides_data = content.get("slides", [])
         n = len(slides_data)
-        # ИИ мог вернуть больше слайдов, чем изначально планировали - пересчитываем
-        # стоимость по факту и проверяем баланс ещё раз, до того как начнём тратить
-        # на генерацию фото (самую дорогую часть) для слайдов, которые не по карману.
-        if not can_afford(uid, presentation_cost(n)):
+        if n + 1 != planned_slides:
+            raise PresentationValidationError("Unexpected total slide count")
+        if not can_afford(uid, presentation_cost(planned_slides)):
             await send_no_credits_notice(m, state, lang)
             return
 
@@ -5680,14 +5585,8 @@ async def _build_presentation(m: Message, state: FSMContext):
         if cover_own:
             user_photo_originals.append(cover_own)
             cover_own = (await run_heavy(prepare_user_photo, cover_own, colors, user_photos_luminance))
-        # Раньше промпт обложки состоял только из общего названия презентации - для
-        # заголовков вроде "Акулы: вопросы, которые остаются без ответа" это слишком
-        # абстрактно (там нет ни одного предметного слова), и генератор картинки уезжал
-        # в общий пейзаж/закат под стиль темы вместо самой темы. У каждого обычного слайда
-        # есть свой image_prompt с конкретным предметом съёмки (см. цикл генерации фото
-        # ниже) - для обложки берём image_prompt первого слайда как якорь предмета, а
-        # заголовок добавляем поверх для контекста и настроения кадра.
-        cover_subject = (slides_data[0].get("image_prompt") if slides_data else None) or content.get("title")
+        # Обложка отражает всю тему, а не первый содержательный слайд.
+        cover_subject = content.get("title")
         cover_ok = bool(cover_own) or await generate_image(
             f"{cover_subject}, wide cinematic opening shot inspired by \"{content.get('title')}\", {colors['photo']}",
             cover_src,
@@ -6052,6 +5951,8 @@ async def _build_presentation(m: Message, state: FSMContext):
                     p.font.name = "Calibri"
                 txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
 
+        if len(prs.slides) != planned_slides:
+            raise PresentationValidationError("Final slide count differs from confirmed plan")
         pptx_path = f"/tmp/pres_{uid}.pptx"
         await run_heavy(prs.save, pptx_path)
         pdf_path = f"/tmp/pres_{uid}.pdf"
@@ -6101,10 +6002,8 @@ async def _build_presentation(m: Message, state: FSMContext):
         await bot.send_document(chat_id, FSInputFile(pptx_path, filename=f"{pres_fname}.pptx"), caption=tr("msg_pptx_caption", lang))
         await bot.send_document(chat_id, FSInputFile(pdf_path, filename=f"{pres_fname}.pdf"), caption=tr("msg_pptx_pdf_caption", lang))
         u["generations"] += 1
-        # Списываем по фактическому числу слайдов в готовой презентации (не по тому,
-        # сколько просили) - если модель собрала слайдов меньше/больше запрошенного,
-        # пользователь платит за то, что реально получил, а не за обещание.
-        spend_credits(uid, "presentation", amount=presentation_cost(len(content.get("slides") or [])))
+        # Цена соответствует подтверждённому общему числу слайдов с обложкой.
+        spend_credits(uid, "presentation", amount=presentation_cost(planned_slides))
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
         note_success(uid)
         for p in (cover_src, cover_own, cover_img, cover_panel_img, pptx_path, pdf_path, *raw_sources, *user_photo_originals, *[f for pair in images if pair for f in pair]):
@@ -9866,9 +9765,9 @@ async def pres_clarify_handler(m: Message, state: FSMContext):
     data = await state.get_data()
     topic = data.get("pres_topic", "")
 
-    slides = extract_slide_count(reply_text) or 8
-    style = extract_style(reply_text) or "default"
-    photo_mode = extract_photo_mode(reply_text) or "ai"
+    slides = extract_slide_count(reply_text) or extract_slide_count(topic) or 8
+    style = extract_style(reply_text) or extract_style(topic) or "default"
+    photo_mode = extract_photo_mode(reply_text) or extract_photo_mode(topic) or "ai"
 
     if not can_afford(m.from_user.id, presentation_cost(slides)):
         await state.clear()
@@ -9876,7 +9775,7 @@ async def pres_clarify_handler(m: Message, state: FSMContext):
         return
 
     await state.update_data(
-        topic=topic, user_text="", extra="", extra_used=0,
+        topic=topic, user_text="", extra=reply_text, extra_used=0,
         theme_name=style, slides=slides, mode="ai", content_lang=lang,
         photo_mode=photo_mode,
     )
