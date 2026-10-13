@@ -17,6 +17,17 @@ FORMAT_RULES = r"""
 Для короткого выделения можно **жирный текст**, для кода — блок с тройными обратными кавычками.
 Если пользователь просит именно LaTeX, JSON или код, сохрани требуемый синтаксис в блоке кода.
 Не делай широких таблиц: на телефоне удобнее короткие абзацы и списки.
+В числовом ответе предпочитай короткую точную десятичную запись: например,
+в решении можно оставить 9/2, а закончить отдельной строкой **Ответ: 4,5**.
+Для русского языка используй десятичную запятую. Это правило только для конечных
+десятичных дробей: 1/3 не заменяй на 0,33 без знака приближения. Не округляй без просьбы.
+Сохраняй единицы измерения. Если явно нужна обыкновенная дробь, отношение или точное
+выражение с корнем/π, сохрани требуемую форму. Не превращай обозначения в десятичные числа.
+Длинные вычисления разбивай на короткие строки: сначала формула, затем подстановка
+и вычисление. Не собирай 4–5 равенств в одну строку. Например:
+AB · AC = |AB| · |AC| · cos 60°
+AB · AC = 3 · 3 · 0,5 = 4,5
+**Ответ: 4,5**
 """.strip()
 
 CHAT_RULES = """
@@ -243,6 +254,43 @@ def readable_math(s: str, depth=0) -> str:
     return "".join(out)
 
 
+def _wrap_equation_lines(text):
+    """Wrap only explicit mathematical chains; leave prose, code and nested '=' intact."""
+    lines = []
+    for line in text.split("\n"):
+        if len(line) <= 64 or line.count("=") < 2:
+            lines.append(line)
+            continue
+        # Narrow whitelist intentionally excludes natural-language sentences and comparisons.
+        if not re.fullmatch(r"[A-Za-zΑ-ω0-9 \t.,+−*/×·÷^_²³⁰¹⁴⁵⁶⁷⁸⁹₀-₉°∠√π|()\[\]{}=⁻]+", line):
+            lines.append(line)
+            continue
+        stack, breaks = [], []
+        pairs = {')': '(', ']': '[', '}': '{'}
+        balanced = True
+        for index, char in enumerate(line):
+            if char in '([{':
+                stack.append(char)
+            elif char in ')]}':
+                if not stack or stack.pop() != pairs[char]:
+                    balanced = False
+                    break
+            elif char == '=' and not stack:
+                breaks.append(index)
+        if not balanced or stack or len(breaks) < 2 or any(
+            not line[left + 1:right].strip() for left, right in zip(breaks, breaks[1:])
+        ):
+            lines.append(line)
+            continue
+        # Keep the symbolic formula together; each remaining equality is a continuation.
+        start = 0
+        for index in breaks[1:]:
+            lines.append(line[start:index].rstrip())
+            start = index
+        lines.append(line[start:].rstrip())
+    return '\n'.join(lines)
+
+
 def _normal_prose(s):
     # Explicit math spans only; ordinary money amounts and prose underscores survive.
     s = re.sub(r"\\\[(.*?)\\\]|\\\((.*?)\\\)|\$\$(.*?)\$\$|(?<![\w$])\$([^$\n]+)\$(?!\w)",
@@ -251,7 +299,7 @@ def _normal_prose(s):
         # Naked equations are also common in vision answers. Restrict changes to those lines.
         s = "\n".join(readable_math(line) if re.search(r"\\(?:frac|dfrac|tfrac|sqrt|angle|circ|times|cdot|div)\b", line) else line
                       for line in s.split("\n"))
-    return re.sub(r"(?m)^#{1,6}\s+(.+)$", r"**\1**", s)
+    return _wrap_equation_lines(re.sub(r"(?m)^#{1,6}\s+(.+)$", r"**\1**", s))
 
 
 def reply_fragments(text):
