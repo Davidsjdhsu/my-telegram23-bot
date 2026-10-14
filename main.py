@@ -3255,6 +3255,30 @@ async def ask_grok_vision(image_path: str, prompt: str, max_tokens: int = 2500) 
     return f"{GROK_ERROR_PREFIX}{last_err}"
 
 
+async def ask_presentation_vision(image_path: str, prompt: str, max_tokens: int = 2048) -> str:
+    """Short JSON inspection, isolated from the chat/homework reasoning policy."""
+    b64, mime = await run_heavy(_prepare_vision_image, image_path, 1024)
+    options = {}
+    if VISION_MODEL.startswith(("grok-4.5", "grok-4.6", "grok-4.7")):
+        # SDK 1.30 passes provider-specific parameters via extra_body.
+        options["extra_body"] = {"reasoning_effort": "low"}
+    response = await client.with_options(timeout=60.0, max_retries=0).chat.completions.create(
+        model=VISION_MODEL,
+        messages=[{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+            {"type": "text", "text": prompt},
+        ]}],
+        response_format={"type": "json_object"},
+        max_tokens=max(2048, max_tokens),
+        temperature=0,
+        **options,
+    )
+    content = (response.choices[0].message.content or "").strip()
+    if not content or response.choices[0].finish_reason == "length":
+        raise ValueError("Incomplete image inspection")
+    return content
+
+
 VISION_SOLVE_PROMPT = VISION_RULES + "\n" + FORMAT_RULES
 
 
@@ -5648,7 +5672,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         assets, image_warnings = await prepare_images(
             content["title"], visual_slides, list(data.get("user_photos") or []),
             data.get("pres_photo_captions") or {}, visual_tmp.name,
-            generate_image, ask_grok_vision, extract_json,
+            generate_image, ask_presentation_vision, extract_json,
         )
         require_images(visual_slides, assets, image_warnings, designer)
         # Verify geometry before the expensive file delivery / billing stage.

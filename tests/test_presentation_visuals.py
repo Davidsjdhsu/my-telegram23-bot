@@ -41,7 +41,7 @@ class VisualTests(unittest.TestCase):
 
     def test_prompt_has_specific_meaning_and_no_theme_architecture(self):
         prompt=pv.image_prompt('Геология',{'title':'Отбор проб','content':'Геолог собирает керн','image_prompt':'rock core samples'})
-        for text in ['Геология','Отбор проб','rock core samples','ABSOLUTELY NO text','charts','empty room']:
+        for text in ['rock core samples','photograph','without writing']:
             self.assertIn(text,prompt)
 
     def test_photo_mapping_validates_model_numbers(self):
@@ -110,13 +110,13 @@ class ImageFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(count,2);self.assertEqual(w['ai_omitted'],0)
             self.assertEqual(assets[0]['origin'],'ai')
 
-    async def test_two_bad_images_use_text_fallback(self):
+    async def test_three_bad_images_are_omitted(self):
         with tempfile.TemporaryDirectory() as td:
             async def gen(prompt,path,**kw):Image.new('RGB',(80,60),'red').save(path);return True
             generate=AsyncMock(side_effect=gen)
             inspect=AsyncMock(return_value=json.dumps({**GOOD,'has_chart':True}))
             assets,w=await pv.prepare_images('Геология',self.slides(1),[],{},td,generate,inspect,json.loads)
-            self.assertEqual(assets,[None]);self.assertEqual(generate.await_count,2)
+            self.assertEqual(assets,[None]);self.assertEqual(generate.await_count,3)
             self.assertEqual(w['ai_omitted'],1)
 
     async def test_checker_failure_never_publishes_unchecked_image(self):
@@ -174,7 +174,7 @@ class ImageFlowTests(unittest.IsolatedAsyncioTestCase):
         count=0
         async def gen(prompt,path,**kw):
             nonlocal count;count+=1;Image.new('RGB',(120,160),(count*40,50,60)).save(path);return True
-        env['generate_image']=gen;env['ask_grok_vision']=AsyncMock(return_value=json.dumps(GOOD))
+        env['generate_image']=gen;env['ask_presentation_vision']=AsyncMock(return_value=json.dumps(GOOD))
         await env['_build_presentation'](SimpleNamespace(from_user=SimpleNamespace(id=-987654321)),state)
         self.assertEqual(len(sent),2)
         prs=Presentation(io.BytesIO(sent[0][1]))

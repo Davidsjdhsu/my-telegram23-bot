@@ -249,7 +249,7 @@ class BuildTests(unittest.IsolatedAsyncioTestCase):
             'random':random.Random(7),'re':re,'textwrap':textwrap,'THEMES':{'minimal':theme,'default':theme},
             'pick_theme':lambda t:('minimal',theme),'start_job':Mock(return_value=(True,None)),
             'finish_job':Mock(),'get_user':lambda uid:{'generations':0,'history':[]},
-            'tempfile':tempfile,'ask_grok_vision':AsyncMock(return_value=json.dumps({'relevant':True,'has_text':False,'has_chart':False,'defective':False})), 'add_chart':Mock(),
+            'tempfile':tempfile,'ask_presentation_vision':AsyncMock(return_value=json.dumps({'relevant':True,'has_text':False,'has_chart':False,'defective':False})), 'add_chart':Mock(),
             'run_heavy':run_heavy,'generate_image':AsyncMock(side_effect=generate_fixture),
             'register_pdf_fonts':lambda:('Helvetica','Helvetica-Bold'),
             'spend_credits':Mock(),'note_success':Mock(),'signature_line':AsyncMock(return_value=''),
