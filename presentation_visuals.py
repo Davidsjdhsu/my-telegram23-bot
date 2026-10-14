@@ -31,6 +31,16 @@ def image_prompt(topic, slide, retry=False):
                'meaning': slide.get('content') or slide.get('point'),
                'scene': slide.get('image_prompt') or topic}
     prompt = IMAGE_RULES + '\nSubject: ' + json.dumps(subject, ensure_ascii=False)
+    if slide.get('_designer_style'):
+        if slide.get('_designer_cover'):
+            prompt += ('\nArt direction: premium editorial cover, near-black background, cobalt and turquoise rim lighting. '
+                       'Place the concrete main subject on the RIGHT half. Keep the LEFT two thirds dark, calm and mostly empty '
+                       'for separately added editable text. Wide cinematic composition, no typography. '
+                       'Keep the subject believable and appropriate to the topic, not a generic futuristic gadget.')
+        else:
+            prompt += ('\nArt direction: clean premium editorial photograph, generous breathing room around the subject, '
+                       'balanced natural lighting. Main subject centered and fully visible in the central two thirds. '
+                       'It must remain readable if the edges are cropped for a rounded slide frame.')
     if retry:
         prompt += '\nPrevious image failed review. Simplify to a single relevant scene. No lettering or graphic overlays whatsoever.'
     return prompt + '\nRemember: a subject-specific image only, without any writing or data graphics.'
@@ -142,11 +152,11 @@ User photos are retained even when the classifier is unavailable, using upload o
             assets[slot] = asset
 
     async def generated(index, slide):
-        if assets[index] or slide.get('chart'):
+        if assets[index] or slide.get('chart') or slide.get('_skip_ai_image'):
             return
         async with gate:
             # A portrait composition suits the side panel. Wide scenes get their own wide layout.
-            ratio = '16:9' if index == 0 or index % 3 == 0 else '3:4'
+            ratio = ('16:9' if index == 0 else '4:3') if slide.get('_designer_style') else ('16:9' if index == 0 or index % 3 == 0 else '3:4')
             for attempt in range(2):
                 src = directory / f'generated-{index}-{attempt}.png'
                 try:
@@ -171,7 +181,7 @@ User photos are retained even when the classifier is unavailable, using upload o
         await asyncio.wait_for(asyncio.gather(*(generated(i,s) for i,s in enumerate(slides))),
                                max(1, deadline - asyncio.get_running_loop().time()))
     except TimeoutError:
-        warnings['ai_omitted'] = sum(a is None and not s.get('chart') for a,s in zip(assets,slides))
+        warnings['ai_omitted'] = sum(a is None and not s.get('chart') and not s.get('_skip_ai_image') for a,s in zip(assets,slides))
     return assets, warnings
 
 

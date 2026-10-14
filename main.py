@@ -2,6 +2,7 @@ import os
 import asyncio
 import tempfile
 from presentation_visuals import prepare_images, render_slide, visual_quality_notice, photo_caption_hint
+from presentation_designer import is_designer, render_designer_slide, content_instruction, validate_designer, build_scene
 from contextlib import asynccontextmanager, suppress
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from chat_support import (
@@ -2333,7 +2334,15 @@ THEMES = {
                "photo": "desert photography, dunes, warm sand tones, cinematic, no text, no watermark", "heading_font": "Georgia"},
 }
 
+# Explicit designer styles share the existing credit calculation.
+for _designer_name in ("designer_soft", "designer_strict"):
+    THEMES[_designer_name] = {**THEMES["tech"], "bg": (255,255,255),
+        "ink": (8,11,16), "mid": (40,50,63), "mute": (88,97,111),
+        "line": (36,77,255), "heading_font": "Arial"}
+
 THEME_LABELS_I18N = {
+    "designer_soft": {"ru":"✨ Дизайнерский · мягкий", "en":"✨ Designer · soft", "de":"✨ Design · weich", "ar":"✨ تصميم ناعم", "zh":"✨ 设计 · 柔和", "es":"✨ Diseño · suave", "fr":"✨ Design · doux"},
+    "designer_strict": {"ru":"◻️ Дизайнерский · строгий", "en":"◻️ Designer · sharp", "de":"◻️ Design · klar", "ar":"◻️ تصميم حاد", "zh":"◻️ 设计 · 硬朗", "es":"◻️ Diseño · recto", "fr":"◻️ Design · droit"},
     "nature": {"ru": "Природа", "en": "Nature", "de": "Natur", "ar": "الطبيعة", "zh": "自然", "es": "Naturaleza", "fr": "Nature"},
     "business": {"ru": "Бизнес", "en": "Business", "de": "Business", "ar": "الأعمال", "zh": "商业", "es": "Negocios", "fr": "Affaires"},
     "tech": {"ru": "Технологии", "en": "Technology", "de": "Technologie", "ar": "التقنية", "zh": "科技", "es": "Tecnología", "fr": "Technologie"},
@@ -3530,6 +3539,10 @@ def extract_page_count(text: str):
 # претендует на полный разбор языка - ловит самые ходовые формулировки, остальное
 # просто останется нераспознанным и попадёт в список "уточнить".
 STYLE_KEYWORDS = [
+    ("дизайнерский строгий", "designer_strict"), ("дизайнерский · строгий", "designer_strict"),
+    ("строгий дизайнерский", "designer_strict"), ("designer sharp", "designer_strict"),
+    ("дизайнерский", "designer_soft"), ("мягкий стиль", "designer_soft"), ("со скругл", "designer_soft"),
+    ("soft designer", "designer_soft"), ("designer soft", "designer_soft"),
     ("минимал", "minimal"), ("минимализм", "minimal"),
     ("историческ", "history"), ("история", "history"), ("истори ", "history"),
     ("технологи", "tech"), ("техно ", "tech"), ("tech", "tech"),
@@ -4923,6 +4936,9 @@ def style_kb(include_keep=False, lang="ru"):
     rows = []
     if include_keep:
         rows.append([KeyboardButton(text=tr("btn_keep_style", lang))])
+    for name in ("designer_soft", "designer_strict"):
+        labels = THEME_LABELS_I18N[name]
+        rows.append([KeyboardButton(text=labels.get(lang, labels["ru"]))])
     theme_order = ["nature", "business", "tech", "school", "history", "science", "sport", "travel",
                    "food", "art", "eco", "minimal", "fashion", "default"]
     for i in range(0, len(theme_order), 2):
@@ -5224,7 +5240,7 @@ async def process_theme(m: Message, state: FSMContext):
         if not name:
             await m.answer(tr("msg_pick_style", lang), reply_markup=style_kb(include_keep=True, lang=lang))
             return
-        await state.update_data(theme_name=name)
+        await state.update_data(theme_name=name, **({"custom_colors": None} if name.startswith("designer_") else {}))
     await m.answer(tr("msg_how_many_slides", lang), reply_markup=slides_kb(lang))
     await state.set_state(Form.waiting_slides)
 
@@ -5383,13 +5399,15 @@ async def process_style(m: Message, state: FSMContext):
     data = await state.get_data()
     extra = ((data.get("extra") or "") + "\nОформление: " + label).strip()
     candidate = {**data, "theme_name": name, "extra": extra}
+    if name.startswith("designer_"):
+        candidate["custom_colors"] = None
     try:
         plan = await _create_presentation_plan(candidate, lang)
     except PresentationValidationError:
         await m.answer(tr("msg_draft_update_failed", lang), reply_markup=style_kb(lang=lang))
         return
     sample = format_plan(plan, lang)
-    await state.update_data(theme_name=name, extra=extra, pres_plan=plan,
+    await state.update_data(theme_name=name, custom_colors=candidate.get("custom_colors"), extra=extra, pres_plan=plan,
         pres_plan_key=plan_key(candidate), sample=sample)
     await _send_presentation_draft(m,
         tr("msg_style_changed", lang, style=label, sample=sample), confirm_kb(lang))
@@ -5575,17 +5593,27 @@ async def _build_presentation(m: Message, state: FSMContext):
             dark_colors = light_colors = colors
         cgl = content_gen_lang(data, lang)
         prompt = content_prompt(data, plan, grok_json_lang_instruction(cgl or "ru"))
+        designer = is_designer(data)
+        if designer:
+            prompt += "\n" + content_instruction()
         for attempt in range(2):
             raw = await ask_grok(prompt, max_tokens=10000, system_prompt=PRESENTATION_SYSTEM, temperature=0.35)
             if grok_failed(raw):
                 raise PresentationValidationError("Content generation failed")
             try:
                 content = validate_content(extract_json(raw), plan)
+                if designer:
+                    for idx, content_slide in enumerate(content["slides"], 2):
+                        if "designer" not in content_slide:
+                            raise PresentationValidationError("Missing designer layout")
+                        content_slide["designer"] = validate_designer(content_slide)
+                        # Fit structured blocks before spending time on image generation.
+                        build_scene(content_slide, None, idx, planned_slides, cgl or lang, theme_name)
                 break
             except (ValueError, TypeError, KeyError, AttributeError):
                 if attempt:
                     raise PresentationValidationError("Content does not match plan") from None
-                prompt += "\nПредыдущий ответ не прошёл проверку. Верни полный JSON: ровно указанное число содержательных слайдов, без обложки, с номерами из плана, непустым текстом до 480 символов на слайд и описанием конкретной сцены для каждой картинки."
+                prompt += "\nПредыдущий ответ не прошёл проверку. Верни полный JSON: ровно указанное число содержательных слайдов, без обложки, с номерами из плана, непустым текстом до 480 символов на слайд и описанием конкретной сцены для каждой картинки. Если выбран дизайнерский стиль, у каждого слайда обязателен designer. Сократи заголовки и тексты блоков, чтобы они помещались в выбранном макете."
 
         prs = Presentation()
         prs.slide_width = Inches(13.333)
@@ -5610,6 +5638,12 @@ async def _build_presentation(m: Message, state: FSMContext):
             else:
                 chart_count += 1
             visual_slides.append(item)
+        if designer:
+            for idx, item in enumerate(visual_slides):
+                item["_designer_style"] = theme_name
+                item["_designer_cover"] = idx == 0
+                item["_skip_ai_image"] = idx > 0 and item.get("designer", {}).get("layout") in (
+                    "process", "comparison", "sections", "statement")
         assets, image_warnings = await prepare_images(
             content["title"], visual_slides, list(data.get("user_photos") or []),
             data.get("pres_photo_captions") or {}, visual_tmp.name,
@@ -5619,7 +5653,8 @@ async def _build_presentation(m: Message, state: FSMContext):
         for index, (item, asset) in enumerate(zip(visual_slides, assets)):
             slide = prs.slides.add_slide(prs.slide_layouts[6])
             sc = dark_colors if index in (0, planned_slides - 1) else light_colors
-            await run_heavy(render_slide, slide, item, asset, sc, index + 1, planned_slides,
+            renderer = render_designer_slide if designer else render_slide
+            await run_heavy(renderer, slide, item, asset, sc, index + 1, planned_slides,
                             cgl or lang, slide_background, add_chart)
 
         if len(prs.slides) != planned_slides:
