@@ -40,8 +40,8 @@ def load_functions(names, env=None):
     if len(nodes) != len(names):
         raise AssertionError(set(names)-{n.name for n in nodes})
     ns = {k: getattr(ps,k) for k in dir(ps) if not k.startswith('__')}
-    ns.update({k: getattr(pv,k) for k in ('prepare_images', 'render_slide', 'visual_quality_notice')})
-    ns.update({k: getattr(pd,k) for k in ('is_designer','render_designer_slide','content_instruction','validate_designer','build_scene')})
+    ns.update({k: getattr(pv,k) for k in ('prepare_images', 'render_slide', 'visual_quality_notice', 'require_images', 'ImageDeliveryError', 'image_failure_notice', 'photo_caption_hint')})
+    ns.update({k: getattr(pd,k) for k in ('is_designer','render_designer_slide','content_instruction','validate_designer','build_scene','plan_designer_images')})
     ns.update(env or {})
     module = ast.Module(body=[ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')],level=0)] + nodes, type_ignores=[])
     exec(compile(ast.fix_missing_locations(module),'main.py','exec'),ns)
@@ -236,6 +236,12 @@ class BuildTests(unittest.IsolatedAsyncioTestCase):
         async def run_heavy(fn,*args): return fn(*args)
         theme={'bg':(255,255,255),'ink':(15,15,15),'mid':(70,70,70),'mute':(120,120,120),'line':(0,0,0),'photo':'natural photo','heading_font':'Calibri'}
         model=AsyncMock(return_value=json.dumps(make_content(count+1 if bad_content else count)))
+        async def generate_fixture(prompt, path, **kwargs):
+            from PIL import Image
+            import hashlib
+            color=tuple(hashlib.sha256(path.encode()).digest()[:3])
+            Image.new('RGB',(640,480),color).save(path)
+            return True
         env=WorkflowTests().env(ask_grok=model)
         env.update({'Presentation':Presentation,'Inches':Inches,'Pt':Pt,'RGBColor':RGBColor,
             'MSO_SHAPE':MSO_SHAPE,'PP_ALIGN':PP_ALIGN,'MSO_ANCHOR':MSO_ANCHOR,
@@ -243,8 +249,8 @@ class BuildTests(unittest.IsolatedAsyncioTestCase):
             'random':random.Random(7),'re':re,'textwrap':textwrap,'THEMES':{'minimal':theme,'default':theme},
             'pick_theme':lambda t:('minimal',theme),'start_job':Mock(return_value=(True,None)),
             'finish_job':Mock(),'get_user':lambda uid:{'generations':0,'history':[]},
-            'tempfile':tempfile,'ask_grok_vision':AsyncMock(), 'add_chart':Mock(),
-            'run_heavy':run_heavy,'generate_image':AsyncMock(return_value=False),
+            'tempfile':tempfile,'ask_grok_vision':AsyncMock(return_value=json.dumps({'relevant':True,'has_text':False,'has_chart':False,'defective':False})), 'add_chart':Mock(),
+            'run_heavy':run_heavy,'generate_image':AsyncMock(side_effect=generate_fixture),
             'register_pdf_fonts':lambda:('Helvetica','Helvetica-Bold'),
             'spend_credits':Mock(),'note_success':Mock(),'signature_line':AsyncMock(return_value=''),
             'main_kb':lambda *a,**kw:None,'FSInputFile':lambda path,filename:SimpleNamespace(path=path,filename=filename),

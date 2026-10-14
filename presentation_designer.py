@@ -40,8 +40,31 @@ sections 2–4 смысловых блока. Заголовок блока до
 blocks=[]; тогда используется content. content обязателен и содержит тот же смысл,
 что блоки, для текстовой копии. Не добавляй фактов, процентов или чисел ради дизайна.
 Для statement content до 220 символов. Для photo content до 320 символов.
+Не менее половины слайдов планируй с предметными фото (photo/auto), включая обложку.
+statement используй не более одного раза. process — только реальная последовательность
+действий или этапов; для перечня болезней, свойств или мер профилактики используй sections.
 Чередуй фото, схемы и сравнения по смыслу; не делай все слайды одинаковыми. Данные пользователя сохраняй. При длинном материале выбирай auto. Все поля и
 количество слайдов из основного задания остаются обязательными.'''
+
+
+def plan_designer_images(slides, style):
+    """Keep true diagrams; promote supporting-photo layouts in a text-heavy plan."""
+    for i, item in enumerate(slides):
+        item['_designer_style'] = style
+        item['_designer_cover'] = i == 0
+        item['_skip_ai_image'] = bool(item.get('chart')) or (i > 0 and item.get('designer', {}).get('layout') in (
+            'process', 'comparison', 'sections', 'statement'))
+    target = min(6, math.ceil(len(slides)/2))
+    current = sum(not s['_skip_ai_image'] for s in slides)
+    # Choose alternate positions first; preserve all structured text when rendered with a photo.
+    candidates = list(range(2, len(slides), 2)) + list(range(1, len(slides), 2))
+    for i in candidates:
+        s = slides[i]
+        if current >= target:
+            break
+        if s['_skip_ai_image'] and not s.get('chart') and s.get('designer', {}).get('layout') in ('statement', 'sections'):
+            s['_skip_ai_image'] = False
+            current += 1
 
 
 def validate_designer(item):
@@ -259,12 +282,16 @@ def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
                 nodes.append({'type':'connector','box':[x+82,370,step_w-67,2],'color':'#80F0E1'})
     elif layout in ('comparison','sections'):
         heading((64,60,1152,190),72,42)
-        rows=math.ceil(len(blocks)/2); row_h=376/rows
+        # Three equal cards, rather than a 2x2 grid with an empty fourth cell.
+        cols=3 if len(blocks)==3 else 2
+        rows=math.ceil(len(blocks)/cols); row_h=376/rows
+        col_w=1152/cols; text_w=col_w-48
         panel((32,250,1216,408),fill='#F0F4FC')
         for i,b in enumerate(blocks):
-            x=64+(i%2)*608; y=270+(i//2)*row_h
-            txt(b['heading'],(x,y,536,70),'subheading',36,26,c['accent'])
-            txt(b['text'],(x,y+74,536,row_h-92),size=29,minimum=24)
+            x=64+(i%cols)*col_w; y=270+(i//cols)*row_h
+            head_h=110 if cols==3 else 70
+            txt(b['heading'],(x,y,text_w,head_h),'subheading',36,26,c['accent'])
+            txt(b['text'],(x,y+head_h+4,text_w,row_h-head_h-22),size=29,minimum=24)
     elif layout == 'statement':
         panel((20,20,1240,680),GRADIENT)
         heading((64,72,1110,212),80,44)

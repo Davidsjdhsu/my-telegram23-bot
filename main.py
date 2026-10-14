@@ -1,8 +1,8 @@
 import os
 import asyncio
 import tempfile
-from presentation_visuals import prepare_images, render_slide, visual_quality_notice, photo_caption_hint
-from presentation_designer import is_designer, render_designer_slide, content_instruction, validate_designer, build_scene
+from presentation_visuals import prepare_images, render_slide, visual_quality_notice, photo_caption_hint, require_images, ImageDeliveryError, image_failure_notice
+from presentation_designer import is_designer, render_designer_slide, content_instruction, validate_designer, build_scene, plan_designer_images
 from contextlib import asynccontextmanager, suppress
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from chat_support import (
@@ -1899,13 +1899,15 @@ TR = {
                                 "zh": "无法下载这张照片，请重新发送或跳过。",
                                 "es": "No se pudo descargar esa foto, envíala de nuevo u omítela.",
                                 "fr": "Impossible de télécharger cette photo, renvoie-la ou passe-la."},
-    "msg_building_pres_photos": {"ru": "Собираю презентацию с картинками. Это займёт 1–2 минуты.",
-                                 "en": "Building the presentation with images. This will take 1–2 minutes.",
-                                 "de": "Präsentation mit Bildern wird erstellt. Das dauert 1–2 Minuten.",
-                                 "ar": "جاري إنشاء العرض التقديمي بالصور. سيستغرق ١-٢ دقيقة.",
-                                 "zh": "正在生成带图片的演示文稿，这需要1-2分钟。",
-                                 "es": "Creando la presentación con imágenes. Esto tardará 1-2 minutos.",
-                                 "fr": "Création de la présentation avec images. Cela prendra 1 à 2 minutes."},
+    "msg_building_pres_photos": {
+        "ru": "Собираю презентацию, создаю и проверяю изображения. Это может занять несколько минут.",
+        "en": "Building the presentation, creating and checking images. This may take several minutes.",
+        "de": "Ich erstelle die Präsentation und prüfe die Bilder. Das kann einige Minuten dauern.",
+        "fr": "Je prépare la présentation, crée et vérifie les images. Cela peut prendre plusieurs minutes.",
+        "es": "Estoy creando la presentación y comprobando las imágenes. Puede tardar varios minutos.",
+        "zh": "正在制作演示文稿、生成并检查图片，可能需要几分钟。",
+        "ar": "أُعدّ العرض وأُنشئ الصور وأتحقق منها. قد يستغرق ذلك عدة دقائق."
+},
     "msg_building_excel": {"ru": "Собираю Excel…", "en": "Building the Excel file…", "de": "Excel-Datei wird erstellt…",
                            "ar": "جاري إنشاء ملف Excel…", "zh": "正在生成Excel文件…", "es": "Creando el archivo Excel…", "fr": "Création du fichier Excel…"},
     "msg_building_word": {"ru": "Собираю Word. Обычно это быстрее презентации.", "en": "Building the Word file. This is usually faster than a presentation.",
@@ -2083,13 +2085,14 @@ TR = {
                       "es": "💳 Saldo: {credits} créditos\nPresentación — 5 cr./diapositiva · Word/Excel — 5 cr. · reconocimiento de fotos — 3 cr. · plantilla gratis",
                       "fr": "💳 Solde : {credits} crédits\nPrésentation — 5 cr./diapositive · Word/Excel — 5 cr. · reconnaissance photo — 3 cr. · modèle gratuit"},
     "msg_pptx_ready": {
-        "ru": "Готово ✅\n\nОткрывай именно PPTX в PowerPoint, Keynote или Google Презентациях.\n\nЕсли на телефоне все фото одинаковые, это не ошибка файла. Так бывает в предпросмотре Telegram, WPS и встроенных «Документах». Открой тот же файл на другом устройстве или в нормальном редакторе презентаций.",
-        "en": "Done ✅\n\nOpen the PPTX file specifically in PowerPoint, Keynote, or Google Slides.\n\nIf all the photos look the same on your phone, that's not a file error. This happens in Telegram's preview, WPS, and built-in \"Files\" apps. Open the same file on another device or in a proper presentation editor.",
-        "de": "Fertig ✅\n\nÖffne die PPTX-Datei speziell in PowerPoint, Keynote oder Google Präsentationen.\n\nWenn auf dem Handy alle Fotos gleich aussehen, ist das kein Dateifehler. Das passiert bei der Telegram-Vorschau, WPS und integrierten „Dateien“-Apps. Öffne dieselbe Datei auf einem anderen Gerät oder in einem richtigen Präsentationseditor.",
-        "ar": "تم ✅\n\nافتح ملف PPTX تحديداً في PowerPoint أو Keynote أو Google Slides.\n\nإذا بدت كل الصور متشابهة على الهاتف، فهذا ليس خطأً في الملف. يحدث هذا في معاينة Telegram وWPS وتطبيقات «الملفات» المدمجة. افتح نفس الملف على جهاز آخر أو في محرر عروض تقديمية حقيقي.",
-        "zh": "完成 ✅\n\n请务必在 PowerPoint、Keynote 或 Google 幻灯片中打开该 PPTX 文件。\n\n如果手机上所有照片看起来都一样，这不是文件错误。这在 Telegram 预览、WPS 和内置「文件」应用中很常见。请在其他设备或正规演示文稿编辑器中打开同一文件。",
-        "es": "Listo ✅\n\nAbre el archivo PPTX específicamente en PowerPoint, Keynote o Presentaciones de Google.\n\nSi en el teléfono todas las fotos se ven iguales, no es un error del archivo. Esto pasa en la vista previa de Telegram, WPS y las apps integradas de «Archivos». Abre el mismo archivo en otro dispositivo o en un editor de presentaciones real.",
-        "fr": "Terminé ✅\n\nOuvre bien le fichier PPTX dans PowerPoint, Keynote ou Google Slides.\n\nSi toutes les photos se ressemblent sur ton téléphone, ce n'est pas une erreur du fichier. Cela arrive dans l'aperçu de Telegram, WPS et les applications « Fichiers » intégrées. Ouvre le même fichier sur un autre appareil ou dans un vrai éditeur de présentations."},
+        "ru": "Готово ✅\n\nPPTX — презентация с оформлением и изображениями. Открывай в PowerPoint, Keynote или Google Презентациях. PDF — отдельная текстовая копия без изображений.",
+        "en": "Done ✅\n\nPPTX contains the designed presentation and images. Open it in PowerPoint, Keynote or Google Slides. PDF is a separate text copy without images.",
+        "de": "Fertig ✅\n\nPPTX enthält die gestaltete Präsentation mit Bildern. Öffne sie in PowerPoint, Keynote oder Google Präsentationen. PDF ist eine separate Textkopie ohne Bilder.",
+        "fr": "Terminé ✅\n\nLe PPTX contient la présentation mise en page avec images. Ouvre-le dans PowerPoint, Keynote ou Google Slides. Le PDF est une copie texte séparée sans images.",
+        "es": "Listo ✅\n\nEl PPTX contiene la presentación con diseño e imágenes. Ábrelo en PowerPoint, Keynote o Google Slides. El PDF es una copia de texto independiente sin imágenes.",
+        "zh": "完成 ✅\n\nPPTX 包含排版和图片，请使用 PowerPoint、Keynote 或 Google 幻灯片打开。PDF 是单独的纯文字副本，不含图片。",
+        "ar": "تم ✅\n\nيحتوي PPTX على العرض بتصميمه وصوره. افتحه في PowerPoint أو Keynote أو Google Slides. أما PDF فهو نسخة نصية منفصلة دون صور."
+},
     "msg_pptx_caption": {"ru": "📊 PPTX — открывай этот файл", "en": "📊 PPTX — open this file", "de": "📊 PPTX — öffne diese Datei",
                          "ar": "📊 PPTX — افتح هذا الملف", "zh": "📊 PPTX——请打开此文件", "es": "📊 PPTX — abre este archivo", "fr": "📊 PPTX — ouvre ce fichier"},
     "msg_pptx_pdf_caption": {"ru": "📄 PDF — полная текстовая копия (без фото)", "en": "📄 PDF — full text copy (without photos)",
@@ -5477,11 +5480,13 @@ async def ask_photo_source(m: Message, state: FSMContext):
 
 @dp.message(Form.waiting_pres_photo_choice, F.text.in_(ALL_BTN_AI_PHOTOS_LABELS))
 async def photo_source_ai(m: Message, state: FSMContext):
+    await state.update_data(photo_mode="ai")
     await _build_presentation(m, state)
 
 
 @dp.message(Form.waiting_pres_photo_choice, F.text.in_(ALL_BTN_OWN_PHOTOS_LABELS))
 async def photo_source_own(m: Message, state: FSMContext):
+    await state.update_data(photo_mode="own")
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
     slides = data.get("slides", 8)
@@ -5639,16 +5644,13 @@ async def _build_presentation(m: Message, state: FSMContext):
                 chart_count += 1
             visual_slides.append(item)
         if designer:
-            for idx, item in enumerate(visual_slides):
-                item["_designer_style"] = theme_name
-                item["_designer_cover"] = idx == 0
-                item["_skip_ai_image"] = idx > 0 and item.get("designer", {}).get("layout") in (
-                    "process", "comparison", "sections", "statement")
+            plan_designer_images(visual_slides, theme_name)
         assets, image_warnings = await prepare_images(
             content["title"], visual_slides, list(data.get("user_photos") or []),
             data.get("pres_photo_captions") or {}, visual_tmp.name,
             generate_image, ask_grok_vision, extract_json,
         )
+        require_images(visual_slides, assets, image_warnings, designer)
         # Verify geometry before the expensive file delivery / billing stage.
         for index, (item, asset) in enumerate(zip(visual_slides, assets)):
             slide = prs.slides.add_slide(prs.slide_layouts[6])
@@ -5661,6 +5663,13 @@ async def _build_presentation(m: Message, state: FSMContext):
             raise PresentationValidationError("Final slide count differs from confirmed plan")
         pptx_path = os.path.join(visual_tmp.name, "presentation.pptx")
         await run_heavy(prs.save, pptx_path)
+        # Check the serialized file, not just the in-memory image plan.
+        saved = await run_heavy(Presentation, pptx_path)
+        if len(saved.slides) != planned_slides:
+            raise PresentationValidationError("Saved slide count differs from plan")
+        for index, asset in enumerate(assets):
+            if asset and not any(shape.shape_type == 13 for shape in saved.slides[index].shapes):
+                raise ImageDeliveryError("Image missing from saved presentation")
         pdf_path = os.path.join(visual_tmp.name, "presentation.pdf")
         pdf = canvas.Canvas(pdf_path, pagesize=A4)
         w, h = A4
@@ -5731,6 +5740,13 @@ async def _build_presentation(m: Message, state: FSMContext):
             # Both files are delivered and billed. A failed courtesy message must
             # not report generation failure or leave a paid draft ready to rebuild.
             print("Не удалось отправить уведомление о готовой презентации:", type(notice_error).__name__)
+    except ImageDeliveryError:
+        await state.set_state(Form.waiting_confirm)
+        try:
+            chat_id = m.chat.id if getattr(m, "chat", None) else uid
+            await bot.send_message(chat_id, image_failure_notice(lang), reply_markup=confirm_kb(lang))
+        except Exception:
+            print("Не удалось отправить сообщение о неполной сборке изображений")
     except Exception as e:
         print("Ошибка сборки презентации:", repr(e))
         try:
