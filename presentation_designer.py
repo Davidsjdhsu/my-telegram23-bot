@@ -204,13 +204,32 @@ def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
             # Native overlay guarantees text contrast even if an AI image is too bright.
             panel((20,20,1240,680),{'angle':0,'stops':[(0,'#080B10',.97),
                   (.58,'#080B10',.84),(1,'#080B10',.15)]})
-            heading((64,124,1056,310),112,52)
+            heading((64,124,1056,310),112,40)
         elif asset:
-            photo((710,100,500,510))
-            heading((64,112,600,300),80,42)
-        else: heading((64,124,1080,310),112,52)
+            try:
+                node = text_node(title,(64,112,600,300),c['ink'],80,42,False,'title')
+            except DesignerValidationError:
+                # Preserve long confirmed titles alongside a complete user photograph.
+                node = text_node(title,(64,64,860,310),c['ink'],64,40,False,'title')
+                photo((992,64,224,166))
+            else:
+                photo((710,100,500,510))
+            nodes.append(node)
+        else: heading((64,124,1080,310),112,40)
         subtitle = item.get('subtitle') or item.get('point') or body
-        if subtitle: txt(clean(subtitle,180,'subtitle'),(68,490,600 if asset else 1050,145),size=32,minimum=26)
+        if subtitle:
+            subtitle = clean(subtitle,180,'subtitle')
+            # Long descriptions get a full-width band below the photo/title area.
+            try:
+                subtitle_node = text_node(subtitle,(68,490,600 if asset else 1050,145),c['body'],32,26)
+            except DesignerValidationError:
+                if asset and asset.get('origin') == 'user':
+                    # Rebuild the user cover so the band cannot overlap its photograph.
+                    nodes[:] = nodes[:1]
+                    heading((64,64,860,310),64,40)
+                    photo((992,64,224,166))
+                subtitle_node = text_node(subtitle,(68,444,1136,204),c['body'],32,26)
+            nodes.append(subtitle_node)
     elif layout == 'photo':
         compact = len(body) <= 260 and len(title) <= 65
         text_w = 440 if compact else 640
@@ -240,10 +259,10 @@ def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
                 nodes.append({'type':'connector','box':[x+82,370,step_w-67,2],'color':'#80F0E1'})
     elif layout in ('comparison','sections'):
         heading((64,60,1152,190),72,42)
-        rows=math.ceil(len(blocks)/2); row_h=388/rows
-        panel((32,270,1216,388),fill='#F0F4FC')
+        rows=math.ceil(len(blocks)/2); row_h=376/rows
+        panel((32,250,1216,408),fill='#F0F4FC')
         for i,b in enumerate(blocks):
-            x=64+(i%2)*608; y=292+(i//2)*row_h
+            x=64+(i%2)*608; y=270+(i//2)*row_h
             txt(b['heading'],(x,y,536,70),'subheading',36,26,c['accent'])
             txt(b['text'],(x,y+74,536,row_h-92),size=29,minimum=24)
     elif layout == 'statement':

@@ -5575,9 +5575,9 @@ async def _build_presentation(m: Message, state: FSMContext):
     if not ok:
         await bot.send_message(uid, reason)
         return
-    await bot.send_message(uid, tr("msg_building_pres_photos", lang))
     visual_tmp = None
     try:
+        await bot.send_message(uid, tr("msg_building_pres_photos", lang))
         visual_tmp = tempfile.TemporaryDirectory(prefix="alix-slides-")
 
         plan = data.get("pres_plan")
@@ -5659,24 +5659,25 @@ async def _build_presentation(m: Message, state: FSMContext):
 
         if len(prs.slides) != planned_slides:
             raise PresentationValidationError("Final slide count differs from confirmed plan")
-        pptx_path = f"/tmp/pres_{uid}.pptx"
+        pptx_path = os.path.join(visual_tmp.name, "presentation.pptx")
         await run_heavy(prs.save, pptx_path)
-        pdf_path = f"/tmp/pres_{uid}.pdf"
+        pdf_path = os.path.join(visual_tmp.name, "presentation.pdf")
         pdf = canvas.Canvas(pdf_path, pagesize=A4)
         w, h = A4
         fn, fb = register_pdf_fonts()
 
         # Титульная "обложка" копии — как в самой презентации.
         pdf.setFont(fb, 22)
+        cover_y = h - 90
         for line in wrap_lines(content.get("title", "Презентация"), fb, 22, w - 80):
-            pdf.drawString(40, h - 90, line)
-            break  # заголовок короткий по промпту, одной строки почти всегда достаточно
+            pdf.drawString(40, cover_y, line)
+            cover_y -= 28
         pdf.setFont(fn, 11)
-        pdf.drawString(40, h - 115, "Текстовая копия презентации")
+        pdf.drawString(40, cover_y - 12, "Текстовая копия презентации")
         pdf.showPage()
 
         y = h - 60
-        for i, s in enumerate(slides_data, 1):
+        for i, s in enumerate(slides_data, 2):
             if y < 100:
                 pdf.showPage()
                 y = h - 60
@@ -5719,12 +5720,17 @@ async def _build_presentation(m: Message, state: FSMContext):
             except Exception:
                 pass
         chat_id = m.chat.id if getattr(m, "chat", None) else uid
-        await bot.send_message(
-            chat_id,
-            tr("msg_pptx_ready", lang) + visual_quality_notice(image_warnings, lang) + "\n\n" + await signature_line(lang),
-            reply_markup=main_kb(lang, uid=uid)
-        )
         await state.clear()
+        try:
+            await bot.send_message(
+                chat_id,
+                tr("msg_pptx_ready", lang) + visual_quality_notice(image_warnings, lang) + "\n\n" + await signature_line(lang),
+                reply_markup=main_kb(lang, uid=uid)
+            )
+        except Exception as notice_error:
+            # Both files are delivered and billed. A failed courtesy message must
+            # not report generation failure or leave a paid draft ready to rebuild.
+            print("Не удалось отправить уведомление о готовой презентации:", type(notice_error).__name__)
     except Exception as e:
         print("Ошибка сборки презентации:", repr(e))
         try:
