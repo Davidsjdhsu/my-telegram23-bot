@@ -1,5 +1,7 @@
 import os
 import asyncio
+import tempfile
+from presentation_visuals import prepare_images, render_slide, visual_quality_notice, photo_caption_hint
 from contextlib import asynccontextmanager, suppress
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from chat_support import (
@@ -3899,7 +3901,7 @@ async def ask_grok_chat(user_text: str, lang: str = "ru", history: list = None,
 
 
 
-async def generate_image(prompt: str, path: str) -> bool:
+async def generate_image(prompt: str, path: str, aspect_ratio: str = "16:9") -> bool:
     try:
         headers = {
             "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
@@ -3909,7 +3911,7 @@ async def generate_image(prompt: str, path: str) -> bool:
             create = await http.post(
                 "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
                 headers=headers,
-                json={"input": {"prompt": prompt, "aspect_ratio": "16:9", "output_format": "png"}}
+                json={"input": {"prompt": prompt, "aspect_ratio": aspect_ratio, "output_format": "png"}}
             )
             print("Replicate create:", create.status_code)
             create.raise_for_status()
@@ -3921,17 +3923,18 @@ async def generate_image(prompt: str, path: str) -> bool:
                     out = info.get("output")
                     url = out[0] if isinstance(out, list) else out
                     raw = await http.get(str(url))
+                    raw.raise_for_status()
                     with open(path, "wb") as f:
                         f.write(raw.content)
                     await run_heavy(lambda: Image.open(path).convert("RGB").save(path, "PNG"))
                     print("Image saved:", path)
                     return True
                 if info.get("status") in ("failed", "canceled"):
-                    print("Replicate failed:", info)
+                    print("Replicate failed:", info.get("status"))
                     return False
         return False
     except Exception as e:
-        print("Image generation error:", e)
+        print("Image generation error:", type(e).__name__)
         return False
 
 
@@ -5249,7 +5252,7 @@ async def _start_presentation_request(m, state, text, lang, settings=None):
         "theme_name": extract_style(text) or pick_theme(text)[0],
         "slides": extract_slide_count(text) or 8, "photo_mode": extract_photo_mode(text) or "ai",
         "mode": "ai", "content_lang": lang, "pres_plan": None, "pres_plan_key": None,
-        "sample": None, "custom_colors": None, "user_photos": [], "pres_brief_options": [],
+        "sample": None, "custom_colors": None, "user_photos": [], "pres_photo_captions": {}, "pres_brief_options": [],
         "pres_request_id": str(uuid.uuid4()),
     }
     data.update(settings or {})
@@ -5446,7 +5449,7 @@ async def ask_photo_source(m: Message, state: FSMContext):
     if known_photo_mode == "ai":
         await _build_presentation(m, state)
         return
-    await state.update_data(user_photos=[])
+    await state.update_data(user_photos=[], pres_photo_captions={})
     await m.answer(
         tr("msg_photo_or_own", lang),
         reply_markup=photo_source_kb(lang)
@@ -5465,7 +5468,7 @@ async def photo_source_own(m: Message, state: FSMContext):
     data = await state.get_data()
     slides = data.get("slides", 8)
     await m.answer(
-        tr("msg_send_photos_one_by_one", lang, slides=slides),
+        tr("msg_send_photos_one_by_one", lang, slides=slides) + photo_caption_hint(lang),
         reply_markup=photos_done_kb(lang)
     )
     await state.set_state(Form.waiting_pres_photos)
@@ -5515,7 +5518,9 @@ async def collect_pres_photo(m: Message, state: FSMContext):
             await m.answer(tr("msg_enough_photos", lang))
             return
         photos.append(path)
-        await state.update_data(user_photos=photos)
+        captions = dict(data.get("pres_photo_captions") or {})
+        captions[path] = (m.caption or "")[:500]
+        await state.update_data(user_photos=photos, pres_photo_captions=captions)
         n = len(photos)
     await m.answer(tr("msg_photo_received", lang, n=n))
 
@@ -5553,7 +5558,9 @@ async def _build_presentation(m: Message, state: FSMContext):
         await bot.send_message(uid, reason)
         return
     await bot.send_message(uid, tr("msg_building_pres_photos", lang))
+    visual_tmp = None
     try:
+        visual_tmp = tempfile.TemporaryDirectory(prefix="alix-slides-")
 
         plan = data.get("pres_plan")
         if not plan or data.get("pres_plan_key") != plan_key(data):
@@ -5578,7 +5585,7 @@ async def _build_presentation(m: Message, state: FSMContext):
             except (ValueError, TypeError, KeyError, AttributeError):
                 if attempt:
                     raise PresentationValidationError("Content does not match plan") from None
-                prompt += "\nПредыдущий ответ не прошёл проверку. Верни полный JSON: ровно указанное число содержательных слайдов, без обложки, с номерами из плана и непустым текстом."
+                prompt += "\nПредыдущий ответ не прошёл проверку. Верни полный JSON: ровно указанное число содержательных слайдов, без обложки, с номерами из плана, непустым текстом до 480 символов на слайд и описанием конкретной сцены для каждой картинки."
 
         prs = Presentation()
         prs.slide_width = Inches(13.333)
@@ -5591,405 +5598,29 @@ async def _build_presentation(m: Message, state: FSMContext):
             await send_no_credits_notice(m, state, lang)
             return
 
-        # 9 раскладок (3 базовых + 3 зеркальных фото слева/справа/сверху/снизу/крупно/мелко,
-        # "карточки" (две плашки рядом), "нумерованные шаги" (бейдж-номер + коннектор,
-        # вертикальный список) и "иконки-бейджи" (мелкие цветные квадраты + текст в столбик) -
-        # выбираются случайно без повтора одной и той же раскладки два слайда подряд, чтобы
-        # презентация не выглядела как один и тот же шаблон, повторённый N раз.
-        LAYOUT_COUNT = 9
-        layout_sequence = []
-        prev_layout = None
-        for i in range(n):
-            pool = [l for l in range(LAYOUT_COUNT) if l != prev_layout]
-            content_blocks_i = [x.strip() for x in (slides_data[i].get("content") or "").split("\n\n") if x.strip()]
-            if len(content_blocks_i) < 2:
-                # "Карточкам"/"шагам"/"бейджам" нужно минимум 2 смысловых блока - если
-                # модель не разбила content на абзацы, часть плашек останется пустой.
-                pool = [l for l in pool if l not in (6, 7, 8)]
-            next_layout = random.choice(pool)
-            layout_sequence.append(next_layout)
-            prev_layout = next_layout
-
-        # Свои фото пользователя (если он их прислал) идут в очередь: первое - на обложку,
-        # остальные - по слайдам по порядку; на то, что не хватило, генерируем через ИИ как раньше.
-        user_photos = list(data.get("user_photos") or [])
-        # Общий уровень яркости по ВСЕМ присланным фото - ориентир для enhance_user_photo(),
-        # чтобы фото с разных камер/освещения в одной презентации смотрелись как единый комплект.
-        user_photos_luminance = (await run_heavy(average_luminance, user_photos)) if user_photos else None
-
-        cover_img = None
-        cover_panel_img = None
-        cover_src = f"/tmp/{uid}_cover.png"
-        cover_own = user_photos.pop(0) if user_photos else None
-        user_photo_originals = []
-        if cover_own:
-            user_photo_originals.append(cover_own)
-            cover_own = (await run_heavy(prepare_user_photo, cover_own, colors, user_photos_luminance))
-        # Обложка отражает всю тему, а не первый содержательный слайд.
-        cover_subject = content.get("title")
-        cover_ok = bool(cover_own) or await generate_image(
-            f"{cover_subject}, wide cinematic opening shot inspired by \"{content.get('title')}\", {colors['photo']}",
-            cover_src,
-        )
-        # Два стиля обложки, выбираются случайно - чтобы первый (самый запоминающийся) слайд
-        # тоже не был всегда одинаковым в каждой презентации:
-        # "band" - фото на весь кадр, плашка с заголовком снизу (классический вариант);
-        # "split" - фото на половину кадра (слева или справа), заголовок на цветной панели рядом.
-        cover_style = random.choice(["band", "split"]) if cover_ok else "band"
-        cover_split_side = random.choice(["left", "right"])
-        if cover_ok:
-            if cover_style == "split":
-                cover_panel = f"/tmp/{uid}_cover_panel.png"
-                (await run_heavy(cover, cover_own or cover_src, cover_panel, 1280, 1500))
-                cover_panel_img = cover_panel
-            else:
-                cover_wide = f"/tmp/{uid}_cover_w.png"
-                (await run_heavy(cover, cover_own or cover_src, cover_wide, 1920, 1080))
-                cover_img = cover_wide
-
-        # Если модель дала валидный chart для слайда - фото для него не генерируем вообще
-        # (график займёт то же место в раскладке, экономим время и токены на генерацию картинки).
-        MAX_CHARTS = 2
-        charts = []
+        # Generate a subject-specific cover and review every AI image before placing it.
+        visual_slides = [{"title": content["title"], "point": plan["slides"][0]["point"],
+                          "image_prompt": content.get("cover_image_prompt") or content["title"]}]
         chart_count = 0
-        for s in slides_data:
-            c = s.get("chart")
-            valid = (
-                isinstance(c, dict) and c.get("categories") and c.get("series")
-                and chart_count < MAX_CHARTS
-            )
-            if valid:
+        for item in slides_data:
+            chart = item.get("chart")
+            if (data.get("mode") != "user" or not isinstance(chart, dict)
+                    or not chart.get("categories") or not chart.get("series") or chart_count >= 2):
+                item["chart"] = None
+            else:
                 chart_count += 1
-                charts.append(c)
-            else:
-                charts.append(None)
-
-        # График рисуют только раскладки 0-5. Раскладки 6-8 ("карточки", "шаги", "бейджи") -
-        # текстовые, без картинки, и график в них не выводится вовсе: слайд, которому модель дала
-        # график, терял его. Для таких слайдов подменяем раскладку на одну из 0-5, стараясь не
-        # повторять соседние слайды.
-        for i in range(n):
-            if charts[i] and layout_sequence[i] in (6, 7, 8):
-                prev_l = layout_sequence[i - 1] if i > 0 else None
-                next_l = layout_sequence[i + 1] if i + 1 < n else None
-                options = [l for l in range(6) if l not in (prev_l, next_l)] or list(range(6))
-                layout_sequence[i] = random.choice(options)
-
-        images = []
-        raw_sources = []
-        for i, s in enumerate(slides_data):
-            if charts[i] or layout_sequence[i] in (6, 7, 8):
-                # Раскладкам "карточки" (6), "нумерованные шаги" (7) и "бейджи" (8) фото не
-                # нужно вовсе - их код отрисовки его никогда не использует. Раньше сюда всё
-                # равно генерировалось (или забирало из очереди личное фото пользователя, если
-                # он его прислал) и просто отбрасывалось - слайд выходил наполовину пустым, а
-                # платная генерация или единственное присланное пользователем фото пропадали
-                # впустую. Не тратим на эти раскладки ни то, ни другое - пусть достанется
-                # слайду, который реально его покажет.
-                images.append(None)
-                continue
-            own = user_photos.pop(0) if user_photos else None
-            if own:
-                user_photo_originals.append(own)
-                src, ok = (await run_heavy(prepare_user_photo, own, colors, user_photos_luminance)), True
-            else:
-                src = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}.png"
-                prompt = f"{s.get('image_prompt') or s.get('title')}, {colors['photo']}, unique composition"
-                ok = await generate_image(prompt, src)
-            if ok:
-                raw_sources.append(src)
-                wide = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}_w.png"
-                tall = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}_t.png"
-                # Отдельный вариант обрезки под панорамную полосу (layout 1 и 4, фото сверху/снизу
-                # на всю ширину, высота всего 4.55" при ширине 13.333" - пропорции 2.93:1, а НЕ 16:9).
-                # Раньше туда вставлялось wide-фото (16:9, готовилось под 1920x1080), и PowerPoint
-                # просто растягивал его под чужие пропорции - искажение доходило до ~39%, лица и
-                # предметы визуально "расплющивало". Теперь готовим кадр сразу под нужное соотношение.
-                banner = f"/tmp/{uid}_{i}_{random.randint(1000, 9999)}_b.png"
-                (await run_heavy(cover, src, wide, 1920, 1080))
-                (await run_heavy(cover, src, tall, 1260, 1500))
-                (await run_heavy(cover, src, banner, 1920, 655))
-                images.append((wide, tall, banner))
-            else:
-                images.append(None)
-
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
-        slide_background(slide, dark_colors)
-        cover_title = content.get("title", "Презентация")
-        if cover_panel_img:
-            photo_x = 0 if cover_split_side == "left" else 6.933
-            panel_x = 6.933 if cover_split_side == "left" else 0
-            slide.shapes.add_picture(cover_panel_img, Inches(photo_x), Inches(0), width=Inches(6.4), height=Inches(7.5))
-            rect(slide, panel_x, 0, 6.4, 7.5, dark_colors["bg"])
-            txt(slide, panel_x + 0.5, 2.6, 5.4, 2.4, cover_title, 40, dark_colors["ink"], True, font_name=dark_colors["heading_font"])
-            # Раньше акцентная линия и номер страницы стояли на фиксированной высоте,
-            # рассчитанной на заголовок в одну строку - у длинного заголовка (3+ строки
-            # при 40pt в колонке 5.4") текст мог утыкаться в линию/номер без зазора (см.
-            # тот же баг ниже, в band-варианте обложки, где это реально произошло). Сдвигаем
-            # обе отметки вниз пропорционально числу реальных строк заголовка.
-            title_lines = _estimate_wrapped_lines(cover_title, 40, 5.4)
-            extra = max(0, title_lines - 2) * 0.5
-            rect(slide, panel_x + 0.5, min(4.9 + extra, 6.0), 0.85, 0.05, safe_line(dark_colors))
-            txt(slide, panel_x + 0.5, min(6.6 + extra, 6.9), 5.4, 0.4, f"01  /  {n + 1:02}", 13, dark_colors["mute"])
-        else:
-            if cover_img:
-                slide.shapes.add_picture(cover_img, Inches(0), Inches(0), width=Inches(13.333), height=Inches(7.5))
-                rect(slide, 0, 4.55, 13.333, 2.95, dark_colors["bg"])
-            txt(slide, 0.7, 4.85, 12, 1.75, cover_title, 48, dark_colors["ink"], True, font_name=dark_colors["heading_font"])
-            # Заголовок в 1 строку укладывался в высоту плашки (1.75") с большим запасом,
-            # но у двустрочного (частый случай - см. "Акулы: вопросы, которые остаются без
-            # ответа") реальная высота текста почти равна всей плашке, а номер страницы
-            # стоял ровно на границе плашки (6.6") без зазора - вторая строка утыкалась
-            # прямо в "01 / N". Сдвигаем номер страницы вниз на высоту лишних строк.
-            title_lines = _estimate_wrapped_lines(cover_title, 48, 12)
-            page_num_top = min(6.6 + max(0, title_lines - 1) * 0.55, 7.05)
-            txt(slide, 0.7, page_num_top, 12, 0.4, f"01  /  {n + 1:02}", 13, dark_colors["mute"])
-
-        for idx, s in enumerate(slides_data):
+            visual_slides.append(item)
+        assets, image_warnings = await prepare_images(
+            content["title"], visual_slides, list(data.get("user_photos") or []),
+            data.get("pres_photo_captions") or {}, visual_tmp.name,
+            generate_image, ask_grok_vision, extract_json,
+        )
+        # Verify geometry before the expensive file delivery / billing stage.
+        for index, (item, asset) in enumerate(zip(visual_slides, assets)):
             slide = prs.slides.add_slide(prs.slide_layouts[6])
-            # Заключительный слайд - тёмный (см. sandwich_colors выше), остальные - светлые.
-            sc = dark_colors if idx == n - 1 else light_colors
-            slide_background(slide, sc)
-            layout = layout_sequence[idx]
-            img = images[idx] if idx < len(images) else None
-            chart_data = charts[idx] if idx < len(charts) else None
-            if layout == 0:
-                if chart_data:
-                    add_chart(slide, 0.5, 0.6, 5.4, 6.3, chart_data, sc)
-                elif img:
-                    slide.shapes.add_picture(img[1], Inches(0), Inches(0), width=Inches(6.4), height=Inches(7.5))
-                txt(slide, 7.05, 1.5, 5.5, 1.6, s.get("title", ""), 30, sc["ink"], True, font_name=sc["heading_font"])
-                # Раньше здесь была тонкая декоративная полоска-акцент под заголовком -
-                # убрана: это как раз тот самый штамп "сделано нейросетью", вместо неё
-                # просто оставлен воздух (см. правило "NEVER use accent lines" в гайде по слайдам).
-                box = slide.shapes.add_textbox(Inches(7.05), Inches(3.5), Inches(5.5), Inches(3.2))
-                tf = box.text_frame
-                tf.word_wrap = True
-                fill_slide_text(tf, slide_paragraphs(s.get("content"), 2), size=16, color=sc["mid"])
-                txt(slide, 7.05, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
-            elif layout == 1:
-                if chart_data:
-                    add_chart(slide, 0.7, 0.35, 11.9, 4.0, chart_data, sc)
-                elif img:
-                    slide.shapes.add_picture(img[2], Inches(0), Inches(0), width=Inches(13.333), height=Inches(4.55))
-                txt(slide, 0.7, 4.85, 12, 1.0, s.get("title", ""), 28, sc["ink"], True, font_name=sc["heading_font"])
-                box = slide.shapes.add_textbox(Inches(0.7), Inches(5.85), Inches(12), Inches(1.2))
-                tf = box.text_frame
-                tf.word_wrap = True
-                p = tf.paragraphs[0]
-                p.text = " ".join((s.get("content") or "").split())
-                p.font.size = Pt(15)
-                p.font.color.rgb = RGBColor(*sc["mid"])
-                p.font.name = "Calibri"
-                # Раньше здесь не было номера страницы вовсе - раскладка "фото сверху" была
-                # единственной (вместе с зеркальной №4 ниже), где счётчик "N / N" пропадал
-                # из готовой презентации.
-                txt(slide, 0.7, 7.1, 12, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
-            elif layout == 2:
-                # Заголовок уже НЕ должен доходить до x=8.7 (где начинается фото/график
-                # справа) - раньше ширина плашки (8.2") залезала на 0.2" в зону картинки,
-                # и длинные заголовки визуально обрезались, т.к. фото рисуется поверх текста.
-                txt(slide, 0.7, 1.3, 7.6, 2.2, s.get("title", ""), 36, sc["ink"], True, font_name=sc["heading_font"])
-                # Декоративная полоска-акцент под заголовком убрана (см. layout 0 выше).
-                box = slide.shapes.add_textbox(Inches(0.7), Inches(3.9), Inches(7.4), Inches(2.6))
-                tf = box.text_frame
-                tf.word_wrap = True
-                p = tf.paragraphs[0]
-                p.text = " ".join((s.get("content") or "").split())
-                p.font.size = Pt(16)
-                p.font.color.rgb = RGBColor(*sc["mid"])
-                p.font.name = "Calibri"
-                if chart_data:
-                    add_chart(slide, 8.5, 1.3, 4.6, 4.7, chart_data, sc)
-                elif img:
-                    slide.shapes.add_picture(img[1], Inches(8.7), Inches(1.3), width=Inches(3.9), height=Inches(4.7))
-                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
-            elif layout == 3:
-                # Зеркало layout 0: фото - правая половина кадра, текст - слева.
-                if chart_data:
-                    add_chart(slide, 0.7, 0.6, 5.4, 6.3, chart_data, sc)
-                elif img:
-                    slide.shapes.add_picture(img[1], Inches(6.933), Inches(0), width=Inches(6.4), height=Inches(7.5))
-                txt(slide, 0.7, 1.5, 5.5, 1.6, s.get("title", ""), 30, sc["ink"], True, font_name=sc["heading_font"])
-                # Декоративная полоска-акцент под заголовком убрана (см. layout 0 выше).
-                box = slide.shapes.add_textbox(Inches(0.7), Inches(3.5), Inches(5.5), Inches(3.2))
-                tf = box.text_frame
-                tf.word_wrap = True
-                fill_slide_text(tf, slide_paragraphs(s.get("content"), 2), size=16, color=sc["mid"])
-                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
-            elif layout == 4:
-                # Зеркало layout 1: фото - нижняя полоса кадра, текст - сверху.
-                txt(slide, 0.7, 0.4, 12, 1.0, s.get("title", ""), 28, sc["ink"], True, font_name=sc["heading_font"])
-                box = slide.shapes.add_textbox(Inches(0.7), Inches(1.4), Inches(12), Inches(1.2))
-                tf = box.text_frame
-                tf.word_wrap = True
-                p = tf.paragraphs[0]
-                p.text = " ".join((s.get("content") or "").split())
-                p.font.size = Pt(15)
-                p.font.color.rgb = RGBColor(*sc["mid"])
-                p.font.name = "Calibri"
-                if chart_data:
-                    add_chart(slide, 0.7, 3.15, 11.9, 4.0, chart_data, sc)
-                elif img:
-                    # Высота полосы уменьшена с 4.55 до 4.15 - раньше фото доходило вплотную
-                    # до нижнего края слайда (2.95 + 4.55 = 7.5"), и разместить под ним номер
-                    # страницы было некуда (пришлось бы рисовать поверх фото). Теперь внизу
-                    # остаётся свободная полоса фона под счётчик, как и в остальных раскладках.
-                    slide.shapes.add_picture(img[2], Inches(0), Inches(2.95), width=Inches(13.333), height=Inches(4.15))
-                # Раньше здесь не было номера страницы вовсе - см. комментарий у layout 1 выше,
-                # та же самая пропажа счётчика была и в его зеркальной раскладке.
-                txt(slide, 0.7, 7.15, 12, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
-            elif layout == 5:
-                # Зеркало layout 2: фото - слева мелко, текст - справа.
-                txt(slide, 5.2, 1.3, 7.4, 2.2, s.get("title", ""), 36, sc["ink"], True, font_name=sc["heading_font"])
-                # Декоративная полоска-акцент под заголовком убрана (см. layout 0 выше).
-                box = slide.shapes.add_textbox(Inches(5.2), Inches(3.9), Inches(7.4), Inches(2.6))
-                tf = box.text_frame
-                tf.word_wrap = True
-                p = tf.paragraphs[0]
-                p.text = " ".join((s.get("content") or "").split())
-                p.font.size = Pt(16)
-                p.font.color.rgb = RGBColor(*sc["mid"])
-                p.font.name = "Calibri"
-                if chart_data:
-                    add_chart(slide, 0.7, 1.3, 4.6, 4.7, chart_data, sc)
-                elif img:
-                    slide.shapes.add_picture(img[1], Inches(0.7), Inches(1.3), width=Inches(3.9), height=Inches(4.7))
-                txt(slide, 5.2, 6.95, 7.4, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
-            elif layout == 6:
-                # Раскладка "карточки" - без фото: заголовок сверху, ниже -
-                # две текстовые плашки рядом с мягкой заливкой под тему. Используется только
-                # для слайдов, где content уже разбит на 2 абзаца (см. фильтр при выборе
-                # раскладки выше) - каждый абзац идёт в свою карточку.
-                txt(slide, 0.7, 0.5, 11.9, 1.0, s.get("title", ""), 32, sc["ink"], True, font_name=sc["heading_font"])
-                # Декоративная полоска-акцент под заголовком убрана (см. layout 0 выше).
-                blocks = slide_paragraphs(s.get("content"), 2)
-                # card_h был 4.65" - рассчитан явно не под реальный объём текста: промпт
-                # просит 2-4 предложения на абзац (это максимум ~7-8 строк в узкой колонке
-                # ~5" шириной), а карточка была высотой почти во весь слайд. В деле это
-                # выглядело как две пустые серые плашки с текстом только в самом верху (см.
-                # реальный сгенерированный слайд "Нейлон вытеснил шёлк" - тот же баг, что
-                # был у layout 8 со старым row_h=2.3, см. комментарий там). 3.0" с запасом
-                # покрывает даже максимум в 4 длинных предложения и не оставляет чугунную
-                # пустоту под коротким текстом.
-                card_w, gap, card_top, card_h = 5.85, 0.3, 2.0, 3.0
-                card_fill = card_fill_for(sc)
-                # Текст внутри карточки красим от контраста с card_fill, а не sc["mid"] -
-                # см. докстринг text_on_fill(): sc["mid"] посчитан под фон слайда, а не
-                # под саму плашку, чьи цвет и яркость зависят от темы (card_fill_for).
-                card_text_color = text_on_fill(sc, card_fill)
-                for i, block in enumerate(blocks):
-                    card_l = 0.7 + i * (card_w + gap)
-                    rect(slide, card_l, card_top, card_w, card_h, card_fill, rounded=True, radius=0.05)
-                    box = slide.shapes.add_textbox(Inches(card_l + 0.35), Inches(card_top + 0.3),
-                                                    Inches(card_w - 0.7), Inches(card_h - 0.6))
-                    tf = box.text_frame
-                    tf.word_wrap = True
-                    p = tf.paragraphs[0]
-                    p.text = block
-                    p.font.size = Pt(16)
-                    p.font.color.rgb = RGBColor(*card_text_color)
-                    p.font.name = "Calibri"
-                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
-            elif layout == 7:
-                # Раскладка "нумерованные шаги" - вертикальный список из 2-3 пунктов, у
-                # каждого свой номер в скруглённом бейдже слева и тонкая соединительная
-                # линия вниз к следующему номеру (как в референсных презентациях этого
-                # стиля - зрительно куда динамичнее плоского списка).
-                txt(slide, 0.7, 0.5, 11.9, 1.0, s.get("title", ""), 32, sc["ink"], True, font_name=sc["heading_font"])
-                blocks = slide_paragraphs(s.get("content"), 3)
-                # step_h раньше был жёстко 1.55" вне зависимости от того, сколько пунктов
-                # реально пришло (2 или 3) - при 2 пунктах (это происходит чаще всего, см.
-                # common_rules у Grok: "ровно 2 абзаца") весь список утрамбовывался в верхнюю
-                # треть слайда, а нижние ~55% высоты оставались голым полем - слайд выглядел
-                # перекошенным вверх. Растягиваем шаг на всё доступное место между заголовком
-                # и футером, а не только на то, что реально занимает текст - тогда 2 пункта
-                # смотрятся как осознанная раскладка, а не недоделанная страница с 3 пунктами.
-                step_top, footer_top, badge = 2.1, 6.7, 0.55
-                step_h = (footer_top - step_top) / max(len(blocks), 1)
-                badge_l = 0.7
-                line_l = badge_l + badge / 2 - 0.012
-                if len(blocks) > 1:
-                    rect(slide, line_l, step_top + badge, 0.024, step_h * (len(blocks) - 1), sc["mute"])
-                # Сама заливка бейджа: sc["line"] на тёмном "сэндвич"-варианте темы может
-                # совпасть с sc["bg"] (см. docstring safe_line() и card_fill_for() выше) -
-                # тогда квадрат-плашка сливается с фоном слайда. safe_line() тут я в прошлый
-                # раз забыл применить, хотя цифру внутри уже подстраховывал отдельно.
-                badge_fill = safe_line(sc)
-                # Цифра в бейдже раньше красилась по яркости sc["line"] НАПРЯМУЮ - это было
-                # верно, пока сама плашка красилась в sc["line"]. Теперь плашка красится в
-                # safe_line(sc), который на тёмном варианте темы может оказаться СВЕТЛЫМ (а не
-                # тёмным, как исходный sc["line"]) - если считать контраст цифры по-старому от
-                # sc["line"], можно получить белую цифру на светлой плашке (тот же класс бага,
-                # просто с другой стороны). Считаем контраст от ФАКТИЧЕСКОГО цвета плашки.
-                badge_num_color = (255, 255, 255) if _relative_luminance(badge_fill) < 0.5 else (20, 20, 20)
-                for i, block in enumerate(blocks):
-                    row_top = step_top + i * step_h
-                    # Раньше цифра была ОТДЕЛЬНЫМ textbox, положенным поверх плашки день в день
-                    # в тех же координатах - две независимые фигуры, которые должны отрисоваться
-                    # обе и ровно друг на друге. Предпросмотр документов в Telegram (в отличие от
-                    # PowerPoint/Google Slides/LibreOffice) на части файлов рисовал только нижний
-                    # слой - плашка оставалась пустой, без номера. Пишем цифру прямо в text_frame
-                    # ТОЙ ЖЕ фигуры (rect() возвращает автофигуру - у неё уже есть свой text_frame),
-                    # то есть это теперь одна фигура, а не две наложенные - рендерить нечего "поверх".
-                    badge_shape = rect(slide, badge_l, row_top, badge, badge, badge_fill, rounded=True, radius=0.28)
-                    ntf = badge_shape.text_frame
-                    ntf.word_wrap = False
-                    ntf.margin_left = ntf.margin_right = ntf.margin_top = ntf.margin_bottom = 0
-                    np_ = ntf.paragraphs[0]
-                    np_.text = str(i + 1)
-                    np_.alignment = PP_ALIGN.CENTER
-                    np_.font.size = Pt(20)
-                    np_.font.bold = True
-                    np_.font.color.rgb = RGBColor(*badge_num_color)
-                    np_.font.name = sc["heading_font"]
-                    ntf.vertical_anchor = MSO_ANCHOR.MIDDLE
-                    box = slide.shapes.add_textbox(Inches(badge_l + badge + 0.4), Inches(row_top - 0.08),
-                                                    Inches(10.9 - badge), Inches(step_h))
-                    tf = box.text_frame
-                    tf.word_wrap = True
-                    p = tf.paragraphs[0]
-                    p.text = block
-                    p.font.size = Pt(15)
-                    p.font.color.rgb = RGBColor(*sc["mid"])
-                    p.font.name = "Calibri"
-                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
-            else:
-                # layout 8 - раскладка "бейджи": заголовок сверху, ниже - список из 2
-                # пунктов, у каждого свой цветной квадрат-маркер слева от текста (заменяет
-                # иконку - без внешней библиотеки глифов, но визуально держит ту же роль:
-                # разбивает стену текста на читаемые смысловые блоки).
-                txt(slide, 0.7, 0.5, 11.9, 1.0, s.get("title", ""), 32, sc["ink"], True, font_name=sc["heading_font"])
-                blocks = slide_paragraphs(s.get("content"), 2)
-                # row_h был жёстко 1.4" - при обычных 2-3-строчных абзацах этого хватало
-                # впритык под сам текст, но здесь ровно 2 пункта (slide_paragraphs(...,2)) -
-                # то есть список ВСЕГДА заканчивался на 2.8" ниже верха, а нижние ~50% слайда
-                # оставались пустыми (тот же перекос, что чинил выше в layout 7). Тянем строки
-                # на всё место между заголовком и футером - при 2 пунктах это ощутимо больше
-                # 1.4", но текст внутри всё равно верхним краем, лишний воздух уходит под него,
-                # а не рвёт раскладку.
-                row_top, footer_top, badge = 2.0, 6.7, 0.5
-                row_h = (footer_top - row_top) / max(len(blocks), 1)
-                # Маркер раньше собирался из ДВУХ наложенных фигур - светлый квадрат-подложка
-                # и поверх него, ровно по центру, маленькая цветная точка (сам "значок"). Тот же
-                # класс проблемы, что чинили выше в layout 7: предпросмотр документов в Telegram
-                # на части файлов рисовал только нижнюю фигуру, и точка (то есть весь смысл
-                # маркера) пропадала. Один сплошной акцентный квадрат вместо пары "подложка+точка"
-                # решает то же визуально (разбивает текст на пункты) одной фигурой, без риска,
-                # что верхний слой не отрисуется - и заодно контрастнее на фоне слайда.
-                badge_fill = safe_line(sc)
-                for i, block in enumerate(blocks):
-                    top = row_top + i * row_h
-                    rect(slide, 0.7, top, badge, badge, badge_fill, rounded=True, radius=0.3)
-                    box = slide.shapes.add_textbox(Inches(0.7 + badge + 0.4), Inches(top - 0.1), Inches(11.0 - badge), Inches(row_h))
-                    tf = box.text_frame
-                    tf.word_wrap = True
-                    p = tf.paragraphs[0]
-                    p.text = block
-                    p.font.size = Pt(16)
-                    p.font.color.rgb = RGBColor(*sc["mid"])
-                    p.font.name = "Calibri"
-                txt(slide, 0.7, 6.95, 5.5, 0.3, f"{idx + 2:02}  /  {n + 1:02}", 12, sc["mute"])
+            sc = dark_colors if index in (0, planned_slides - 1) else light_colors
+            await run_heavy(render_slide, slide, item, asset, sc, index + 1, planned_slides,
+                            cgl or lang, slide_background, add_chart)
 
         if len(prs.slides) != planned_slides:
             raise PresentationValidationError("Final slide count differs from confirmed plan")
@@ -6046,7 +5677,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         spend_credits(uid, "presentation", amount=presentation_cost(planned_slides))
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
         note_success(uid)
-        for p in (cover_src, cover_own, cover_img, cover_panel_img, pptx_path, pdf_path, *raw_sources, *user_photo_originals, *[f for pair in images if pair for f in pair]):
+        for p in (pptx_path, pdf_path, *(data.get("user_photos") or [])):
             try:
                 if p and os.path.exists(p):
                     os.remove(p)
@@ -6055,7 +5686,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         chat_id = m.chat.id if getattr(m, "chat", None) else uid
         await bot.send_message(
             chat_id,
-            tr("msg_pptx_ready", lang) + "\n\n" + await signature_line(lang),
+            tr("msg_pptx_ready", lang) + visual_quality_notice(image_warnings, lang) + "\n\n" + await signature_line(lang),
             reply_markup=main_kb(lang, uid=uid)
         )
         await state.clear()
@@ -6067,6 +5698,8 @@ async def _build_presentation(m: Message, state: FSMContext):
         except Exception as e2:
             print("Не смог отправить ошибку сборки:", repr(e2))
     finally:
+        if visual_tmp is not None:
+            visual_tmp.cleanup()
         finish_job(uid)
 
 

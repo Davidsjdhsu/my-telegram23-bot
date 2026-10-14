@@ -113,7 +113,7 @@ def format_plan(plan, lang='ru'):
 def content_prompt(data, plan, language_instruction):
     count = len(plan['slides']) - 1
     source = json.dumps({k: data.get(k) for k in ('topic', 'user_text', 'extra')}, ensure_ascii=False)
-    chart_rule = ('График допускается только по числам из исходного текста пользователя. '
+    chart_rule = ('График допускается только по числам из исходного текста пользователя. На слайде с графиком текст до 260 символов. '
                   'Не больше двух графиков. Формат chart: {"chart_type":"bar|line|pie", '
                   '"title":"...","categories":["..."],"series":[{"name":"...","values":[1]}]}. '
                   'Не придумывай чисел, имён источников или ссылок.' if data.get('mode') == 'user'
@@ -124,14 +124,20 @@ def content_prompt(data, plan, language_instruction):
 Обложка создаётся отдельно. В slides верни РОВНО {count} содержательных слайдов,
 с номерами 2–{count+1}. НЕ включай обложку в этот массив. title презентации и заголовки
 бери из плана. На каждый слайд одна главная мысль, обычно 2–4 коротких предложения,
-до 65 слов. Можно один или два коротких абзаца: не растягивай текст ради шаблона.
+до 50 слов и 480 символов. Раскрывай конкретную мысль плана: объясни механизм, роль или приведи короткий пример без вымышленных фактов. Не повторяй заголовок общими словами. Можно один или два коротких абзаца: не растягивай текст ради шаблона.
 Сохраняй аудиторию, ограничения и обязательные элементы запроса. Проверяй определения,
 причинные связи и единицы. Не выдавай частный случай за общее правило. Если точная цифра
 не нужна или не подтверждена материалом, обойдись без неё. Не выдумывай источники.
-image_prompt — подходящая иллюстрация к конкретному содержанию, без надписей и логотипов.
+image_prompt — конкретная физическая сцена или предмет, непосредственно объясняющий смысл
+этого слайда, на английском. Для участников — люди за соответствующей работой, для ресурсов —
+сами ресурсы или оборудование, для риска — реальная ситуация, а не знак с восклицанием.
+Никаких текстов, букв, цифр, документов, экранов, графиков, диаграмм, инфографики, логотипов,
+денежных символов или случайных интерьеров. Схемы и данные нельзя заменять псевдосхемами
+в картинках. Изображения слайдов должны различаться, но иметь единый естественный стиль.
+cover_image_prompt — отдельная сцена по теме всей презентации на английском с теми же правилами.
 Не изображай вымышленный аппарат как конкретный исторический объект.
 {chart_rule}
-Только JSON: {{"title":"...","slides":[{{"number":2,"title":"...",
+Только JSON: {{"title":"...","cover_image_prompt":"...","slides":[{{"number":2,"title":"...",
 "content":"короткий текст","image_prompt":"...","chart":null}}]}}.
 Заполни все {count} элементов.{language_instruction}'''
 
@@ -142,11 +148,15 @@ def validate_content(value, plan):
     expected = plan['slides'][1:]
     if len(value['slides']) != len(expected):
         raise PresentationValidationError(f'Expected {len(expected)} body slides; cover is separate')
-    result = {'title': plan['title'], 'slides': []}
+    result = {'title': plan['title'], 'cover_image_prompt': _text(value.get('cover_image_prompt') or plan['title'], 1000, 'cover image prompt'), 'slides': []}
     for slide, item in zip(value['slides'], expected):
         if not isinstance(slide, dict) or type(slide.get('number')) is not int or slide['number'] != item['number']:
             raise PresentationValidationError('Body slide numbers do not match plan')
-        body = _text(slide.get('content'), 1200, 'content')
+        body = _text(slide.get('content'), 480, 'content')
+        # CJK glyphs take more horizontal space than Cyrillic / Latin letters.
+        visual_length = sum(1 if ord(c) > 0x2e7f else .56 for c in body)
+        if visual_length > (160 if slide.get('chart') else 270) or (slide.get('chart') and len(body) > 260):
+            raise PresentationValidationError('Shorten slide content for readable text next to the visual')
         blocks = [b.strip() for b in re.split(r'\n+', body) if b.strip()]
         # Existing layouts accept at most two blocks. Keep all text instead of truncating.
         body = '\n\n'.join([blocks[0], ' '.join(blocks[1:])]) if len(blocks) > 1 else blocks[0]
