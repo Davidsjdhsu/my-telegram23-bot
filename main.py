@@ -5666,9 +5666,11 @@ async def _build_presentation(m: Message, state: FSMContext):
                         # Fit structured blocks before spending time on image generation.
                         build_scene(content_slide, None, idx, planned_slides, cgl or lang, theme_name)
                 break
-            except (ValueError, TypeError, KeyError, AttributeError):
+            except (ValueError, TypeError, KeyError, AttributeError) as error:
                 if attempt:
                     raise PresentationValidationError("Content does not match plan") from None
+                if isinstance(error, PresentationValidationError):
+                    prompt += "\nИсправь ошибку проверки: " + str(error)
                 prompt += "\nПредыдущий ответ не прошёл проверку. Верни полный JSON: ровно указанное число содержательных слайдов, без обложки, с номерами из плана, непустым текстом до 480 символов на слайд и описанием конкретной сцены для каждой картинки. Если выбран дизайнерский стиль, у каждого слайда обязателен designer. Сократи заголовки и тексты блоков, чтобы они помещались в выбранном макете."
 
         prs = Presentation()

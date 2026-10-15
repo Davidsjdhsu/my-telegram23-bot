@@ -15,7 +15,7 @@ class ProfileTests(unittest.TestCase):
     def test_photo_shapes_follow_selected_family(self):
         slides=[{'_designer_design':{'family':'editorial'}} for _ in range(5)]
         pd.plan_designer_images(slides,'designer_soft')
-        self.assertEqual([s['_designer_aspect_ratio'] for s in slides],['3:4','3:4','16:9','3:4','3:4'])
+        self.assertEqual([s['_designer_aspect_ratio'] for s in slides],['3:4','3:4','16:9','3:4','16:9'])
 
     def test_long_cover_keeps_subtitle_in_every_family_and_language(self):
         with tempfile.TemporaryDirectory() as td:

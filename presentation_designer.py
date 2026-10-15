@@ -46,9 +46,10 @@ statement используй не более одного раза. process — 
 действий или этапов; для перечня болезней, свойств или мер профилактики используй sections.
 Чередуй фото, схемы и сравнения по смыслу; не делай все слайды одинаковыми.
 Если план содержит сопоставление, используй comparison, для последовательности действий — process.
-Для презентации от 6 слайдов выбери хотя бы один подходящий содержанию структурный макет
-(comparison/sections/process), сохраняя фото минимум на половине слайдов. Не выдумывай
-этапы или противопоставления ради оформления. Данные пользователя сохраняй. При длинном материале выбирай auto. Все поля и
+Структурный макет нужен только для настоящего сравнения, последовательности или объяснения
+нескольких самостоятельных разделов. Для кухни, интерьеров, отдыха и других визуальных тем
+предпочитай photo с подходящей сценой. Не превращай два коротких пункта в пустой слайд.
+Не выдумывай этапы или противопоставления ради оформления. Данные пользователя сохраняй. При длинном материале выбирай auto. Все поля и
 количество слайдов из основного задания остаются обязательными.'''
 
 
@@ -60,11 +61,17 @@ def plan_designer_images(slides, style):
         family = item.get('_designer_design', {}).get('family')
         if family in PROFILES:
             portrait = (i == 0 and family != 'technology') or (i > 0 and (
-                family == 'editorial' and (i+1)%3 in (1,2) or
+                family == 'editorial' and (i+1)%6 in (1,2,4) or
                 family in ('technology','business') and (i+1)%2 == 0))
             item['_designer_aspect_ratio'] = '3:4' if portrait else '16:9'
         item['_skip_ai_image'] = bool(item.get('chart')) or (i > 0 and item.get('designer', {}).get('layout') in (
             'process', 'comparison', 'sections', 'statement'))
+        # Sparse section lists gain a meaningful photo; comparisons and processes stay native.
+        blocks = item.get('designer', {}).get('blocks', [])
+        if (i > 0 and family == 'editorial' and not item.get('chart')
+                and item.get('designer', {}).get('layout') == 'sections' and len(blocks) == 2
+                and sum(len(str(b.get('heading',''))) + len(str(b.get('text',''))) for b in blocks) < 180):
+            item['_skip_ai_image'] = False
     target = min(6, math.ceil(len(slides)/2))
     current = sum(not s['_skip_ai_image'] for s in slides)
     # Choose alternate positions first; preserve all structured text when rendered with a photo.
@@ -387,7 +394,8 @@ def build_profile_scene(item, asset, number, total, lang, style):
         if lang=='ar':node['rtl']=True
         nodes.append(node)
     def heading(box=(64,50,1152,190),size=72,minimum=40):
-        txt(title,box,'title',size,minimum,c['ink'])
+        color = (c['accent'] if number == 1 else c['secondary_ink']) if family == 'editorial' else c['ink']
+        txt(title,box,'title',size,minimum,color)
     def photo(box, full=False):
         ratio=asset['width']/asset['height']; target=box[2]/box[3]
         crop=asset.get('origin')!='user' and (full or min(ratio/target,target/ratio)>=.72)
@@ -429,11 +437,19 @@ def build_profile_scene(item, asset, number, total, lang, style):
             # Narrow text is only used when it fits; complete source copy is retained.
             if len(body)>320 or len(title)>90:
                 fallback_photo()
-            elif family=='editorial' and number%3==2:
+            elif family=='editorial' and number%6==5:
+                heading((64,54,410,350),66,38)
+                photo((520,54,696,392))
+                txt(body,(64,500,1152,145),size=34,minimum=26)
+            elif family=='editorial' and number%6==0:
+                photo((64,48,720,405))
+                heading((832,54,384,390),62,38)
+                txt(body,(64,510,1152,140),size=32,minimum=24)
+            elif family=='editorial' and number%6==2:
                 heading((64,62,600,194),68,40)
                 txt(body,(64,316,590,304),size=32,minimum=26)
                 photo((730,54,486,580))
-            elif (family=='editorial' and number%3==1) or (family=='technology' and number%2==0):
+            elif (family=='editorial' and number%6 in (1,4)) or (family=='technology' and number%2==0):
                 photo((64,54,536,580))
                 heading((662,66,554,196),62,40)
                 txt(body,(662,316,554,306),size=31,minimum=26)

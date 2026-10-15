@@ -38,6 +38,9 @@ async def main():
     if '--coffee' in sys.argv:
         data.update(topic='Кофейня будущего: от зерна до чашки',
             extra='Для широкой аудитории. Зерно, обжарка, бариста, заваривание, роботы и сокращение отходов. Добавь схему пути зерна до чашки и сравнение человека с автоматикой. Тёмный фон, кремовые и медные акценты, мягкие скругления. Будущие решения обозначай как концепции, без вымышленных цифр.')
+    if '--tuscany' in sys.argv:
+        data.update(topic='Бутик-отель в Тоскане: отдых среди виноградников',
+            extra='Для людей, выбирающих отпуск. Интерьеры, номера, местная кухня, прогулки и отдых. Журнальный стиль: светлый кремовый фон, оливковые и терракотовые акценты, мягкие скругления. Короткий текст. Это концепция вымышленного бутик-отеля, без реальных цен, отзывов и наград.')
     async with AsyncOpenAI(api_key=os.environ['XAI_API_KEY'], base_url='https://api.x.ai/v1', max_retries=0) as client:
         ns = adapters(client)
         plan = await ns['_create_presentation_plan'](data, 'ru')
@@ -56,8 +59,9 @@ async def main():
                     item['_designer_design'] = plan['design']
                     pd.build_scene(item, None, i, 8, 'ru', 'designer_soft')
                 break
-            except (ValueError, TypeError, KeyError, AttributeError):
+            except (ValueError, TypeError, KeyError, AttributeError) as error:
                 if attempt: raise
+                if isinstance(error, ps.PresentationValidationError): prompt += "\n" + str(error)
                 prompt += '\nВерни исправленный полный JSON: заголовки из плана, короткие тексты, обязательный designer, блоки должны помещаться в макеты.'
         for item in content['slides']:
             print('QUALITY_SLIDE ' + json.dumps({'title': item['title'], 'content': item['content'], 'layout': item['designer']['layout'], 'image': item['image_prompt']}, ensure_ascii=False), flush=True)

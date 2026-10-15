@@ -54,6 +54,8 @@ def choose_design(data):
         background = 'dark' if re.match(r'темн|черн|dark|black',matches[-1][1]) else 'light'
     colors = []
     color_words = {'медн': '#C48356', 'кремов': '#EAD5B8', 'бирюзов': '#42BBC1',
+        'оливков': '#707A41', 'терракот': '#B65E43', 'бежев': '#D8C3A5',
+        'olive': '#707A41', 'terracotta': '#B65E43', 'beige': '#D8C3A5',
         'син': '#3B64CF', 'зелен': '#43875F', 'оранжев': '#D77C39', 'фиолетов': '#9670CF',
         'copper':'#C48356', 'cream':'#EAD5B8', 'teal':'#42BBC1', 'blue':'#3B64CF', 'green':'#43875F'}
     # Read colors only next to design vocabulary, not from subjects like blue whales.
@@ -99,5 +101,6 @@ def resolved_profile(design):
     p['ink']=p['secondary'] if dark and design['family']=='editorial' else '#F3F6F8' if dark else p['ink']
     p['body']='#DCE4E5' if dark else p['body']
     p['accent']=readable_color(design['accent'],p['bg'])
+    p['secondary_ink']=readable_color(design['secondary'],p['bg'])
     p['secondary']=design['secondary'];p['muted']=readable_color('#7D827D',p['bg'])
     return p
