@@ -15,7 +15,7 @@ from presentation_visuals import AI_LABEL, fit_rect, set_slide_notes
 
 STYLES = {'designer_soft', 'designer_strict'}
 FONT = 'Arial'
-LAYOUTS = {'auto', 'photo', 'statement', 'process', 'comparison', 'sections'}
+LAYOUTS = {'auto', 'photo', 'statement', 'process', 'comparison', 'sections', 'conclusion'}
 
 
 class DesignerValidationError(ValueError):
@@ -33,10 +33,16 @@ def clean(value, limit, field, optional=False):
 def content_instruction():
     return '''Дизайнерское оформление: крупные заголовки, короткие смысловые блоки.
 Для каждого содержательного слайда добавь designer:
-{"layout":"auto|photo|statement|process|comparison|sections",
+{"layout":"auto|photo|statement|process|comparison|sections|conclusion",
 "blocks":[{"heading":"короткий подзаголовок","text":"текст"}]}.
 Для process нужно 3–4 последовательных шага, comparison ровно 2 стороны,
-sections 2–4 смысловых блока. Заголовок блока до 36 символов, текст до 120.
+sections 2–4 смысловых блока, conclusion 2–3 итоговых вывода.
+Для comparison добавь rows: [{"criterion":"критерий до 26 символов","left":"первая сторона до 75 символов","right":"вторая сторона до 75 символов"}].
+Ровно 3 строки, одинаковый критерий для обеих сторон в каждой строке. Два blocks задают названия сторон.
+Последний содержательный слайд всегда conclusion: 2–3 блока с полезным выводом,
+условием применения или ограничением. Текст каждого итогового блока — полное предложение с конкретной деталью, а не два-три общих слова.
+Не пересказывай предыдущий слайд и не добавляй новый факт.
+content должен передавать тот же смысл, что таблица или выводы, для текстовой копии. Заголовок блока до 36 символов, текст до 120.
 Вся сумма текстов и заголовков блоков до 440 символов. Для auto/photo/statement
 blocks=[]; тогда используется content. content обязателен и содержит тот же смысл,
 что блоки, для текстовой копии. Не добавляй фактов, процентов или чисел ради дизайна.
@@ -53,6 +59,18 @@ statement используй не более одного раза. process — 
 количество слайдов из основного задания остаются обязательными.'''
 
 
+
+def designer_copy(item):
+    """All visible evidence for the text companion, without summarizing tables away."""
+    design=validate_designer(item)
+    if design['layout']=='comparison' and design.get('rows'):
+        left,right=(b['heading'] for b in design['blocks'])
+        return '\n\n'.join(f"{r['criterion']}. {left}: {r['left']}. {right}: {r['right']}." for r in design['rows'])
+    if design['blocks']:
+        return '\n\n'.join(b['heading']+': '+b['text'] for b in design['blocks'])
+    return item.get('content') or ''
+
+
 def plan_designer_images(slides, style):
     """Keep true diagrams; promote supporting-photo layouts in a text-heavy plan."""
     for i, item in enumerate(slides):
@@ -65,7 +83,7 @@ def plan_designer_images(slides, style):
                 family in ('technology','business') and (i+1)%2 == 0))
             item['_designer_aspect_ratio'] = '3:4' if portrait else '16:9'
         item['_skip_ai_image'] = bool(item.get('chart')) or (i > 0 and item.get('designer', {}).get('layout') in (
-            'process', 'comparison', 'sections', 'statement'))
+            'process', 'comparison', 'sections', 'statement', 'conclusion'))
         # Sparse section lists gain a meaningful photo; comparisons and processes stay native.
         blocks = item.get('designer', {}).get('blocks', [])
         if (i > 0 and family == 'editorial' and not item.get('chart')
@@ -96,7 +114,7 @@ def validate_designer(item):
     blocks = raw.get('blocks', [])
     if not isinstance(blocks, list):
         raise DesignerValidationError('Blocks must be a list')
-    count = {'process': (3, 4), 'comparison': (2, 2), 'sections': (2, 4)}.get(layout, (0, 0))
+    count = {'process': (3, 4), 'comparison': (2, 2), 'sections': (2, 4), 'conclusion': (2, 3)}.get(layout, (0, 0))
     if not count[0] <= len(blocks) <= count[1]:
         raise DesignerValidationError('Layout and block count disagree')
     result = []
@@ -104,10 +122,17 @@ def validate_designer(item):
         if not isinstance(block, dict):
             raise DesignerValidationError('Invalid block')
         result.append({'heading': clean(block.get('heading'), 36, 'block heading'),
-                       'text': clean(block.get('text'), 120, 'block text')})
+                       'text': clean(block.get('text'), 120, 'block text', optional=layout=='comparison' and bool(raw.get('rows')))})
     if sum(len(b['heading']) + len(b['text']) for b in result) > 440:
         raise DesignerValidationError('Shorten blocks before rendering')
-    return {'layout': layout, 'blocks': result}
+    validated = {'layout': layout, 'blocks': result}
+    if layout == 'comparison' and 'rows' in raw:
+        rows=raw['rows']
+        if not isinstance(rows,list) or len(rows)!=3:raise DesignerValidationError('Comparison needs three shared criteria')
+        validated['rows']=[{key:clean(row.get(key),26 if key=='criterion' else 75,'comparison '+key)
+                            for key in ('criterion','left','right')} for row in rows if isinstance(row,dict)]
+        if len(validated['rows'])!=3:raise DesignerValidationError('Invalid comparison row')
+    return validated
 
 
 @lru_cache(maxsize=16)
@@ -377,10 +402,11 @@ def build_profile_scene(item, asset, number, total, lang, style):
     if not 1 <= number <= total: raise DesignerValidationError('Invalid slide number')
     if asset and (not Path(asset['path']).is_file() or min(asset['width'],asset['height'])<=0):
         raise DesignerValidationError('Invalid image asset')
-    if asset and blocks:
+    evidence = layout == 'conclusion' or (layout == 'comparison' and structured.get('rows'))
+    if asset and blocks and not evidence:
         body='\n\n'.join(b['heading']+'\n'+b['text'] for b in blocks)
         layout='photo'; blocks=[]
-    layout='cover' if number==1 else 'chart' if item.get('chart') else 'photo' if asset else layout
+    layout='cover' if number==1 else 'chart' if item.get('chart') else layout if evidence else 'photo' if asset else layout
     if layout=='photo' and not asset:layout='auto'
     scene={'background':c['bg'],'layout':layout,'family':family,'nodes':[],
            'notes':f'AlixDocBot. {style}. {family}\n'+(item.get('content') or item.get('point') or '')}
@@ -404,8 +430,8 @@ def build_profile_scene(item, asset, number, total, lang, style):
             'origin':asset.get('origin','ai'),'radius':radius if asset.get('origin')!='user' else 0,'crop':crop})
     def fallback_photo():
         nodes.clear();heading((64,48,1152,176),64,38)
-        txt(body,(64,250,700,405),size=32,minimum=24)
-        photo((810,250,406,390))
+        txt(body,(64,250,600,405),size=32,minimum=24)
+        photo((720,250,496,390))
     if layout=='cover':
         try:
             subtitle=clean(item.get('subtitle') or item.get('point') or body,180,'subtitle',optional=True)
@@ -482,6 +508,28 @@ def build_profile_scene(item, asset, number, total, lang, style):
             txt(b['text'],(x,500,width,165),size=28,minimum=22)
             if i<len(blocks)-1:
                 nodes.append({'type':'connector','box':[x+75,319,width-57,2],'color':c['accent']})
+    elif layout=='comparison' and structured.get('rows'):
+        heading((64,48,870 if asset else 1152,154),64,38)
+        if asset: photo((980,48,236,150))
+        headers=['Критерий' if lang=='ru' else 'Criterion']+[b['heading'] for b in blocks]
+        values=[headers]+[[r[k] for k in ('criterion','left','right')] for r in structured['rows']]
+        widths=[250,451,451]; heights=[74,118,118,118]
+        cells=[]
+        for row,values_row in enumerate(values):
+            cells.append([text_node(value,(0,0,widths[col]-32,heights[row]-20),
+                c['accent'] if row==0 else c['ink'] if col==0 else c['body'],
+                31 if row==0 else 29,23,row==0 or col==0,'table',c['body_font'])
+                for col,value in enumerate(values_row)])
+        nodes.append({'type':'table','box':[64,226,1152,sum(heights)],'widths':widths,
+                      'heights':heights,'cells':cells,'background':c['bg'],'accent':c['accent']})
+    elif layout=='conclusion':
+        heading((64,52,870 if asset else 1152,155),72,38)
+        if asset: photo((980,48,236,150))
+        height=420/len(blocks)
+        for i,b in enumerate(blocks):
+            y=232+i*height
+            txt(b['heading'],(64,y,352,height-24),'subheading',40,26,c['accent'])
+            txt(b['text'],(470,y,746,height-24),size=35,minimum=26)
     elif layout in ('comparison','sections'):
         heading((64,50,1152,185),72,40)
         cols=3 if len(blocks)==3 else 2; rows=math.ceil(len(blocks)/cols)
@@ -598,6 +646,26 @@ def render_scene(slide, scene, chart_renderer=None):
             shape=slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,Inches(x),Inches(y),Inches(x+w),Inches(y))
             shape.line.color.rgb=RGBColor.from_string(node['color'][1:]);shape.line.width=Pt(1.5)
             tail=OxmlElement('a:tailEnd');tail.set('type','triangle');shape._element.spPr.get_or_add_ln().append(tail)
+        elif node['type']=='table':
+            shape=slide.shapes.add_table(len(node['cells']),len(node['widths']),Inches(x),Inches(y),Inches(w),Inches(h))
+            shape.name='Designer comparison';table=shape.table
+            for j,width in enumerate(node['widths']):table.columns[j].width=Inches(width/96)
+            for i,height in enumerate(node['heights']):table.rows[i].height=Inches(height/96)
+            for i,row in enumerate(node['cells']):
+                for j,cell_node in enumerate(row):
+                    cell=table.cell(i,j);cell.margin_left=cell.margin_right=Inches(16/96)
+                    cell.margin_top=cell.margin_bottom=Inches(10/96);cell.vertical_anchor=MSO_ANCHOR.TOP
+                    cell.fill.solid();cell.fill.fore_color.rgb=RGBColor.from_string(node['background'][1:])
+                    cell.text=cell_node['text'];cell.text_frame.word_wrap=False
+                    for para in cell.text_frame.paragraphs:
+                        para.font.name=cell_node['font'];para.font.size=Pt(cell_node['size']*.75)
+                        para.font.bold=cell_node['bold'];para.font.color.rgb=RGBColor.from_string(cell_node['color'][1:])
+                        para.space_before=para.space_after=Pt(0);para.line_spacing=Pt(cell_node['size']*.75*1.22)
+                    props=cell._tc.get_or_add_tcPr()
+                    for side in ('lnL','lnR','lnT','lnB'):
+                        line=OxmlElement('a:'+side);line.set('w','6350')
+                        fill_color=OxmlElement('a:solidFill');rgb=OxmlElement('a:srgbClr')
+                        rgb.set('val',node['accent'][1:] if side=='lnB' else node['background'][1:]);fill_color.append(rgb);line.append(fill_color);props.append(line)
         elif node['type']=='chart':
             if chart_renderer is None:raise DesignerValidationError('A native chart renderer is required')
             c=node.get('palette') or palette(node['dark']);conv=lambda color:tuple(bytes.fromhex(color[1:]))

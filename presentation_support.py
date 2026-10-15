@@ -34,6 +34,9 @@ def validate_concept_copy(text):
         claim = re.search(r'заброниру|бронируйте|купите|закажите|бронирован|на\s+(?:(?:нашем|официальном)\s+)?сайте|'
                           r'book\s+(?:now|your)|buy\s+now|on\s+(?:our|the)\s+website|reservations?\s+(?:are|is)', sentence)
         conditional = re.search(r'нет\s+(?:сайта|бронирования)|не\s+(?:доступ|открыт|существ|предусмотр|работает|принима)|'
+                                r'без\s+(?:(?:реальн|действующ|доступн)\w*\s+)?(?:онлайн[- ]?)?бронирован|'
+                                r'бронирован\w*\s+(?:отсутствует|недоступно|нет)|'
+                                r'не\s+(?:предлага|предоставля|обеща|означа|подразумева|включа)\w*\s+(?:реальн\w*\s+)?бронирован|'
                                 r'возможн|может|могут|планиру|предполага|если|прототип|сценарий|'
                                 r'could|might|planned|prototype|not\s+(?:available|open)|no\s+(?:website|booking)', sentence)
         if claim and not conditional:
@@ -131,7 +134,9 @@ def plan_prompt(data, language_instruction):
 Заголовки называй естественно и коротко, обычно 3–7 слов. Для обзора подходят названия
 разделов: «Номера с видом на виноградники», «Тосканская кухня». Не заставляй каждый
 заголовок звучать как утверждение или рекламный лозунг. Сохраняй названия пользователя.
-Последний слайд завершает тему содержательным выводом. Практическое действие допустимо
+Составь логическую историю без повторов: не выделяй отдельные «Атмосферу» или «Преимущества», если их смысл уже раскрыт.
+Для сравнения запланируй три одинаковых конкретных критерия для обеих сторон.
+Последний слайд завершает тему содержательным выводом, условиями применения или ограничением; он не повторяет предпоследний. Практическое действие допустимо
 только если оно уместно и выполнимо по исходному материалу. Для вымышленного проекта
 подведи итог концепции: кому она подходит и что предлагает. Не призывай бронировать,
 покупать, звонить или переходить на сайт, существование которого не подтверждено.
@@ -216,6 +221,8 @@ def content_prompt(data, plan, language_instruction):
 image_prompt — конкретная физическая сцена или предмет, непосредственно объясняющий смысл
 этого слайда, на английском: 1–2 предложения, до 60 слов. Начинай с главного объекта и действия.
 Это подпись к воображаемой фотографии, а не инструкция создать слайд.
+Для современной техники и бизнеса выбирай правдоподобное оборудование: опиши его физический вид и функцию.
+Не заменяй реальные устройства игрушками, маскотами или фантастическими гуманоидами, если пользователь не просил фантазию или такую концепцию.
 Сначала закончи content, затем выбери видимый предмет, место или действие из этого текста
 для image_prompt. Сопоставь их перед ответом: интерьер требует изображения интерьера,
 кухня — блюда или приготовления, устройство — самого устройства. Общий пейзаж по теме
@@ -255,7 +262,18 @@ def validate_content(value, plan):
     for slide, item in zip(value['slides'], expected):
         if not isinstance(slide, dict) or type(slide.get('number')) is not int or slide['number'] != item['number']:
             raise PresentationValidationError('Body slide numbers do not match plan')
-        body = _text(slide.get('content'), 480, 'content')
+        body_value = slide.get('content')
+        # Structured layouts already carry visible copy. Models occasionally omit
+        # the redundant prose field; recover it verbatim rather than regenerate.
+        structure = slide.get('designer')
+        if (not body_value and isinstance(structure, dict)
+                and structure.get('layout') in ('process', 'comparison', 'sections', 'conclusion')):
+            blocks = structure.get('blocks')
+            if (isinstance(blocks, list) and blocks and all(isinstance(b, dict)
+                    and isinstance(b.get('heading'), str) and isinstance(b.get('text'), str)
+                    and b['heading'].strip() and b['text'].strip() for b in blocks)):
+                body_value = '\n\n'.join(b['heading'].strip()+': '+b['text'].strip() for b in blocks)
+        body = _text(body_value, 480, 'content')
         # CJK glyphs take more horizontal space than Cyrillic / Latin letters.
         visual_length = sum(1 if ord(c) > 0x2e7f else .56 for c in body)
         if visual_length > (160 if slide.get('chart') else 270) or (slide.get('chart') and len(body) > 260):

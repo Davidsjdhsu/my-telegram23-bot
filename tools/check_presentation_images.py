@@ -14,9 +14,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
-import httpx
 from PIL import Image
-from openai import AsyncOpenAI
 from pptx import Presentation
 from pptx.util import Inches
 
@@ -27,6 +25,7 @@ import presentation_designer as pd
 
 
 def adapters(client):
+    import httpx
     names={'generate_image','ask_presentation_vision','_prepare_vision_image','extract_json','_balanced_json_spans'}
     nodes=[n for n in ast.parse((ROOT/'main.py').read_text()).body
            if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name in names]
@@ -54,6 +53,7 @@ def fixtures():
 
 
 async def main():
+    from openai import AsyncOpenAI
     if not all(os.environ.get(k) for k in ('XAI_API_KEY','REPLICATE_API_TOKEN')):
         print('SMOKE_BLOCKED missing_provider_credentials');return 2
     out=Path(tempfile.mkdtemp(prefix='alix-image-smoke-'))

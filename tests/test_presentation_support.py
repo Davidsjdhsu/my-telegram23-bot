@@ -41,7 +41,7 @@ def load_functions(names, env=None):
         raise AssertionError(set(names)-{n.name for n in nodes})
     ns = {k: getattr(ps,k) for k in dir(ps) if not k.startswith('__')}
     ns.update({k: getattr(pv,k) for k in ('prepare_images', 'render_slide', 'visual_quality_notice', 'require_images', 'ImageDeliveryError', 'image_failure_notice', 'photo_caption_hint')})
-    ns.update({k: getattr(pd,k) for k in ('is_designer','render_designer_slide','content_instruction','validate_designer','build_scene','plan_designer_images')})
+    ns.update({k: getattr(pd,k) for k in ('is_designer','render_designer_slide','content_instruction','validate_designer','build_scene','plan_designer_images','DesignerValidationError','designer_copy')})
     ns.update(env or {})
     module = ast.Module(body=[ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')],level=0)] + nodes, type_ignores=[])
     exec(compile(ast.fix_missing_locations(module),'main.py','exec'),ns)
@@ -243,7 +243,7 @@ class BuildTests(unittest.IsolatedAsyncioTestCase):
             Image.new('RGB',(640,480),color).save(path)
             return True
         env=WorkflowTests().env(ask_grok=model)
-        env.update({'Presentation':Presentation,'Inches':Inches,'Pt':Pt,'RGBColor':RGBColor,
+        env.update({'local_issues':lambda *a:[], 'review_content':AsyncMock(return_value=[]), 'DeckQualityError':__import__('presentation_quality').DeckQualityError,'Presentation':Presentation,'Inches':Inches,'Pt':Pt,'RGBColor':RGBColor,
             'MSO_SHAPE':MSO_SHAPE,'PP_ALIGN':PP_ALIGN,'MSO_ANCHOR':MSO_ANCHOR,
             'canvas':canvas,'pdfmetrics':pdfmetrics,'A4':A4,'datetime':datetime,'os':os,
             'random':random.Random(7),'re':re,'textwrap':textwrap,'THEMES':{'minimal':theme,'default':theme},
@@ -288,7 +288,7 @@ class BuildTests(unittest.IsolatedAsyncioTestCase):
         env,state,sent=self.build_env(8,bad_content=True)
         await env['_build_presentation'](SimpleNamespace(from_user=SimpleNamespace(id=-987654321)),state)
         self.assertEqual(sent,[])
-        self.assertEqual(env['ask_grok'].await_count,2)
+        self.assertEqual(env['ask_grok'].await_count,3)
         env['generate_image'].assert_not_awaited()
         env['spend_credits'].assert_not_called()
         env['finish_job'].assert_called_once()

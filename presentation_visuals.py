@@ -96,6 +96,8 @@ def image_prompt(topic, slide, retry=False):
             prompt += ' Wide composition. Subject on the RIGHT half, quiet background on the left.'
         if family == 'editorial':
             prompt += ' Warm natural light and tactile material details, refined magazine photography.'
+        elif family in ('technology', 'business'):
+            prompt += ' Credible practical equipment and realistic materials; no toy-like mascot robots or human facial features on machinery unless explicitly part of the scene concept.'
         elif family == 'education':
             prompt += ' Clear educational subject view, natural colors and accurate recognizable details.'
     elif slide.get('_designer_style') and slide.get('_designer_cover'):
@@ -119,7 +121,7 @@ def review_prompt(topic, slide):
         'тоже могло быть ошибочным. Если текст описывает видимое место, предмет или действие, '
         'они должны присутствовать в кадре. Терраса с пейзажем не иллюстрирует интерьер номера; '
         'электростанция не заменяет фото описанного домашнего прибора. Одного совпадения с '
-        'общей темой недостаточно. При такой подмене relevant=false и replacement_scene '
+        'общей темой недостаточно. Учитывай уточнения request_context: тип оборудования, материал, возраст, среду и запрет фантастических концепций. Изображение другого типа устройства отклоняй, даже если подпись слайда сформулирована обобщённо. При такой подмене relevant=false и replacement_scene '
         'описывает предмет из текста слайда. При этом не требуй показать '
         'невидимый механизм, симптомы или причинную связь. Например, осмотр собаки подходит '
         'для профилактики её болезней, а случайный пейзаж — нет. '
@@ -127,12 +129,13 @@ def review_prompt(topic, slide):
         'крупном псевдотексте или доминирующей рекламе. Небольшие естественные маркировки '
         'на одежде, упаковке, бутылках или оборудовании сами по себе НЕ являются ошибкой: '
         'это часть фотографируемой сцены, а не текст слайда. '
+        'Для реальной техники игрушечный робот-маскот или фантастическое устройство не подходит: relevant=false, если такая концепция не запрошена в контексте. '
         'has_chart=true при графиках, таблицах, псевдоданных или инфографике. '
         'defective=true при очевидно испорченных лицах, руках, предметах или обрезанном главном объекте. '
         'Не оценивай как плохой кадр только за простую композицию. Контекст: ' +
         json.dumps({'topic': topic, 'title': slide.get('title'),
                     'content': slide.get('content') or slide.get('point'),
-                    'intended_scene': slide.get('image_prompt')}, ensure_ascii=False))
+                    'intended_scene': slide.get('image_prompt'), 'request_context': slide.get('_request_context','')}, ensure_ascii=False))
 
 
 def approved(value):

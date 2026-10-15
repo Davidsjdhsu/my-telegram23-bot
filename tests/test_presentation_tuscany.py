@@ -44,6 +44,16 @@ class TuscanyRegressionTests(unittest.TestCase):
         content=f.make_content();content['slides'][-1]['content']='Возможный сценарий бронирования пока является прототипом. Работающего сайта нет.'
         self.assertEqual(ps.validate_content(content,plan)['slides'][-1]['content'],content['slides'][-1]['content'])
 
+    def test_concept_booking_disclaimers_are_not_sales_claims(self):
+        for text in ('Концепция без реального бронирования.',
+                     'Бронирование отсутствует.',
+                     'Проект не предлагает бронирование.',
+                     'Концепция без бронирования и продажи номеров.'):
+            with self.subTest(text=text):ps.validate_concept_copy(text)
+        for text in ('Бронирование открыто.', 'Забронируйте номер на нашем сайте.'):
+            with self.subTest(text=text), self.assertRaises(ps.PresentationValidationError):
+                ps.validate_concept_copy(text)
+
     def test_sparse_sections_get_photo_but_comparison_kept(self):
         base={'_designer_design':pp.choose_design(BRIEF),'designer':{'layout':'sections','blocks':[{'heading':'Овощи','text':'Сезонное меню'},{'heading':'Травы','text':'Местные продукты'}]}}
         slides=[copy.deepcopy(base) for _ in range(8)]

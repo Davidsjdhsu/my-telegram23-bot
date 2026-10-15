@@ -7,7 +7,6 @@ from pathlib import Path
 import sys
 import tempfile
 import time
-from openai import AsyncOpenAI
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -21,7 +20,8 @@ def adapters(client):
     nodes = [n for n in ast.parse((ROOT/'main.py').read_text()).body
              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in names]
     assert {n.name for n in nodes} == names
-    ns = dict(vars(ps), asyncio=asyncio, json=json, client=client, GROK_ERROR_PREFIX='MODEL_ERROR:',
+    from presentation_quality import REVIEW_SYSTEM
+    ns = dict(vars(ps), REVIEW_SYSTEM=REVIEW_SYSTEM, asyncio=asyncio, json=json, client=client, GROK_ERROR_PREFIX='MODEL_ERROR:',
               content_gen_lang=lambda *a: 'ru', grok_json_lang_instruction=lambda *a: '\nВсе тексты на русском.')
     module = ast.Module(body=[ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')], level=0)] + nodes, type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), 'quality-adapters.py', 'exec'), ns)
@@ -29,6 +29,7 @@ def adapters(client):
 
 
 async def main():
+    from openai import AsyncOpenAI
     if not os.environ.get('XAI_API_KEY'):
         print('QUALITY_BLOCKED missing_provider_credentials'); return 2
     started = time.monotonic()

@@ -122,7 +122,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         data=f.make_content(3);data['slides'][0]['designer']={'layout':'bad'}
         env['ask_grok']=AsyncMock(return_value=json.dumps(data))
         await env['_build_presentation'](SimpleNamespace(from_user=SimpleNamespace(id=-987654321),chat=SimpleNamespace(id=-987654321)),state)
-        self.assertEqual(sent,[]);env['spend_credits'].assert_not_called();self.assertEqual(env['ask_grok'].await_count,2)
+        self.assertEqual(sent,[]);env['spend_credits'].assert_not_called();self.assertEqual(env['ask_grok'].await_count,3)
 
     async def test_style_buttons_update_and_clear_old_choice(self):
         env=f.load_functions(['process_theme'],f.WorkflowTests().env(
