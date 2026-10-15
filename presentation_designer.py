@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from PIL import ImageFont
-from presentation_visuals import AI_LABEL, fit_rect
+from presentation_visuals import AI_LABEL, fit_rect, set_slide_notes
 
 STYLES = {'designer_soft', 'designer_strict'}
 FONT = 'Arial'
@@ -411,7 +411,7 @@ def render_scene(slide, scene, chart_renderer=None):
             c=palette(node['dark']);conv=lambda color:tuple(bytes.fromhex(color[1:]))
             chart_renderer(slide,x,y,w,h,node['data'],{'ink':conv(c['ink']),'mid':conv(c['body']),
               'mute':conv(c['muted']),'line':conv(c['accent']),'bg':conv(c['bg'])})
-    slide.notes_slide.notes_text_frame.text=scene['notes']
+    set_slide_notes(slide, scene['notes'])
 
 
 def render_designer_slide(slide,item,asset,colors,number,total,lang,background,chart_renderer):

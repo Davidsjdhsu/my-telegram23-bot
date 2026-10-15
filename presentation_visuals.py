@@ -14,8 +14,39 @@ from PIL import Image, ImageOps
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import MSO_ANCHOR
+from pptx.oxml.xmlchemy import OxmlElement
+from pptx.oxml.ns import qn
+from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 
 log = logging.getLogger(__name__)
+
+
+def register_notes_master(presentation_element, relationship_id):
+    """Complete the notes-master declaration omitted by python-pptx.
+
+    PowerPoint tolerates its absence; Apple Quick Look can reject the entire
+    deck. Keep the ECMA-376 child order and reuse an existing declaration.
+    See https://github.com/scanny/python-pptx/pull/1128.
+    """
+    master_list = presentation_element.find(qn('p:notesMasterIdLst'))
+    if master_list is None:
+        master_list = OxmlElement('p:notesMasterIdLst')
+        slide_masters = presentation_element.find(qn('p:sldMasterIdLst'))
+        position = presentation_element.index(slide_masters) + 1 if slide_masters is not None else 0
+        presentation_element.insert(position, master_list)
+    entry = master_list.find(qn('p:notesMasterId'))
+    if entry is None:
+        entry = OxmlElement('p:notesMasterId')
+        master_list.append(entry)
+    entry.set(qn('r:id'), relationship_id)
+
+
+def set_slide_notes(slide, text):
+    slide.notes_slide.notes_text_frame.text = text
+    presentation_part = slide.part.package.presentation_part
+    relationship = next(r for r in presentation_part.rels.values()
+                        if r.reltype == RT.NOTES_MASTER and not r.is_external)
+    register_notes_master(presentation_part._element, relationship.rId)
 
 
 class ImageDeliveryError(ValueError):
@@ -392,6 +423,6 @@ def render_slide(slide, item, asset, colors, number, total, lang, background, ch
     p.font.size = Pt(11)
     p.font.color.rgb = RGBColor(*colors['mute'])
     if asset:
-        slide.notes_slide.notes_text_frame.text = (
+        set_slide_notes(slide,
             'Source: user-supplied photograph. Original frame preserved.' if asset['origin'] == 'user'
             else 'Source: AI-generated editorial illustration, reviewed automatically. Not a documentary photograph or data source.')
