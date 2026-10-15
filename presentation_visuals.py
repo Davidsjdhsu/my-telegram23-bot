@@ -234,7 +234,7 @@ User photos are retained even when the classifier is unavailable, using upload o
             return
         async with gate:
             # A portrait composition suits the side panel. Wide scenes get their own wide layout.
-            ratio = ('16:9' if index == 0 else '4:3') if slide.get('_designer_style') else ('16:9' if index == 0 or index % 3 == 0 else '3:4')
+            ratio = ('16:9' if index == 0 else '4:3') if slide.get('_designer_style') else ordinary_image_ratio(slide, index+1)
             candidate = dict(slide)
             for attempt in range(3):
                 src = directory / f'generated-{index}-{attempt}.png'
@@ -313,9 +313,9 @@ def text_size(text, width, height, preferred, minimum):
     raise ValueError('Slide text does not fit at a readable size')
 
 
-def add_text(slide, text, box, colors, title=False, cover=False):
+def add_text(slide, text, box, colors, title=False, cover=False, preferred=None):
     x,y,w,h = box
-    size = text_size(text, w, h, 44 if cover else 34 if title else 23,
+    size = text_size(text, w, h, preferred or (44 if cover else 34 if title else 23),
                      30 if title else 20)
     shape = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
     tf = shape.text_frame
@@ -366,54 +366,55 @@ def visual_quality_notice(warnings, lang):
     return '\n\n' + messages.get(lang, messages['en'])
 
 
-def render_slide(slide, item, asset, colors, number, total, lang, background, chart_renderer):
-    """Flat editorial layouts, chosen from actual proportions and text length, never randomly."""
-    background(slide, colors)
-    title = item['title']
-    body = item.get('content') or ''
-    chart = item.get('chart')
+def ordinary_image_ratio(item, number):
     if number == 1:
-        if asset and asset['width'] / asset['height'] >= 1.35:
-            add_image(slide, asset, (.65, .45, 12.03, 4.15))
-            add_text(slide, title, (.75, 4.85, 11.8, 1.95), colors, title=True, cover=True)
-        elif asset:
-            add_text(slide, title, (.75, 1.5, 6.0, 4.4), colors, title=True, cover=True)
-            add_image(slide, asset, (7.25, .6, 5.33, 6.15))
+        return '4:3'
+    layout = item.get('visual_layout', 'split')
+    return '16:9' if layout == 'wide' else '3:4' if layout == 'focus' else '4:3'
+
+
+def render_slide(slide, item, asset, colors, number, total, lang, background, chart_renderer):
+    """Readable editorial compositions with generous, proportionate photography."""
+    background(slide, colors)
+    # A consistent sans-serif headline belongs to the basic presentation format.
+    colors = {**colors, 'heading_font': 'Arial'}
+    title, body = item['title'], item.get('content') or ''
+    chart = item.get('chart')
+    layout = item.get('visual_layout', 'split')
+    if number == 1:
+        if asset:
+            add_text(slide, title, (.7, 1.15, 5.2, 4.95), colors, title=True, cover=True, preferred=42)
+            add_image(slide, asset, (6.35, .65, 6.35, 6.1))
         else:
-            add_text(slide, title, (.9, 2.2, 11.5, 3.4), colors, title=True, cover=True)
+            add_text(slide, title, (.85, 1.45, 11.65, 4.6), colors, title=True, cover=True, preferred=48)
     elif chart:
-        add_text(slide, title, (.75, .55, 8.5 if asset else 11.8, 1.65), colors, title=True)
-        add_text(slide, body, (.75, 2.5, 4.5, 4.1), colors)
+        add_text(slide, title, (.7, .5, 8.5 if asset else 11.9, 1.45), colors, title=True)
+        add_text(slide, body, (.7, 2.25, 4.45, 4.45), colors)
         if asset:
-            add_image(slide, asset, (9.7, .55, 2.85, 1.65))
-        chart_renderer(slide, 5.7, 2.5, 6.85, 4.1, chart, colors)
-    elif asset and len(body) < 520:
+            add_image(slide, asset, (9.6, .45, 3.0, 1.5))
+        chart_renderer(slide, 5.65, 2.25, 6.95, 4.4, chart, colors)
+    elif asset:
         ratio = asset['width'] / asset['height']
-        if ratio >= 1.65 and len(body) <= 190 and len(title) <= 65:
-            add_text(slide, title, (.75, .45, 11.8, .95), colors, title=True)
-            add_text(slide, body, (.75, 1.55, 11.8, 1.2), colors)
-            add_image(slide, asset, (.75, 2.95, 11.8, 3.7))
+        # Long source material retains its complete photograph and gets a wider text column.
+        if len(body) > 340 or len(title) > 85:
+            add_text(slide, title, (.7, .5, 11.9, 1.35), colors, title=True)
+            add_text(slide, body, (.7, 2.05, 7.0, 4.7), colors)
+            add_image(slide, asset, (8.1, 2.05, 4.5, 4.7))
+        elif layout == 'focus' or ratio < .85:
+            add_image(slide, asset, (.7, .65, 4.5, 6.05))
+            add_text(slide, title, (5.85, 1.0, 6.75, 1.85), colors, title=True, preferred=38)
+            add_text(slide, body, (5.85, 3.15, 6.6, 3.35), colors, preferred=25)
+        elif layout == 'wide' and len(body) <= 230:
+            add_text(slide, title, (.7, .45, 11.9, 1.3), colors, title=True, preferred=38)
+            add_image(slide, asset, (.7, 2.0, 7.9, 4.7))
+            add_text(slide, body, (9.1, 2.15, 3.5, 4.55), colors, preferred=24)
         else:
-            image_left = number % 2 == 0
-            text_w = 5.65
-            for candidate in (5.65, 7.8, 9.0):
-                try:
-                    text_size(body, candidate, 4.3, 23, 20)
-                    text_w = candidate
-                    break
-                except ValueError:
-                    continue
-            image_w = 11.85 - text_w - .5
-            ix, tx = (.65, .65 + image_w + .5) if image_left else (.75 + text_w + .5, .75)
-            add_text(slide, title, (.75, .55, 11.8, 1.35), colors, title=True)
-            add_image(slide, asset, (ix, 2.15, image_w, 4.5))
-            add_text(slide, body, (tx, 2.35, text_w, 4.3), colors)
+            add_text(slide, title, (.7, .5, 11.9, 1.35), colors, title=True, preferred=38)
+            add_text(slide, body, (.7, 2.35, 5.0, 4.05), colors, preferred=25)
+            add_image(slide, asset, (6.2, 1.95, 6.4, 4.8))
     else:
-        add_text(slide, title, (.75, .65, 11.8, 1.45), colors, title=True)
-        add_text(slide, body, (.75, 2.4, 11.8, 4.15), colors)
-        # Do not silently discard an uploaded photo for a long slide. Reject and repair the copy.
-        if asset:
-            raise ValueError('Image slide needs shorter text')
+        add_text(slide, title, (.85, .65, 11.6, 1.5), colors, title=True, preferred=40)
+        add_text(slide, body, (.85, 2.5, 10.7, 3.95), colors, preferred=28)
     footer = slide.shapes.add_textbox(Inches(.75), Inches(7.03), Inches(11.8), Inches(.3))
     p = footer.text_frame.paragraphs[0]
     p.text = f'{number:02} / {total:02}'

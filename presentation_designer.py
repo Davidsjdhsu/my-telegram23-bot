@@ -43,7 +43,11 @@ blocks=[]; тогда используется content. content обязател
 Не менее половины слайдов планируй с предметными фото (photo/auto), включая обложку.
 statement используй не более одного раза. process — только реальная последовательность
 действий или этапов; для перечня болезней, свойств или мер профилактики используй sections.
-Чередуй фото, схемы и сравнения по смыслу; не делай все слайды одинаковыми. Данные пользователя сохраняй. При длинном материале выбирай auto. Все поля и
+Чередуй фото, схемы и сравнения по смыслу; не делай все слайды одинаковыми.
+Если план содержит сопоставление, используй comparison, для последовательности действий — process.
+Для презентации от 6 слайдов выбери хотя бы один подходящий содержанию структурный макет
+(comparison/sections/process), сохраняя фото минимум на половине слайдов. Не выдумывай
+этапы или противопоставления ради оформления. Данные пользователя сохраняй. При длинном материале выбирай auto. Все поля и
 количество слайдов из основного задания остаются обязательными.'''
 
 
@@ -152,6 +156,12 @@ def wrap(text, width, size, bold=False):
 def text_node(text, box, color, size=30, minimum=28, bold=False, role='body'):
     x, y, width, height = box
     for chosen in range(size, minimum - 1, -1):
+        # Reduce the font before breaking ordinary words across lines.
+        font = metric_font(chosen, bold)
+        words = str(text).split()
+        if any(1 < len(w) <= 40 and not any(ord(c) > 0x2e7f for c in w)
+               and measured(font, w, chosen) > width - 4 for w in words):
+            continue
         wrapped = wrap(str(text), width - 4, chosen, bold)
         lines = len(wrapped.split('\n'))
         if lines * chosen * 1.22 + 5 <= height:
@@ -192,9 +202,17 @@ def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
     layout = 'cover' if number == 1 else 'chart' if item.get('chart') else 'photo' if asset else layout
     if layout == 'photo' and not asset: layout = 'auto'
     radius = 36 if style == 'designer_soft' else 0
-    dark = layout in ('cover', 'statement')
+    dark = layout in ('cover', 'statement') or item.get('_designer_background') == 'dark'
     c = palette(dark)
-    scene = {'background': '#F4F6FA' if dark else c['bg'], 'layout': layout,
+    accent = item.get('_designer_accent')
+    if isinstance(accent, str) and re.fullmatch(r'#[0-9a-fA-F]{6}', accent):
+        # Keep semantic accent text readable on the chosen background.
+        rgb = [int(accent[i:i+2],16)/255 for i in (1,3,5)]
+        luminance = sum(v*w for v,w in zip(rgb,(.2126,.7152,.0722)))
+        if (dark and luminance >= .45) or (not dark and luminance <= .65):
+            c['accent'] = accent
+    
+    scene = {'background': '#F4F6FA' if layout in ('cover','statement') else c['bg'], 'layout': layout,
              'notes': 'AlixDocBot. ' + style, 'nodes': []}
     nodes = scene['nodes']
 
@@ -214,8 +232,13 @@ def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
             nodes.append({'type':'image','path':str(asset['path']),'box':list(fitted),
                           'origin':'user','radius':0,'crop':False})
         else:
-            nodes.append({'type':'image','path':str(asset['path']),'box':list(box),
-                          'origin':'ai','radius':radius,'crop':True})
+            source_ratio = asset['width'] / asset['height']
+            target_ratio = box[2] / box[3]
+            retained = min(source_ratio / target_ratio, target_ratio / source_ratio)
+            crop = cover or retained >= .72
+            image_box = box if crop else fit_rect(asset['width'], asset['height'], box)
+            nodes.append({'type':'image','path':str(asset['path']),'box':list(image_box),
+                          'origin':'ai','radius':radius,'crop':crop})
 
     def heading(box=(64,72,1152,214), size=76, minimum=42):
         txt(title,box,'title',size,minimum,c['ink'])
@@ -254,21 +277,23 @@ def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
                 subtitle_node = text_node(subtitle,(68,444,1136,204),c['body'],32,26)
             nodes.append(subtitle_node)
     elif layout == 'photo':
-        compact = len(body) <= 260 and len(title) <= 65
-        text_w = 440 if compact else 640
-        title_h = 244 if compact else 196
-        body_y = 386 if compact else 292
-        body_h = 258 if compact else 352
+        portrait = asset['width'] / asset['height'] < .9
         try:
-            title_node = text_node(title,(64,88,text_w,title_h),c['ink'],86 if compact else 60,42,False,'title')
-            body_node = text_node(body,(64,body_y,text_w,body_h),c['body'],30,26)
-            nodes.extend([title_node,body_node])
-            photo((text_w+104,72,1112-text_w,576))
+            if portrait and len(body) <= 320 and len(title) <= 85:
+                title_node = text_node(title,(608,84,608,202),c['ink'],62,40,False,'title')
+                body_node = text_node(body,(608,322,608,318),c['body'],30,26)
+                nodes.extend([title_node,body_node])
+                photo((64,64,480,584))
+            else:
+                title_node = text_node(title,(64,54,1152,164),c['ink'],68,40,False,'title')
+                body_node = text_node(body,(64,268,520,370),c['body'],30,26)
+                nodes.extend([title_node,body_node])
+                photo((640,242,576,406))
         except DesignerValidationError:
-            # Dense user material keeps the image and all copy using a broad text layout.
-            heading((64,62,860,158),52,40)
-            photo((992,54,224,166))
-            txt(body,(64,252,1152,392),size=32,minimum=26)
+            # A wide copy column still reserves a substantial photograph, never a tiny thumbnail.
+            heading((64,54,1152,164),60,40)
+            txt(body,(64,250,680,398),size=30,minimum=24)
+            photo((800,250,416,398))
     elif layout == 'process':
         heading((64,60,1152,210),72,42)
         panel((32,306,1216,350),GRADIENT)
@@ -286,7 +311,7 @@ def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
         cols=3 if len(blocks)==3 else 2
         rows=math.ceil(len(blocks)/cols); row_h=376/rows
         col_w=1152/cols; text_w=col_w-48
-        panel((32,250,1216,408),fill='#F0F4FC')
+        panel((32,250,1216,408),fill='#15202E' if dark else '#F0F4FC')
         for i,b in enumerate(blocks):
             x=64+(i%cols)*col_w; y=270+(i//cols)*row_h
             head_h=110 if cols==3 else 70

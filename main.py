@@ -3367,25 +3367,36 @@ async def ask_grok(prompt: str, max_tokens: int = 4000, *, system_prompt=None, t
     """Запрос к Grok с коротким повтором при сетевом сбое — одна ошибка API
     больше не роняет всю сборку документа с первой попытки."""
     last_err = None
-    for attempt in range(3):
+    structured = system_prompt == PRESENTATION_SYSTEM
+    attempts = 2 if structured else 3
+    api = client.with_options(timeout=60.0, max_retries=0) if structured else client
+    options = {"response_format": {"type": "json_object"}} if structured else {}
+    for attempt in range(attempts):
         try:
-            r = await client.chat.completions.create(
+            r = await api.chat.completions.create(
                 model="grok-4.3",  # grok-3 отправлен на пенсию xAI 15.05.2026, см. комментарий в update_long_term_memory()
                 messages=[
                     {"role": "system", "content": system_prompt or "Ты арт-директор презентаций. Пиши как живой сильный автор, не как нейросеть, и так, чтобы текст не триггерил детекторы ИИ-генерации: без канцелярита и шаблонных фраз («в современном мире», «является», «следует отметить», «данный», «невозможно переоценить», «таким образом», «подводя итог»), без идеально симметричной структуры абзацев и слишком гладких переходов. Чередуй короткие и длинные предложения неравномерно. Заголовки живые. Каждый ответ уникален. Исправляй ошибки. Только русский."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=temperature,
-                max_tokens=max_tokens
+                max_tokens=max_tokens, **options
             )
             content = (r.choices[0].message.content or "").strip()
+            if structured and r.choices[0].finish_reason == "length":
+                last_err = "truncated_json"
+                print("presentation_text reason=truncated_json", flush=True)
+                break
             if content:
                 return content
             last_err = "empty content"
         except Exception as e:
             last_err = e
-            print(f"Grok API error (попытка {attempt + 1}/3):", e)
-        if attempt < 2:
+            if structured:
+                print(f"presentation_text attempt={attempt+1} reason={type(e).__name__}", flush=True)
+            else:
+                print(f"Grok API error (попытка {attempt + 1}/3):", e)
+        if attempt < attempts - 1:
             await asyncio.sleep(1.2 * (attempt + 1))
     return f"{GROK_ERROR_PREFIX}{last_err}"
 
@@ -3587,8 +3598,17 @@ STYLE_KEYWORDS = [
 
 
 def extract_style(text: str):
-    t = (text or "").lower()
+    t = (text or "").lower().replace("ё", "е")
+    # Explicit design requests outrank topic words such as "technology".
+    designer = re.search(r"\bдизайнерск[а-я]*\b|\bdesigner\b", t)
+    rounded = re.search(r"\b(?:мягк[а-я]*\s+(?:стил[а-я]*|скруглен[а-я]*)|со?\s+скруглен[а-я]*)|\bsoft designer\b", t)
+    negated = re.search(r"\b(?:не|без)\s+дизайнерск[а-я]*", t)
+    if (designer or rounded) and not negated:
+        strict = re.search(r"\bстрог[а-я]*\b|\bsharp\b|\bstrict\b|без\s+скруглен", t)
+        return "designer_strict" if strict else "designer_soft"
     for kw, style in STYLE_KEYWORDS:
+        if negated and style.startswith("designer_"):
+            continue
         key = kw.strip()
         # С начала слова, как в pick_theme. "еда" - только целым словом: подстрока была в "победа"/"беседа".
         pat = r"еда(?![а-яё])" if key == "еда" else re.escape(key)
@@ -5331,13 +5351,19 @@ async def _create_presentation_plan(data, lang):
     for attempt in range(2):
         raw = await ask_grok(prompt, max_tokens=6500, system_prompt=PRESENTATION_SYSTEM, temperature=0.35)
         if grok_failed(raw):
-            raise PresentationValidationError("Plan generation failed")
+            print(f"presentation_plan attempt={attempt+1} reason=provider_unavailable", flush=True)
+            if attempt:
+                raise PresentationValidationError("Plan generation failed")
+            continue
         try:
             return validate_plan(extract_json(raw), data["slides"])
-        except (ValueError, TypeError, KeyError, AttributeError):
+        except (ValueError, TypeError, KeyError, AttributeError) as error:
+            # Validation messages are fixed internal strings; never log source text or model output.
+            reason = str(error) if isinstance(error, PresentationValidationError) else "Invalid JSON structure"
+            print(f"presentation_plan attempt={attempt+1} reason={reason[:180]}", flush=True)
             if attempt:
                 raise PresentationValidationError("Invalid presentation plan") from None
-            prompt += "\nПредыдущий ответ не прошёл проверку. Проверь JSON, число слайдов, порядок номеров и ограничения длины. Верни исправленный полный JSON."
+            prompt += "\nИсправь ошибку проверки: " + reason + ". Верни полный JSON по исходному заданию, без комментариев."
 
 
 async def _send_presentation_draft(m, text, reply_markup):
@@ -5668,6 +5694,9 @@ async def _build_presentation(m: Message, state: FSMContext):
                 chart_count += 1
             visual_slides.append(item)
         if designer:
+            for visual_item in visual_slides:
+                visual_item['_designer_background'] = plan['design']['background']
+                visual_item['_designer_accent'] = plan['design']['accent']
             plan_designer_images(visual_slides, theme_name)
         assets, image_warnings = await prepare_images(
             content["title"], visual_slides, list(data.get("user_photos") or []),
