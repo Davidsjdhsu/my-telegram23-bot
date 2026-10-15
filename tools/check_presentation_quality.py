@@ -35,6 +35,9 @@ async def main():
     data = {'topic': 'Отели будущего: технологии и комфорт', 'slides': 8,
             'theme_name': 'designer_soft', 'mode': 'ai',
             'extra': 'Умные номера, роботы-помощники, персональный сервис, экологичные решения, отдых гостей. Тёмный фон, бирюзовый акцент, мягкие скругления. Коротко, без вымышленных цифр. Возможные решения обозначай как концепции.'}
+    if '--coffee' in sys.argv:
+        data.update(topic='Кофейня будущего: от зерна до чашки',
+            extra='Для широкой аудитории. Зерно, обжарка, бариста, заваривание, роботы и сокращение отходов. Добавь схему пути зерна до чашки и сравнение человека с автоматикой. Тёмный фон, кремовые и медные акценты, мягкие скругления. Будущие решения обозначай как концепции, без вымышленных цифр.')
     async with AsyncOpenAI(api_key=os.environ['XAI_API_KEY'], base_url='https://api.x.ai/v1', max_retries=0) as client:
         ns = adapters(client)
         plan = await ns['_create_presentation_plan'](data, 'ru')
@@ -50,6 +53,7 @@ async def main():
                     if 'designer' not in item:
                         raise ps.PresentationValidationError('Missing designer layout')
                     item['designer'] = pd.validate_designer(item)
+                    item['_designer_design'] = plan['design']
                     pd.build_scene(item, None, i, 8, 'ru', 'designer_soft')
                 break
             except (ValueError, TypeError, KeyError, AttributeError):
@@ -67,6 +71,7 @@ async def main():
             image_api = image_adapters(client)
             slides = [{'title': content['title'], 'point': plan['slides'][0]['point'], 'image_prompt': content['cover_image_prompt']}] + content['slides']
             for item in slides:
+                item['_designer_design'] = plan['design']
                 item['_designer_background'] = plan['design']['background']
                 item['_designer_accent'] = plan['design']['accent']
             pd.plan_designer_images(slides, 'designer_soft')

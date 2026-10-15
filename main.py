@@ -11,7 +11,7 @@ from chat_support import (
 )
 from presentation_support import (
     PresentationValidationError, total_slides, plan_key, validate_plan,
-    plan_prompt, format_plan, content_prompt, validate_content, apply_design, PRESENTATION_SYSTEM,
+    plan_prompt, format_plan, content_prompt, validate_content, apply_design, PRESENTATION_SYSTEM, finalize_plan_design,
     CHOOSE_PRESENTATION_LABELS, wants_presentation_defaults, should_clarify_presentation,
     presentation_audience_known, presentation_brief_prompt, validate_presentation_brief,
     presentation_brief_message, presentation_reply_hint, expand_presentation_choice,
@@ -5356,7 +5356,7 @@ async def _create_presentation_plan(data, lang):
                 raise PresentationValidationError("Plan generation failed")
             continue
         try:
-            return validate_plan(extract_json(raw), data["slides"])
+            return finalize_plan_design(validate_plan(extract_json(raw), data["slides"]), data, lang)
         except (ValueError, TypeError, KeyError, AttributeError) as error:
             # Validation messages are fixed internal strings; never log source text or model output.
             reason = str(error) if isinstance(error, PresentationValidationError) else "Invalid JSON structure"
@@ -5639,7 +5639,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         if not plan or data.get("pres_plan_key") != plan_key(data):
             # Upload/legacy sessions have no structured preview yet.
             plan = await _create_presentation_plan(data, lang)
-        plan = validate_plan(plan, planned_slides)
+        plan = finalize_plan_design(validate_plan(plan, planned_slides), data, lang)
         theme_name = data.get("theme_name") or pick_theme(data.get("topic", ""))[0]
         colors = data.get("custom_colors") or THEMES.get(theme_name, THEMES["default"])
         colors = apply_design(colors, plan)
@@ -5662,6 +5662,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                         if "designer" not in content_slide:
                             raise PresentationValidationError("Missing designer layout")
                         content_slide["designer"] = validate_designer(content_slide)
+                        content_slide['_designer_design'] = plan['design']
                         # Fit structured blocks before spending time on image generation.
                         build_scene(content_slide, None, idx, planned_slides, cgl or lang, theme_name)
                 break
@@ -5695,6 +5696,7 @@ async def _build_presentation(m: Message, state: FSMContext):
             visual_slides.append(item)
         if designer:
             for visual_item in visual_slides:
+                visual_item['_designer_design'] = plan['design']
                 visual_item['_designer_background'] = plan['design']['background']
                 visual_item['_designer_accent'] = plan['design']['accent']
             plan_designer_images(visual_slides, theme_name)

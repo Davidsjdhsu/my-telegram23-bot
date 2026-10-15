@@ -87,7 +87,18 @@ def image_prompt(topic, slide, retry=False):
     # the slide text, JSON field names or a long catalogue of forbidden objects.
     scene = str(slide.get('image_prompt') or slide.get('title') or topic).strip()[:700]
     prompt = scene + '. ' + IMAGE_RULES
-    if slide.get('_designer_style') and slide.get('_designer_cover'):
+    family = slide.get('_designer_design', {}).get('family')
+    if family:
+        prompt += ' The main subject is fully visible, surrounded by its natural environment.'
+        if slide.get('_designer_aspect_ratio') == '3:4':
+            prompt += ' Vertical editorial portrait composition, central subject with generous margins.'
+        elif slide.get('_designer_cover') and family == 'technology':
+            prompt += ' Wide composition. Subject on the RIGHT half, quiet background on the left.'
+        if family == 'editorial':
+            prompt += ' Warm natural light and tactile material details, refined magazine photography.'
+        elif family == 'education':
+            prompt += ' Clear educational subject view, natural colors and accurate recognizable details.'
+    elif slide.get('_designer_style') and slide.get('_designer_cover'):
         prompt += (' Wide composition. Subject on the RIGHT half, dark quiet background '
                    'on the left half, with natural blue and turquoise light accents.')
     else:
@@ -234,7 +245,7 @@ User photos are retained even when the classifier is unavailable, using upload o
             return
         async with gate:
             # A portrait composition suits the side panel. Wide scenes get their own wide layout.
-            ratio = ('16:9' if index == 0 else '4:3') if slide.get('_designer_style') else ordinary_image_ratio(slide, index+1)
+            ratio = slide.get('_designer_aspect_ratio') or (('16:9' if index == 0 else '4:3') if slide.get('_designer_style') else ordinary_image_ratio(slide, index+1))
             candidate = dict(slide)
             for attempt in range(3):
                 src = directory / f'generated-{index}-{attempt}.png'

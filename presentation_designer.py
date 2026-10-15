@@ -10,6 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from PIL import ImageFont
+from presentation_profiles import PROFILES, resolved_profile, readable_color
 from presentation_visuals import AI_LABEL, fit_rect, set_slide_notes
 
 STYLES = {'designer_soft', 'designer_strict'}
@@ -56,6 +57,12 @@ def plan_designer_images(slides, style):
     for i, item in enumerate(slides):
         item['_designer_style'] = style
         item['_designer_cover'] = i == 0
+        family = item.get('_designer_design', {}).get('family')
+        if family in PROFILES:
+            portrait = (i == 0 and family != 'technology') or (i > 0 and (
+                family == 'editorial' and (i+1)%3 in (1,2) or
+                family in ('technology','business') and (i+1)%2 == 0))
+            item['_designer_aspect_ratio'] = '3:4' if portrait else '16:9'
         item['_skip_ai_image'] = bool(item.get('chart')) or (i > 0 and item.get('designer', {}).get('layout') in (
             'process', 'comparison', 'sections', 'statement'))
     target = min(6, math.ceil(len(slides)/2))
@@ -97,10 +104,11 @@ def validate_designer(item):
 
 
 @lru_cache(maxsize=16)
-def metric_font(size, bold=False):
+def metric_font(size, bold=False, family=FONT):
     # DejaVu is already installed on Render; its wider metrics reserve breathing
     # room for the widely available Arial used in the editable PowerPoint file.
-    name = 'DejaVuSans-Bold.ttf' if bold else 'DejaVuSans.ttf'
+    base = 'DejaVuSerif' if family == 'Georgia' else 'DejaVuSans'
+    name = base + ('-Bold.ttf' if bold else '.ttf')
     locations = [Path('/usr/share/fonts/truetype/dejavu') / name,
                  Path('/Library/Fonts') / name,
                  Path(__file__).parent / 'fonts' / name]
@@ -130,8 +138,8 @@ def measured(font, text, size):
     return font.getlength(text)
 
 
-def wrap(text, width, size, bold=False):
-    font = metric_font(size, bold)
+def wrap(text, width, size, bold=False, family=FONT):
+    font = metric_font(size, bold, family)
     lines = []
     for paragraph in text.split('\n'):
         current = ''
@@ -153,20 +161,20 @@ def wrap(text, width, size, bold=False):
     return '\n'.join(lines)
 
 
-def text_node(text, box, color, size=30, minimum=28, bold=False, role='body'):
+def text_node(text, box, color, size=30, minimum=28, bold=False, role='body', family=FONT):
     x, y, width, height = box
     for chosen in range(size, minimum - 1, -1):
         # Reduce the font before breaking ordinary words across lines.
-        font = metric_font(chosen, bold)
+        font = metric_font(chosen, bold, family)
         words = str(text).split()
         if any(1 < len(w) <= 40 and not any(ord(c) > 0x2e7f for c in w)
                and measured(font, w, chosen) > width - 4 for w in words):
             continue
-        wrapped = wrap(str(text), width - 4, chosen, bold)
+        wrapped = wrap(str(text), width - 4, chosen, bold, family)
         lines = len(wrapped.split('\n'))
         if lines * chosen * 1.22 + 5 <= height:
             return {'type': 'text', 'text': wrapped, 'box': list(box), 'color': color,
-                    'size': chosen, 'font': FONT, 'bold': bold, 'role': role}
+                    'size': chosen, 'font': family, 'bold': bold, 'role': role}
     raise DesignerValidationError(f'Shorten {role}: text does not fit at a readable size')
 
 
@@ -188,6 +196,8 @@ GRADIENT = {'angle': 0, 'stops': [(0, '#080B10', 1), (.45, '#14225B', 1),
 
 def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
     """Plan the complete slide before mutating a PPTX; never truncate content."""
+    if item.get('_designer_design', {}).get('family') in PROFILES:
+        return build_profile_scene(item, asset, number, total, lang, style)
     title = clean(item.get('title'), 160, 'title')
     body = clean(item.get('content'), 480, 'body', optional=number == 1)
     design = validate_designer(item)
@@ -351,6 +361,134 @@ def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
     return scene
 
 
+def build_profile_scene(item, asset, number, total, lang, style):
+    """Four art directions with shared safe, editable output primitives."""
+    design = item['_designer_design']; family = design['family']; c = resolved_profile(design)
+    title = clean(item.get('title'),160,'title')
+    body = clean(item.get('content'),480,'body',optional=number==1)
+    structured = validate_designer(item); layout = structured['layout']; blocks = structured['blocks']
+    if not 1 <= number <= total: raise DesignerValidationError('Invalid slide number')
+    if asset and (not Path(asset['path']).is_file() or min(asset['width'],asset['height'])<=0):
+        raise DesignerValidationError('Invalid image asset')
+    if asset and blocks:
+        body='\n\n'.join(b['heading']+'\n'+b['text'] for b in blocks)
+        layout='photo'; blocks=[]
+    layout='cover' if number==1 else 'chart' if item.get('chart') else 'photo' if asset else layout
+    if layout=='photo' and not asset:layout='auto'
+    scene={'background':c['bg'],'layout':layout,'family':family,'nodes':[],
+           'notes':f'AlixDocBot. {style}. {family}\n'+(item.get('content') or item.get('point') or '')}
+    nodes=scene['nodes'];radius=28 if style=='designer_soft' else 0
+    # Keep supported script coverage when a decorative Latin/Cyrillic face is unsuitable.
+    heading_font=c['font'] if lang not in ('zh','ar') else 'Arial'
+    def txt(value,box,role='body',size=32,minimum=26,color=None):
+        node=text_node(value,box,color or c['body'],size,minimum,
+            c['bold'] if role=='title' else role=='subheading',role,
+            heading_font if role=='title' else c['body_font'])
+        if lang=='ar':node['rtl']=True
+        nodes.append(node)
+    def heading(box=(64,50,1152,190),size=72,minimum=40):
+        txt(title,box,'title',size,minimum,c['ink'])
+    def photo(box, full=False):
+        ratio=asset['width']/asset['height']; target=box[2]/box[3]
+        crop=asset.get('origin')!='user' and (full or min(ratio/target,target/ratio)>=.72)
+        rect=box if crop else fit_rect(asset['width'],asset['height'],box)
+        nodes.append({'type':'image','path':str(asset['path']),'box':list(rect),
+            'origin':asset.get('origin','ai'),'radius':radius if asset.get('origin')!='user' else 0,'crop':crop})
+    def fallback_photo():
+        nodes.clear();heading((64,48,1152,176),64,38)
+        txt(body,(64,250,700,405),size=32,minimum=24)
+        photo((810,250,406,390))
+    if layout=='cover':
+        try:
+            subtitle=clean(item.get('subtitle') or item.get('point') or body,180,'subtitle',optional=True)
+            if family=='technology' and asset and asset.get('origin')!='user':
+                photo((0,0,1280,720),True)
+                nodes.append({'type':'panel','box':[0,0,1280,720],'radius':0,
+                    'gradient':{'angle':0,'stops':[(0,c['bg'],.98),(.58,c['bg'],.88),(1,c['bg'],.3)]}})
+                heading((64,95,990,350),100,42)
+                if subtitle:txt(subtitle,(68,508,760,128),size=32,minimum=26)
+            elif asset:
+                try:
+                    heading((64,76,640,360),88 if family=='editorial' else 80,40)
+                    if subtitle:txt(subtitle,(68,485,612,152),size=31,minimum=24)
+                    photo((758,48,458,584))
+                except DesignerValidationError:
+                    nodes.clear();heading((64,54,1152,240),76,38)
+                    if subtitle:txt(subtitle,(64,370,580,240),size=32,minimum=24)
+                    photo((710,310,506,320))
+            else:
+                heading((64,100,1152,330),100,40)
+                if subtitle:txt(subtitle,(68,485,960,150),size=36,minimum=26)
+        except DesignerValidationError:
+            nodes.clear()
+            heading((64,50,1152,250),76,38)
+            if subtitle:txt(subtitle,(64,350,680 if asset else 1152,300),size=32,minimum=24)
+            if asset:photo((800,350,416,300))
+    elif layout=='photo':
+        try:
+            # Narrow text is only used when it fits; complete source copy is retained.
+            if len(body)>320 or len(title)>90:
+                fallback_photo()
+            elif family=='editorial' and number%3==2:
+                heading((64,62,600,194),68,40)
+                txt(body,(64,316,590,304),size=32,minimum=26)
+                photo((730,54,486,580))
+            elif (family=='editorial' and number%3==1) or (family=='technology' and number%2==0):
+                photo((64,54,536,580))
+                heading((662,66,554,196),62,40)
+                txt(body,(662,316,554,306),size=31,minimum=26)
+            elif family=='business' and number%2==0:
+                heading((64,64,580,200),68,40)
+                txt(body,(64,320,560,306),size=32,minimum=26)
+                photo((700,54,516,580))
+            elif family=='education' and number%2==0:
+                heading((64,50,1152,180),64,40)
+                txt(body,(64,290,480,340),size=32,minimum=26)
+                photo((620,252,596,380))
+            else:
+                heading((64,50,1152,180),72 if family=='editorial' else 64,40)
+                photo((64,270,650,360))
+                txt(body,(780,278,436,352),size=30,minimum=26)
+        except DesignerValidationError:
+            fallback_photo()
+    elif layout=='process':
+        heading((64,50,1152,190),72,40)
+        width=(1152-(len(blocks)-1)*32)/len(blocks)
+        for i,b in enumerate(blocks):
+            x=64+i*(width+32)
+            txt(f'{i+1:02}',(x,284,width,66),'subheading',48,40,c['accent'])
+            txt(b['heading'],(x,372,width,110),'subheading',33,24,c['ink'])
+            txt(b['text'],(x,500,width,165),size=28,minimum=22)
+            if i<len(blocks)-1:
+                nodes.append({'type':'connector','box':[x+75,319,width-57,2],'color':c['accent']})
+    elif layout in ('comparison','sections'):
+        heading((64,50,1152,185),72,40)
+        cols=3 if len(blocks)==3 else 2; rows=math.ceil(len(blocks)/cols)
+        width=(1152-48*(cols-1))/cols; height=370/rows
+        for i,b in enumerate(blocks):
+            x=64+(i%cols)*(width+48);y=270+(i//cols)*height
+            txt(b['heading'],(x,y,width,90 if rows==1 else 65),'subheading',38,24,c['accent'])
+            txt(b['text'],(x,y+(105 if rows==1 else 70),width,height-(110 if rows==1 else 75)),size=32,minimum=22)
+    elif layout=='chart':
+        heading((64,50,870 if asset else 1152,180),68,40)
+        txt(body,(64,280,420,340),size=30,minimum=24)
+        nodes.append({'type':'chart','box':[540,260,676,370],'data':copy.deepcopy(item['chart']),
+                      'dark':design['background']=='dark','palette':c})
+        if asset:photo((980,54,236,176))
+    else:
+        heading((64,80,1152,236),88 if family=='editorial' else 76,40)
+        txt(body,(190,368,1000,272),size=40,minimum=26,color=c['accent'] if layout=='statement' else c['body'])
+    label=f'{number:02} / {total:02}'
+    if asset:
+        if asset.get('origin')=='user':scene['notes']+='\nImage: supplied by user. Full frame preserved.'
+        else:
+            label+='    '+AI_LABEL.get(lang,AI_LABEL['en'])
+            scene['notes']+='\nImage: AI-generated illustration, not documentary evidence.'
+    txt(label,(64,675,1152,22),'footer',13,13,c['muted'])
+    validate_scene(scene)
+    return scene
+
+
 def validate_scene(scene):
     for node in scene['nodes']:
         x,y,w,h=node['box']
@@ -433,7 +571,7 @@ def render_scene(slide, scene, chart_renderer=None):
             tail=OxmlElement('a:tailEnd');tail.set('type','triangle');shape._element.spPr.get_or_add_ln().append(tail)
         elif node['type']=='chart':
             if chart_renderer is None:raise DesignerValidationError('A native chart renderer is required')
-            c=palette(node['dark']);conv=lambda color:tuple(bytes.fromhex(color[1:]))
+            c=node.get('palette') or palette(node['dark']);conv=lambda color:tuple(bytes.fromhex(color[1:]))
             chart_renderer(slide,x,y,w,h,node['data'],{'ink':conv(c['ink']),'mid':conv(c['body']),
               'mute':conv(c['muted']),'line':conv(c['accent']),'bg':conv(c['bg'])})
     set_slide_notes(slide, scene['notes'])
