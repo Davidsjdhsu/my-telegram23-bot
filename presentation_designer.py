@@ -60,7 +60,7 @@ def plan_designer_images(slides, style):
         item['_designer_cover'] = i == 0
         family = item.get('_designer_design', {}).get('family')
         if family in PROFILES:
-            portrait = (i == 0 and family != 'technology') or (i > 0 and (
+            portrait = (i == 0 and family != 'technology' and len(str(item.get('title') or '')) <= 44) or (i > 0 and (
                 family == 'editorial' and (i+1)%6 in (1,2,4) or
                 family in ('technology','business') and (i+1)%2 == 0))
             item['_designer_aspect_ratio'] = '3:4' if portrait else '16:9'
@@ -415,6 +415,11 @@ def build_profile_scene(item, asset, number, total, lang, style):
                     'gradient':{'angle':0,'stops':[(0,c['bg'],.98),(.58,c['bg'],.88),(1,c['bg'],.3)]}})
                 heading((64,95,990,350),100,42)
                 if subtitle:txt(subtitle,(68,508,760,128),size=32,minimum=26)
+            elif asset and len(title)>44:
+                # Give a long title the full width instead of stacking four narrow lines.
+                heading((64,50,1152,240),76,38)
+                if subtitle:txt(subtitle,(64,362,540,250),size=34,minimum=24)
+                photo((674,302,542,330))
             elif asset:
                 try:
                     heading((64,76,640,360),88 if family=='editorial' else 80,40)
@@ -491,6 +496,14 @@ def build_profile_scene(item, asset, number, total, lang, style):
         nodes.append({'type':'chart','box':[540,260,676,370],'data':copy.deepcopy(item['chart']),
                       'dark':design['background']=='dark','palette':c})
         if asset:photo((980,54,236,176))
+    elif number==total:
+        # A compact conclusion balances two readable columns instead of a small low paragraph.
+        try:
+            heading((64,138,520,390),80 if family=='editorial' else 72,38)
+            txt(body,(680,150,536,430),size=40,minimum=26,color=c['accent'] if layout=='statement' else c['body'])
+        except DesignerValidationError:
+            nodes.clear();heading((64,70,1152,200),72,38)
+            txt(body,(64,320,1152,320),size=38,minimum=26)
     else:
         heading((64,80,1152,236),88 if family=='editorial' else 76,40)
         txt(body,(190,368,1000,272),size=40,minimum=26,color=c['accent'] if layout=='statement' else c['body'])
