@@ -111,8 +111,28 @@ def validate_plan(value, count):
     return result
 
 
+def clean_cover_point(text, fallback):
+    """Remove explicit layout directions, not factual discussion of AI as a topic."""
+    clauses = re.split(r'(?<=[.!?;])\s+|,\s*(?=на обложке|on the cover)', text)
+    kept = []
+    for clause in clauses:
+        direction = re.search(
+            r'(?i)(?:на\s+обложке|для\s+обложки|on\s+the\s+cover|for\s+the\s+cover)'
+            r'(?:\s*[:—-]\s*|\s+)(?:(?:будет|будут|is|an?)\s+)?(?:[Ии][Ии][\s-]+|AI[\s-]+)?'
+            r'(?:иллюстрац|изображен|фото|illustration|image|photo)|'
+            r'^(?:добавь(?:те)?|размести(?:те)?|используй(?:те)?|покажи(?:те)?|add|place|use|show)'
+            r'\s+.{0,60}(?:иллюстрац|изображен|фото|illustration|image|photo)', clause)
+        if not direction:
+            kept.append(clause.strip())
+    if len(kept) == len(clauses): return text
+    result = ' '.join(kept).strip().rstrip('; ,')
+    if result and result[-1] not in '.!?': result += '.'
+    return result or fallback
+
+
 def finalize_plan_design(plan, data, lang='ru'):
     plan = copy.deepcopy(plan)
+    plan['slides'][0]['point'] = clean_cover_point(plan['slides'][0]['point'], plan['title'])
     if fictional_project(data):
         plan['fictional_concept'] = True
         validate_concept_copy(' '.join(s['title'] + '. ' + s['point'] for s in plan['slides']))
@@ -142,6 +162,9 @@ def plan_prompt(data, language_instruction):
 неожиданным журнальным углом. Для учебной презентации объясняй последовательно и понятно.
 Каждому слайду — короткое название и одна главная мысль. Сначала реши, что именно читатель
 поймёт на слайде, и запиши это в point. Не повторяй в point название раздела другими словами.
+point обложки станет видимым подзаголовком: только смысл темы, без указаний «на обложке фото»,
+«добавить ИИ-иллюстрацию», описаний оформления или процесса создания презентации.
+Указания к визуалам оставляй в design_summary, а не в title или point.
 Заголовки называй естественно и коротко, обычно 3–7 слов. Для обзора подходят названия
 разделов: «Номера с видом на виноградники», «Тосканская кухня». Не заставляй каждый
 заголовок звучать как утверждение или рекламный лозунг. Сохраняй названия пользователя.

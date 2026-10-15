@@ -13,7 +13,7 @@ from PIL import ImageFont
 from presentation_profiles import PROFILES, resolved_profile, readable_color
 from presentation_catalog import TEMPLATES, composition_for
 from presentation_compositions import build_catalog_scene
-from presentation_visuals import AI_LABEL, fit_rect, set_slide_notes
+from presentation_visuals import fit_rect, set_slide_notes
 
 STYLES = {'designer_soft', 'designer_strict'}
 FONT = 'Arial'
@@ -284,11 +284,8 @@ def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
             nodes.append({'type':'image','path':str(asset['path']),'box':list(fitted),
                           'origin':'user','radius':0,'crop':False})
         else:
-            source_ratio = asset['width'] / asset['height']
-            target_ratio = box[2] / box[3]
-            retained = min(source_ratio / target_ratio, target_ratio / source_ratio)
-            crop = cover or retained >= .72
-            image_box = box if crop else fit_rect(asset['width'], asset['height'], box)
+            crop = False
+            image_box = fit_rect(asset['width'], asset['height'], box)
             nodes.append({'type':'image','path':str(asset['path']),'box':list(image_box),
                           'origin':'ai','radius':radius,'crop':crop})
 
@@ -384,7 +381,6 @@ def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
 
     label=f'{number:02} / {total:02}'
     if asset and asset.get('origin') == 'ai':
-        label += '    ' + AI_LABEL.get(lang,AI_LABEL['en'])
         scene['notes'] += '\nImage: AI-generated illustration, not documentary evidence.'
     elif asset: scene['notes'] += '\nImage: supplied by user. Full frame preserved.'
     # Keep the original body available verbatim as speaker notes, too.
@@ -433,9 +429,8 @@ def build_profile_scene(item, asset, number, total, lang, style):
         color = (c['accent'] if number == 1 else c['secondary_ink']) if family == 'editorial' else c['ink']
         txt(title,box,'title',size,minimum,color)
     def photo(box, full=False):
-        ratio=asset['width']/asset['height']; target=box[2]/box[3]
-        crop=asset.get('origin')!='user' and (full or min(ratio/target,target/ratio)>=.72)
-        rect=box if crop else fit_rect(asset['width'],asset['height'],box)
+        crop=False
+        rect=fit_rect(asset['width'],asset['height'],box)
         nodes.append({'type':'image','path':str(asset['path']),'box':list(rect),
             'origin':asset.get('origin','ai'),'radius':radius if asset.get('origin')!='user' else 0,'crop':crop})
     def fallback_photo():
@@ -569,7 +564,6 @@ def build_profile_scene(item, asset, number, total, lang, style):
     if asset:
         if asset.get('origin')=='user':scene['notes']+='\nImage: supplied by user. Full frame preserved.'
         else:
-            label+='    '+AI_LABEL.get(lang,AI_LABEL['en'])
             scene['notes']+='\nImage: AI-generated illustration, not documentary evidence.'
     txt(label,(64,675,1152,22),'footer',13,13,c['muted'])
     validate_scene(scene)

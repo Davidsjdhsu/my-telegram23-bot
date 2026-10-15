@@ -174,6 +174,58 @@ def explicit_slide(caption, count):
     return int(match[1]) - 1 if match and 1 <= int(match[1]) <= count else None
 
 
+def requested_image_budget(text):
+    """Read explicit whole-deck image counts; never confuse slide/class numbers.
+
+    Returns (count, ai_only), or None when the request does not set a total.
+    Per-slide counts and ranges need a richer plan and are not a deck-wide limit.
+    """
+    words = {'ноль': 0, 'одна': 1, 'одну': 1, 'один': 1, 'одно': 1,
+             'два': 2, 'две': 2, 'три': 3, 'четыре': 4, 'пять': 5,
+             'шесть': 6, 'семь': 7, 'восемь': 8, 'девять': 9, 'десять': 10,
+             'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5}
+    noun = r'(?:иллюстраци\w*|картин\w*|изображени\w*|фотографи\w*|фото|images?|photos?|illustrations?|pictures?)\b'
+    number = r'(?:\d{1,2}|' + '|'.join(words) + r')'
+    adjectives = r'(?:(?:подходящ\w*|разн\w*|тематическ\w*|красив\w*|сгенерированн\w*|ии|ai|generated|suitable|different)[\s-]+){0,4}'
+    pattern = re.compile(r'(?<![\w\d–—-])(' + number + r')\s+(' + adjectives + noun + r')', re.I)
+    candidates = []
+    for match in pattern.finditer(text):
+        before, after = text[max(0, match.start()-20):match.start()], text[match.end():match.end()+55]
+        if re.search(r'\d\s*[-–—]\s*$', before) or re.match(r'\s*(?:на\s+кажд|на\s+слайд|per\s+slide|on\s+each)', after, re.I):
+            continue
+        raw = match[1].lower()
+        count = int(raw) if raw.isdigit() else words[raw]
+        ai_only = bool(re.search(r'\b(?:ии|ai)\b|сгенерирован', match[2], re.I) or
+                       re.match(r'\s+(?:через\s+ии|от\s+ии|сгенерирован)', after, re.I))
+        candidates.append((match.start(), (count, ai_only)))
+    for match in re.finditer(r'(?i)\b(?:без|no|without)\s+(?:(?:ии|ai)[\s-]+)?' + noun, text):
+        candidates.append((match.start(), (0, bool(re.search(r'\b(?:ии|ai)\b', match[0], re.I)))))
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None
+
+
+def apply_image_budget(slides, assets, text):
+    """Cap new generation before calling providers; retain uploaded photographs.
+
+    Keep the cover and spread remaining images through eligible slides. Native
+    diagrams are not replaced by photographs just to fill a numerical quota.
+    """
+    budget = requested_image_budget(text)
+    if budget is None: return
+    count, ai_only = budget
+    remaining = max(0, count - (0 if ai_only else sum(bool(a) for a in assets)))
+    eligible = [i for i, s in enumerate(slides)
+                if not assets[i] and not s.get('chart') and not s.get('_skip_ai_image')]
+    remaining = min(remaining, len(eligible))
+    if remaining == 1:
+        selected = {eligible[0]}
+    elif remaining > 1:
+        selected = {eligible[round(j*(len(eligible)-1)/(remaining-1))] for j in range(remaining)}
+    else:
+        selected = set()
+    for i in eligible:
+        if i not in selected: slides[i]['_skip_ai_image'] = True
+
+
 async def prepare_images(topic, slides, photos, captions, directory, generate, inspect, parse_json):
     """At most two image jobs at once, two repairs after rejection, no unchecked AI images.
 
@@ -230,6 +282,9 @@ User photos are retained even when the classifier is unavailable, using upload o
         slot = next((i for i,a in enumerate(assets) if a is None), None)
         if slot is not None:
             assets[slot] = asset
+
+    context = next((s['_request_context'] for s in slides if s.get('_request_context')), topic)
+    apply_image_budget(slides, assets, context)
 
     async def review(asset, index, slide):
         # Retry the SAME image after a transient checker failure, not the generator.
@@ -438,8 +493,6 @@ def render_slide(slide, item, asset, colors, number, total, lang, background, ch
     footer = slide.shapes.add_textbox(Inches(.75), Inches(7.03), Inches(11.8), Inches(.3))
     p = footer.text_frame.paragraphs[0]
     p.text = f'{number:02} / {total:02}'
-    if asset and asset['origin'] == 'ai':
-        p.text += '    ' + AI_LABEL.get(lang, AI_LABEL['en'])
     p.font.name = 'Calibri'
     p.font.size = Pt(11)
     p.font.color.rgb = RGBColor(*colors['mute'])

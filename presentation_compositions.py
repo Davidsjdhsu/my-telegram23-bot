@@ -2,7 +2,7 @@
 from pathlib import Path
 from presentation_catalog import TEMPLATES, composition_for
 from presentation_profiles import resolved_profile, readable_color
-from presentation_visuals import fit_rect, AI_LABEL
+from presentation_visuals import fit_rect
 
 
 def build_catalog_scene(item, asset, number, total, lang, style):
@@ -39,9 +39,9 @@ def build_catalog_scene(item, asset, number, total, lang, style):
             (c['accent'] if number==1 else c['secondary_ink']) if d['family']=='editorial' else c['accent'] if system in ('field','poster') else c['ink'])
     def photo(box,full=False):
         if not asset:return
-        ratio=asset['width']/asset['height'];target=box[2]/box[3]
-        crop=asset.get('origin')!='user' and (full or min(ratio/target,target/ratio)>=.72)
-        rect=box if crop else fit_rect(asset['width'],asset['height'],box)
+        # Image review sees the whole frame, so placement must preserve it too.
+        crop=False
+        rect=fit_rect(asset['width'],asset['height'],box)
         nodes.append({'type':'image','path':str(asset['path']),'box':list(rect),
                       'origin':asset.get('origin','ai'),'radius':radius,'crop':crop})
     def panel(box,fill):
@@ -51,8 +51,11 @@ def build_catalog_scene(item, asset, number, total, lang, style):
     def safe_photo():
         # A wider alternative for unusually long copy; never silently remove text.
         nodes.clear();head((m,40,w,190))
-        photo((m,258,w*.43,380))
-        txt(body,(m+w*.43+40,250,w*.57-40,405),size=30,minimum=24)
+        # Keep a large complete image when a shallow band would cut the subject.
+        left=comp!='photo_bottom'
+        pw=w*.43;tw=w-pw-40
+        photo((m if left else m+tw+40,258,pw,380))
+        txt(body,(m+pw+40 if left else m,250,tw,405),size=30,minimum=24)
     if comp.startswith('cover'):
         sub=clean(item.get('subtitle') or item.get('point') or body,180,'subtitle',optional=True)
         try:
@@ -87,6 +90,8 @@ def build_catalog_scene(item, asset, number, total, lang, style):
             if asset:photo((m+w*.59,340,w*.41,300))
     elif comp.startswith('photo'):
         try:
+            if comp in ('photo_top','photo_bottom') and asset['width']/asset['height'] < w/420:
+                raise DesignerValidationError('Use a deeper frame for this image')
             if comp in ('photo_left','photo_right'):
                 # The marginal systems reserve a title column; others lead with a full-width title.
                 if system in ('margin','editorial') and comp=='photo_right' and len(title)<65 and len(body)<260:
@@ -189,7 +194,6 @@ def build_catalog_scene(item, asset, number, total, lang, style):
     if asset:
         if asset.get('origin')=='user':scene['notes']+='\nImage: supplied by user. Full frame preserved.'
         else:
-            label+='    '+AI_LABEL.get(lang,AI_LABEL['en'])
             scene['notes']+='\nImage: AI-generated illustration, not documentary evidence.'
     txt(label,(m,675,w,24),'footer',13,13,c['muted'])
     return validate_scene(scene)
