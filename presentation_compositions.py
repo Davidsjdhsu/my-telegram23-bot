@@ -6,6 +6,21 @@ from presentation_visuals import fit_rect
 
 
 def build_catalog_scene(item, asset, number, total, lang, style):
+    from presentation_style_direction import build_style_scene, decorate_fallback, has_custom_palette
+    from presentation_designer import DesignerValidationError
+    # Keep the proven spacious compositions for dense copy and supplied evidence.
+    custom=has_custom_palette(item['_designer_design'])
+    evidence=bool(asset and item.get('designer',{}).get('layout') in ('comparison','conclusion'))
+    if not custom and not evidence:
+        try:
+            return build_style_scene(item, asset, number, total, lang, style)
+        except DesignerValidationError as exc:
+            if not str(exc).startswith('Shorten '):raise
+    scene=build_catalog_scene_previous(item, asset, number, total, lang, style)
+    return decorate_fallback(scene,item,asset,number,style,custom)
+
+
+def build_catalog_scene_previous(item, asset, number, total, lang, style):
     # Lazy import avoids a cycle while retaining exactly the same text fitter and adapter.
     from presentation_designer import clean, text_node, validate_designer, validate_scene, DesignerValidationError
     d=item['_designer_design'];t=TEMPLATES[d['template_id']];c=resolved_profile(d)

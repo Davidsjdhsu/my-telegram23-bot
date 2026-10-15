@@ -613,13 +613,40 @@ def render_scene(slide, scene, chart_renderer=None):
             gs.append(rgb);gs_list.append(gs)
         f.gradient_angle=g['angle']
 
+    def photo_geometry(shape,node,pw,ph):
+        rounded(shape,node.get('radius',0),pw,ph)
+        mask=node.get('mask','rect')
+        presets={'circle':'ellipse','triangle':'triangle','hexagon':'hexagon','chamfer':'snip2DiagRect'}
+        if mask in presets:
+            geom=shape._element.spPr.find(qn('a:prstGeom'));geom.set('prst',presets[mask])
+            for child in list(geom):geom.remove(child)
+            av=OxmlElement('a:avLst');geom.append(av)
+            if mask=='chamfer':
+                for name in ('adj1','adj2'):
+                    gd=OxmlElement('a:gd');gd.set('name',name);gd.set('fmla','val 8000');av.append(gd)
+
     for node in scene['nodes']:
         px,py,pw,ph=node['box'];x,y,w,h=[v/96 for v in node['box']]
         if node['type']=='panel':
             shape=slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE if node['radius'] else MSO_SHAPE.RECTANGLE,
                                         Inches(x),Inches(y),Inches(w),Inches(h))
             shape.name='Designer background';shape.line.fill.background()
+            # Native theme effects otherwise add an unwanted shadow to flat rules.
+            style_node=shape._element.find(qn('p:style'))
+            if style_node is not None:
+                effect_ref=style_node.find(qn('a:effectRef'))
+                if effect_ref is not None:effect_ref.set('idx','0')
             rounded(shape,node['radius'],pw,ph);fill(shape,node)
+            shape._element.spPr.append(OxmlElement('a:effectLst'))
+        elif node['type']=='photo_frame':
+            shape=slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,Inches(x),Inches(y),Inches(w),Inches(h))
+            shape.name='Designer photo frame';shape.fill.background()
+            photo_geometry(shape,node,pw,ph)
+            shape.line.color.rgb=RGBColor.from_string(node['color'][1:]);shape.line.width=Pt(node['width'])
+            style_node=shape._element.find(qn('p:style'))
+            if style_node is not None:
+                effect_ref=style_node.find(qn('a:effectRef'))
+                if effect_ref is not None:effect_ref.set('idx','0')
             shape._element.spPr.append(OxmlElement('a:effectLst'))
         elif node['type']=='text':
             shape=slide.shapes.add_textbox(Inches(x),Inches(y),Inches(w),Inches(h));shape.name='Designer '+node['role']
@@ -637,15 +664,20 @@ def render_scene(slide, scene, chart_renderer=None):
                 if node.get('rtl'):
                     from pptx.enum.text import PP_ALIGN
                     p.alignment=PP_ALIGN.RIGHT;p._p.get_or_add_pPr().set('rtl','1')
-        elif node['type']=='image':
+        elif node['type'] in ('image','background_image'):
             shape=slide.shapes.add_picture(node['path'],Inches(x),Inches(y),width=Inches(w),height=Inches(h))
-            shape.name='User photograph' if node['origin']=='user' else 'AI illustration'
+            shape.name=('Designer texture' if node['type']=='background_image' else
+                        'User photograph' if node['origin']=='user' else 'AI illustration')
+            if node.get('flip_h'):shape._element.spPr.xfrm.set('flipH','1')
+            if node.get('flip_v'):shape._element.spPr.xfrm.set('flipV','1')
             if node.get('crop'):
                 iw,ih=shape.image.size;source_ratio=iw/ih;target_ratio=w/h
                 if source_ratio>target_ratio:
                     shape.crop_left=shape.crop_right=(1-target_ratio/source_ratio)/2
                 else:shape.crop_top=shape.crop_bottom=(1-source_ratio/target_ratio)/2
-            rounded(shape,node.get('radius',0),pw,ph)
+            photo_geometry(shape,node,pw,ph)
+            if node.get('border_color'):
+                shape.line.color.rgb=RGBColor.from_string(node['border_color'][1:]);shape.line.width=Pt(node.get('border_width',1.5))
         elif node['type']=='connector':
             shape=slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,Inches(x),Inches(y),Inches(x if node.get('vertical') else x+w),Inches(y+h if node.get('vertical') else y))
             shape.line.color.rgb=RGBColor.from_string(node['color'][1:]);shape.line.width=Pt(1.5)
@@ -659,7 +691,8 @@ def render_scene(slide, scene, chart_renderer=None):
                 for j,cell_node in enumerate(row):
                     cell=table.cell(i,j);cell.margin_left=cell.margin_right=Inches(16/96)
                     cell.margin_top=cell.margin_bottom=Inches(10/96);cell.vertical_anchor=MSO_ANCHOR.TOP
-                    cell.fill.solid();cell.fill.fore_color.rgb=RGBColor.from_string(node['background'][1:])
+                    cell_bg=node.get('row_backgrounds',[node['background']]*len(node['cells']))[i]
+                    cell.fill.solid();cell.fill.fore_color.rgb=RGBColor.from_string(cell_bg[1:])
                     cell.text=cell_node['text'];cell.text_frame.word_wrap=False
                     for para in cell.text_frame.paragraphs:
                         para.font.name=cell_node['font'];para.font.size=Pt(cell_node['size']*.75)
@@ -669,7 +702,7 @@ def render_scene(slide, scene, chart_renderer=None):
                     for side in ('lnL','lnR','lnT','lnB'):
                         line=OxmlElement('a:'+side);line.set('w','6350')
                         fill_color=OxmlElement('a:solidFill');rgb=OxmlElement('a:srgbClr')
-                        rgb.set('val',node['accent'][1:] if side=='lnB' else node['background'][1:]);fill_color.append(rgb);line.append(fill_color);props.append(line)
+                        rgb.set('val',node['accent'][1:] if side=='lnB' else cell_bg[1:]);fill_color.append(rgb);line.append(fill_color);props.append(line)
         elif node['type']=='chart':
             if chart_renderer is None:raise DesignerValidationError('A native chart renderer is required')
             c=node.get('palette') or palette(node['dark']);conv=lambda color:tuple(bytes.fromhex(color[1:]))

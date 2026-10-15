@@ -5770,7 +5770,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         if len(saved.slides) != planned_slides:
             raise PresentationValidationError("Saved slide count differs from plan")
         for index, asset in enumerate(assets):
-            if asset and not any(shape.shape_type == 13 for shape in saved.slides[index].shapes):
+            if asset and not any(shape.shape_type == 13 and shape.name != 'Designer texture' for shape in saved.slides[index].shapes):
                 raise ImageDeliveryError("Image missing from saved presentation")
         pdf_path = os.path.join(visual_tmp.name, "presentation.pdf")
         pdf = canvas.Canvas(pdf_path, pagesize=A4)

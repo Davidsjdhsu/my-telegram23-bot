@@ -80,6 +80,12 @@ class CatalogTests(unittest.TestCase):
             with self.assertRaises((ps.PresentationValidationError,TypeError)):ps.validate_plan(q,8)
 
     def test_all_six_hundred_compositions_keep_text_images_and_valid_xml(self):
+        self.validate_catalog_style("designer_soft")
+
+    def test_strict_six_hundred_compositions_keep_text_images_and_valid_xml(self):
+        self.validate_catalog_style("designer_strict")
+
+    def validate_catalog_style(self, style):
         with tempfile.TemporaryDirectory() as td:
             path=Path(td)/'image.png';Image.new('RGB',(1200,800),'#789765').save(path)
             asset={'path':str(path),'width':1200,'height':800,'origin':'ai'}
@@ -90,11 +96,11 @@ class CatalogTests(unittest.TestCase):
                     with self.subTest(key=key,composition=comp):
                         item,n=specimen(key,comp)
                         photo=asset if comp.startswith(('cover','photo')) else None
-                        scene=pd.build_scene(item,photo,n,12)
+                        scene=pd.build_scene(item,photo,n,12,style=style)
                         self.assertEqual(scene['composition'],comp)
                         geometry.add(tuple((x['type'],tuple(x['box'])) for x in scene['nodes']))
                         texts=' '.join(x['text'] for x in scene['nodes'] if x['type']=='text')
-                        self.assertIn(' '.join(item['title'].split()),' '.join(texts.split()))
+                        self.assertIn(' '.join(item['title'].split()).casefold(),' '.join(texts.split()).casefold())
                         if photo:self.assertEqual(sum(x['type']=='image' for x in scene['nodes']),1)
                         if comp not in ('chart','comparison'):
                             for b in item.get('designer',{}).get('blocks',[]):

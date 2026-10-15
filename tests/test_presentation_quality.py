@@ -138,7 +138,7 @@ class EvidenceTests(unittest.TestCase):
                     self.assertEqual((len(table.rows),len(table.columns)),(4,3))
                     self.assertIn('Помощи'.lower(),table.cell(2,1).text.lower())
                     for slide in saved.slides:
-                        pics=[s for s in slide.shapes if s.shape_type==13]
+                        pics=[s for s in slide.shapes if s.shape_type==13 and s.name!='Designer texture']
                         self.assertEqual(len(pics),int(with_photo is not None))
                         for pic in pics:self.assertEqual((pic.crop_left,pic.crop_right,pic.crop_top,pic.crop_bottom),(0,0,0,0))
                     self.assertIsNotNone(saved._element.find('{http://schemas.openxmlformats.org/presentationml/2006/main}notesMasterIdLst'))

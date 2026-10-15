@@ -32,7 +32,8 @@ class PresentationPolishTests(unittest.TestCase):
                 scene=pd.build_scene({'title':'Что следует из рассмотренных примеров','content':body,'_designer_design':d},None,8,8)
                 title=next(n for n in scene['nodes'] if n.get('role')=='title')
                 text=next(n for n in scene['nodes'] if n.get('role')=='body')
-                if len(body)<300:self.assertLess(title['box'][0]+title['box'][2],text['box'][0])
+                ax,ay,aw,ah=title['box'];bx,by,bw,bh=text['box']
+                self.assertFalse(min(ax+aw,bx+bw)>max(ax,bx) and min(ay+ah,by+bh)>max(ay,by))
                 self.assertEqual(' '.join(text['text'].split()),body)
 
     def test_image_checker_prioritizes_slide_text_and_preserves_supporting_examples(self):
