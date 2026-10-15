@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from presentation_profiles import PROFILES, choose_design, profile_summary
+from presentation_catalog import TEMPLATES, VERSION as CATALOG_VERSION
 
 
 PRESENTATION_SYSTEM = (
@@ -58,6 +59,8 @@ def total_slides(value):
 def plan_key(data):
     fields = {k: data.get(k) for k in ('topic', 'user_text', 'extra', 'slides', 'mode',
                                       'content_lang', 'theme_name', 'custom_colors')}
+    if data.get('theme_name') in ('designer_soft','designer_strict'):
+        fields['catalog_version']=CATALOG_VERSION
     return hashlib.sha256(json.dumps(fields, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
@@ -90,6 +93,14 @@ def validate_plan(value, count):
         if not isinstance(secondary, str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', secondary):
             raise PresentationValidationError('Invalid secondary color')
         result['design'].update(family=design['family'], secondary=secondary)
+        if 'template_id' in design:
+            template = TEMPLATES.get(design['template_id']) if isinstance(design['template_id'],str) else None
+            if not template or template['family'] != design['family']:
+                raise PresentationValidationError('Invalid design template')
+            variant=design.get('variant',0)
+            if type(variant) is not int or not 0 <= variant < 2**32:
+                raise PresentationValidationError('Invalid design variant')
+            result['design'].update(template_id=template['id'], variant=variant)
     for i, slide in enumerate(slides, 1):
         if not isinstance(slide, dict) or type(slide.get('number')) is not int or slide['number'] != i:
             raise PresentationValidationError('Plan slide numbers must be consecutive')

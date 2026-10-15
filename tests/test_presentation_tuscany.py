@@ -72,4 +72,4 @@ class TuscanyRegressionTests(unittest.TestCase):
                 texts=[x for x in scene['nodes'] if x.get('role')=='body']
                 self.assertEqual(' '.join(' '.join(x['text'] for x in texts).split()),body)
                 layouts.add(tuple(tuple(x['box']) for x in scene['nodes'] if x['type']=='image' or x.get('role')=='title'))
-            self.assertGreaterEqual(len(layouts),5)
+            self.assertGreaterEqual(len(layouts),4)

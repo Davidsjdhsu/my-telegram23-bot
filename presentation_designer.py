@@ -11,6 +11,8 @@ from pathlib import Path
 
 from PIL import ImageFont
 from presentation_profiles import PROFILES, resolved_profile, readable_color
+from presentation_catalog import TEMPLATES, composition_for
+from presentation_compositions import build_catalog_scene
 from presentation_visuals import AI_LABEL, fit_rect, set_slide_notes
 
 STYLES = {'designer_soft', 'designer_strict'}
@@ -82,6 +84,11 @@ def plan_designer_images(slides, style):
                 family == 'editorial' and (i+1)%6 in (1,2,4) or
                 family in ('technology','business') and (i+1)%2 == 0))
             item['_designer_aspect_ratio'] = '3:4' if portrait else '16:9'
+        if item.get('_designer_design', {}).get('template_id') in TEMPLATES:
+            comp=composition_for(item,i+1,len(slides))
+            template=TEMPLATES[item['_designer_design']['template_id']]
+            portrait=comp=='cover_split' and template['system']!='cinema' and len(str(item.get('title') or ''))<=44
+            item['_designer_aspect_ratio']='3:4' if portrait else '16:9'
         item['_skip_ai_image'] = bool(item.get('chart')) or (i > 0 and item.get('designer', {}).get('layout') in (
             'process', 'comparison', 'sections', 'statement', 'conclusion'))
         # Sparse section lists gain a meaningful photo; comparisons and processes stay native.
@@ -139,7 +146,7 @@ def validate_designer(item):
 def metric_font(size, bold=False, family=FONT):
     # DejaVu is already installed on Render; its wider metrics reserve breathing
     # room for the widely available Arial used in the editable PowerPoint file.
-    base = 'DejaVuSerif' if family == 'Georgia' else 'DejaVuSans'
+    base = 'DejaVuSerif' if family in ('Georgia','Times New Roman') else 'DejaVuSans'
     name = base + ('-Bold.ttf' if bold else '.ttf')
     locations = [Path('/usr/share/fonts/truetype/dejavu') / name,
                  Path('/Library/Fonts') / name,
@@ -228,6 +235,9 @@ GRADIENT = {'angle': 0, 'stops': [(0, '#080B10', 1), (.45, '#14225B', 1),
 
 def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
     """Plan the complete slide before mutating a PPTX; never truncate content."""
+    if (item.get('_designer_design', {}).get('template_id') in TEMPLATES
+            and TEMPLATES[item['_designer_design']['template_id']]['family']==item['_designer_design'].get('family')):
+        return build_catalog_scene(item, asset, number, total, lang, style)
     if item.get('_designer_design', {}).get('family') in PROFILES:
         return build_profile_scene(item, asset, number, total, lang, style)
     title = clean(item.get('title'), 160, 'title')
@@ -643,7 +653,7 @@ def render_scene(slide, scene, chart_renderer=None):
                 else:shape.crop_top=shape.crop_bottom=(1-source_ratio/target_ratio)/2
             rounded(shape,node.get('radius',0),pw,ph)
         elif node['type']=='connector':
-            shape=slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,Inches(x),Inches(y),Inches(x+w),Inches(y))
+            shape=slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,Inches(x),Inches(y),Inches(x if node.get('vertical') else x+w),Inches(y+h if node.get('vertical') else y))
             shape.line.color.rgb=RGBColor.from_string(node['color'][1:]);shape.line.width=Pt(1.5)
             tail=OxmlElement('a:tailEnd');tail.set('type','triangle');shape._element.spPr.get_or_add_ln().append(tail)
         elif node['type']=='table':

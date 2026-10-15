@@ -39,8 +39,8 @@ class ProfileTests(unittest.TestCase):
 
     def test_explicit_palette_and_background_override_defaults(self):
         d=pp.choose_design({'topic':'Кофейня будущего','extra':'Тёмный фон, кремовые и медные акценты.'})
-        self.assertEqual(d,{'family':'editorial','background':'dark','accent':'#C48356','secondary':'#EAD5B8'})
-        self.assertEqual(pp.choose_design({'topic':'Синие киты'})['accent'],pp.PROFILES['education']['accent'])
+        self.assertEqual({k:d[k] for k in ('family','background','accent','secondary')},{'family':'editorial','background':'dark','accent':'#C48356','secondary':'#EAD5B8'})
+        self.assertEqual(pp.choose_design({'topic':'Синие киты'})['accent'],pp.TEMPLATES['d03']['accent'])
         self.assertEqual(pp.choose_design({'topic':'Технологии','extra':'Светлый фон. Акцент #991122'})['accent'],'#991122')
 
     def test_confirmed_design_survives_validation(self):
@@ -48,7 +48,7 @@ class ProfileTests(unittest.TestCase):
         base=f.make_plan();base['audience']='широкая аудитория'
         p=ps.finalize_plan_design(base,d)
         self.assertEqual(ps.validate_plan(p,8)['design'],p['design'])
-        self.assertIn('Журнальный',ps.format_plan(p))
+        self.assertIn('Кофейная редакция',ps.format_plan(p))
         self.assertIn('Georgia',ps.format_plan(p))
         self.assertEqual(ps.finalize_plan_design(f.make_plan(),{'theme_name':'minimal'}),f.make_plan())
 
@@ -58,7 +58,7 @@ class ProfileTests(unittest.TestCase):
             asset={'path':str(path),'width':1000,'height':750,'origin':'ai'}
             families=[]
             for family in pp.PROFILES:
-                d=pp.choose_design({'topic':'Кофейня'});d['family']=family
+                d=pp.choose_design({'topic':'Кофейня'});d['family']=family;d.pop('template_id',None)
                 # A consistent deck direction, and more than one photo composition.
                 geometries=set();fonts=set()
                 prs=Presentation();prs.slide_width=Inches(1280/96);prs.slide_height=Inches(7.5)
@@ -108,6 +108,6 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(len(sent),2)
         prs=Presentation(io.BytesIO(sent[0][1]))
         for slide in prs.slides:
-            self.assertEqual(str(slide.background.fill.fore_color.rgb),'241B17')
+            self.assertEqual(str(slide.background.fill.fore_color.rgb),'1F2529')
             title=next(s for s in slide.shapes if s.name=='Designer title')
             self.assertEqual(title.text_frame.paragraphs[0].font.name,'Georgia')

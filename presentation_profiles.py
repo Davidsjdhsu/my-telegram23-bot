@@ -1,6 +1,7 @@
 """Deterministic deck art direction. No model, network or user storage."""
 import copy
 import re
+from presentation_catalog import TEMPLATES, choose_template, template_palette, fingerprint
 
 PROFILES = {
     'editorial': dict(label='Журнальный', font='Georgia', body_font='Calibri', bold=False,
@@ -46,9 +47,13 @@ def choose_profile(data):
 
 
 def choose_design(data):
-    family = choose_profile(data); profile = PROFILES[family]
     text = '\n'.join(str(data.get(k) or '') for k in ('topic','user_text','extra')).lower().replace('ё','е')
-    background = 'dark' if family == 'technology' else 'light'
+    explicit_family = choose_profile(data) if re.search(
+        r'журнальн\w*|редакционн\w*|editorial|(?:технологическ\w*|делов\w*|учебн\w*)\s+(?:стил\w*|дизайн\w*|оформлен\w*)|(?:technology|tech|business|educational)\s+style', text) else None
+    template = choose_template(data, explicit_family)
+    family = template['family']; profile = template_palette(template)
+    text = '\n'.join(str(data.get(k) or '') for k in ('topic','user_text','extra')).lower().replace('ё','е')
+    background = 'dark' if int(template['paper'][1:3],16)<80 else 'light'
     matches = list(re.finditer(r'(темн\w*|светл\w*|бел\w*|черн\w*|dark|light|white|black)\s+(?:фон\w*|background)', text))
     if matches:
         background = 'dark' if re.match(r'темн|черн|dark|black',matches[-1][1]) else 'light'
@@ -67,12 +72,13 @@ def choose_design(data):
     colors = [v for _,v in sorted(colors)]
     accent = colors[-1] if colors else profile['bright' if background=='dark' else 'accent']
     secondary = colors[-2] if len(colors)>1 else profile['secondary']
-    return {'family':family,'background':background,'accent':accent,'secondary':secondary}
+    return {'family':family,'background':background,'accent':accent,'secondary':secondary,
+            'template_id':template['id'],'variant':fingerprint(str(data.get('topic') or data.get('user_text') or ''))}
 
 
 def profile_summary(design, lang='ru'):
-    family=design['family'];p=PROFILES[family]
-    name=LABELS.get(lang,{}).get(family,p['label'] if lang=='ru' else LABELS['en'][family])
+    family=design['family'];t=TEMPLATES.get(design.get('template_id'));p=template_palette(t) if t else PROFILES[family]
+    name=(f"№{t['number']:02} «{t['name']}»" if lang=='ru' else f"Design {t['number']:02}") if t else LABELS.get(lang,{}).get(family,p['label'] if lang=='ru' else LABELS['en'][family])
     if lang=='ru':
         return f"{name}: {'тёмный' if design['background']=='dark' else 'светлый'} фон, заголовки {p['font']}, разные композиции слайдов"
     return f"{name}: {design['background']} background, {p['font']} headings, varied slide compositions"
@@ -96,7 +102,8 @@ def readable_color(color, background, target=4.5):
 
 
 def resolved_profile(design):
-    p=copy.deepcopy(PROFILES[design['family']]);dark=design['background']=='dark'
+    t=TEMPLATES.get(design.get('template_id'))
+    p=template_palette(t) if t and t['family']==design['family'] else copy.deepcopy(PROFILES[design['family']]);dark=design['background']=='dark'
     p['bg']=p['dark'] if dark else p['light']
     p['ink']=p['secondary'] if dark and design['family']=='editorial' else '#F3F6F8' if dark else p['ink']
     p['body']='#DCE4E5' if dark else p['body']
