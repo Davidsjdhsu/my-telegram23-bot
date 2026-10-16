@@ -121,8 +121,11 @@ def review_prompt(topic, slide):
         'Для chamfer оцени исходный кадр со срезанными на 8% углами. '
         'Разрешай форму только если полностью сохраняются главный объект, лица, важные детали и смысл сцены. '
         'Для панорам, групп людей, документа или при сомнениях верни safe_frames: []. '
-        'При отказе добавь replacement_scene: одно короткое описание подходящей реальной сцены '
-        'на английском, без надписей, макетов и инструкций для дизайнера. '
+        'При отказе добавь replacement_scene: одно короткое описание более простой подходящей реальной сцены '
+        'на английском, без надписей, макетов и инструкций для дизайнера. Сохраняй предмет и смысл слайда. '
+        'Убери сложное взаимодействие рук, множество мелких деталей, экранов и плакатов. '
+        'Предпочитай одного главного героя целиком в спокойной естественной обстановке; '
+        'не требуй изображения болезни, анатомии или невидимой причины. '
         'relevant=true если показан предмет или подходящая конкретная сцена слайда. '
         'Фото может сопровождать объяснение: от него не требуется показывать все тезисы. '
         'Однако видимое явление не должно подменять другое, невидимое явление из объяснения. '
@@ -379,6 +382,8 @@ async def prepare_images(topic, slides, photos, captions, directory, generate, i
             # A portrait composition suits the side panel. Wide scenes get their own wide layout.
             ratio = slide.get('_designer_aspect_ratio') or (('16:9' if index == 0 else '4:3') if slide.get('_designer_style') else ordinary_image_ratio(slide, index+1))
             candidate = dict(slide)
+            if slide.get('_retry_scene'):
+                candidate['image_prompt'] = slide['_retry_scene']
             for attempt in range(3):
                 src = directory / f'generated-{index}-{attempt}.png'
                 try:
@@ -391,6 +396,8 @@ async def prepare_images(topic, slides, photos, captions, directory, generate, i
                     verdict = await review(asset, index, slide)
                     if verdict is None or verdict.get('requires_verified_source') is True:
                         # More random generations cannot verify a technical component.
+                        log.warning('image_review slide=%d reason=%s', index+1,
+                                    'unavailable' if verdict is None else 'requires_verified_source')
                         break
                     if approved(verdict) and asset['digest'] not in unique:
                         unique.add(asset['digest'])
@@ -403,6 +410,7 @@ async def prepare_images(topic, slides, photos, captions, directory, generate, i
                     replacement = verdict.get('replacement_scene')
                     if isinstance(replacement, str) and 10 <= len(replacement.strip()) <= 700:
                         candidate['image_prompt'] = replacement.strip()
+                        slide['_retry_scene'] = replacement.strip()
                     reason = ('duplicate' if approved(verdict) else
                               ','.join(k for k in ('has_text', 'has_chart', 'defective') if verdict[k]) or 'irrelevant')
                     log.warning('image_review slide=%d reason=%s attempt=%d', index+1, reason, attempt)

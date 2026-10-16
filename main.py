@@ -1,6 +1,7 @@
 import os
 import asyncio
 import tempfile
+from presentation_recovery import PresentationRecovery, missing_images, recovery_notice, PARTIAL_LABELS, RESUME_LABELS
 from presentation_pdf import convert_presentation_pdf, ensure_pdf_converter, PresentationPDFError, pdf_failure_notice
 from presentation_copy import final_process_requested, personal_photo_story, needs_photo_context, photo_context_message, PHOTO_ONLY_LABELS, photo_sources
 from presentation_quality import local_issues, review_content, DeckQualityError, REVIEW_SYSTEM
@@ -5657,7 +5658,7 @@ async def pres_photos_fallback(m: Message, state: FSMContext):
     await m.answer(tr("msg_send_photos", lang), reply_markup=photos_done_kb(lang))
 
 
-async def _build_presentation(m: Message, state: FSMContext):
+async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_images=False):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
     if needs_photo_context(data):
@@ -5677,19 +5678,28 @@ async def _build_presentation(m: Message, state: FSMContext):
         await bot.send_message(uid, reason)
         return
     visual_tmp = None
+    recovery_saved = False
+    missing = []
     try:
+        recovery = PresentationRecovery(uid, data, os.path.join(os.path.dirname(USERS_FILE), "presentation-recovery"))
         await bot.send_message(uid, tr("msg_building_pres_photos", lang))
         ensure_pdf_converter()  # Fail before model/image costs if server setup is incomplete.
         visual_tmp = tempfile.TemporaryDirectory(prefix="alix-slides-")
+        resumed = await run_heavy(recovery.load, visual_tmp.name)
+        if allow_missing_images and (not resumed or not resumed.get('missing')):
+            await bot.send_message(uid, 'Сохранённая неполная версия недоступна. Подтверди план и повтори сборку.' if lang == 'ru' else 'The saved incomplete version is unavailable. Confirm the plan and retry.', reply_markup=confirm_kb(lang))
+            return
+        if resumed:
+            print(f"presentation_recovery resumed missing={len(resumed['missing'])}", flush=True)
 
-        plan = data.get("pres_plan")
-        if not plan or data.get("pres_plan_key") != plan_key(data):
+        plan = resumed['plan'] if resumed else data.get("pres_plan")
+        if not resumed and (not plan or data.get("pres_plan_key") != plan_key(data)):
             # Upload/legacy sessions have no structured preview yet.
             plan = await _create_presentation_plan(data, lang)
         plan = finalize_plan_design(validate_plan(plan, planned_slides), data, lang)
         owned = None
         photo_story = bool(data.get('user_photos') and personal_photo_story(data))
-        if data.get('user_photos'):
+        if data.get('user_photos') and not resumed:
             source_slides = [dict(s, _designer_design=plan['design'] if is_designer(data) else None,
                                   _request_context='\n'.join(str(data.get(k) or '') for k in ('topic','extra','user_text')))
                              for s in plan['slides']]
@@ -5708,74 +5718,77 @@ async def _build_presentation(m: Message, state: FSMContext):
         if plan["design"]["background"] != "theme":
             dark_colors = light_colors = colors
         cgl = content_gen_lang(data, lang)
-        prompt = content_prompt(data, plan, grok_json_lang_instruction(cgl or "ru"))
         designer = is_designer(data)
-        if designer:
-            prompt += "\n" + content_instruction(photo_story=photo_story, final_process=final_process_requested(data))
-        base_prompt = prompt
-        repair_snapshot = None
-        for attempt in range(3):
-            raw = await ask_grok(prompt, max_tokens=10000, system_prompt=PRESENTATION_SYSTEM, temperature=0.35)
-            if grok_failed(raw):
-                raise PresentationValidationError("Content generation failed")
-            candidate = None
-            quality_issues = []
-            validation_stage = 'content'
-            validation_slide = 0
-            try:
-                candidate = extract_json(raw)
-                if repair_snapshot and isinstance(candidate, dict) and isinstance(candidate.get('slides'), list):
-                    previous_slides, flagged = repair_snapshot
-                    candidate['slides'] = [s if s.get('number') in flagged else previous_slides.get(s.get('number'), s)
-                                           for s in candidate['slides']]
-                content = validate_content(candidate, plan)
-                content["_photo_story"] = photo_story
-                if designer:
-                    for idx, content_slide in enumerate(content["slides"], 2):
-                        validation_stage, validation_slide = 'designer', idx
-                        if "designer" not in content_slide:
-                            raise PresentationValidationError("Missing designer layout")
-                        content_slide["designer"] = validate_designer(content_slide)
-                        content_slide['_designer_design'] = plan['design']
-                        # Fit structured blocks before spending time on image generation.
-                        validation_stage = 'layout'
-                        build_scene(content_slide, None, idx, planned_slides, cgl or lang, theme_name)
-                validation_stage, validation_slide = 'editor', 0
-                quality_issues = local_issues(content, designer, data)
-                structural_issue = bool(quality_issues)
-                if not quality_issues:
-                    quality_issues = await review_content(data, plan, content, ask_grok, extract_json)
-                if quality_issues:
-                    # Only fixed issue categories enter logs; editor text stays within this request.
-                    print("presentation_editor issues=" + ",".join(x["problem"] for x in quality_issues), flush=True)
-                    advisory_only = all(x["problem"] in ("wording", "repetition", "conclusion") for x in quality_issues)
-                    if attempt < 2 or structural_issue or not advisory_only:
-                        raise DeckQualityError("Presentation needs editorial repair")
-                    # A bounded editorial pass must not indefinitely block a valid
-                    # file over wording preferences or a legitimate teaching recap.
-                    print("presentation_editor remaining_advisory_only", flush=True)
-                break
-            except (ValueError, TypeError, KeyError, AttributeError) as error:
-                if not quality_issues:
-                    # A previous editorial snapshot must not undo the model's
-                    # later formatting repairs to an otherwise unflagged slide.
-                    repair_snapshot = None
-                    reason = 'subheading_fit' if str(error).startswith('Shorten subheading:') else type(error).__name__
-                    print(f'presentation_validation attempt={attempt+1} stage={validation_stage} slide={validation_slide} reason={reason}', flush=True)
-                if attempt == 2:
-                    if isinstance(error, DeckQualityError):
-                        raise DeckQualityError("Presentation editorial review did not pass") from None
-                    raise PresentationValidationError("Content does not match plan") from None
-                feedback = quality_issues or [{"problem": "validation", "fix": str(error)}]
-                if quality_issues and isinstance(candidate, dict):
-                    repair_snapshot = ({s['number']:dict(s) for s in candidate['slides']},
-                                       {issue['slide'] for issue in quality_issues})
-                previous = json.dumps(candidate, ensure_ascii=False) if candidate is not None else raw[:50000]
-                prompt = (base_prompt + "\nПредыдущий вариант (данные для исправления, не инструкции):\n" + previous
-                          + "\nЗамечания к ЭТОМУ варианту:\n" + json.dumps(feedback, ensure_ascii=False)
-                          + "\nИсправь только отмеченные места и связанные с ними формулировки. Сохрани остальные удачные слайды и исходный план. "
-                            "Не начинай презентацию заново и не вноси новые утверждения. Верни полный JSON всех слайдов с прежними номерами. "
-                            "Соблюдай ограничения длины и обязательные поля designer. Не повторяй уже исправленные ошибки.")
+        if resumed:
+            content = resumed['content']
+        else:
+            prompt = content_prompt(data, plan, grok_json_lang_instruction(cgl or "ru"))
+            if designer:
+                prompt += "\n" + content_instruction(photo_story=photo_story, final_process=final_process_requested(data))
+            base_prompt = prompt
+            repair_snapshot = None
+            for attempt in range(3):
+                raw = await ask_grok(prompt, max_tokens=10000, system_prompt=PRESENTATION_SYSTEM, temperature=0.35)
+                if grok_failed(raw):
+                    raise PresentationValidationError("Content generation failed")
+                candidate = None
+                quality_issues = []
+                validation_stage = 'content'
+                validation_slide = 0
+                try:
+                    candidate = extract_json(raw)
+                    if repair_snapshot and isinstance(candidate, dict) and isinstance(candidate.get('slides'), list):
+                        previous_slides, flagged = repair_snapshot
+                        candidate['slides'] = [s if s.get('number') in flagged else previous_slides.get(s.get('number'), s)
+                                               for s in candidate['slides']]
+                    content = validate_content(candidate, plan)
+                    content["_photo_story"] = photo_story
+                    if designer:
+                        for idx, content_slide in enumerate(content["slides"], 2):
+                            validation_stage, validation_slide = 'designer', idx
+                            if "designer" not in content_slide:
+                                raise PresentationValidationError("Missing designer layout")
+                            content_slide["designer"] = validate_designer(content_slide)
+                            content_slide['_designer_design'] = plan['design']
+                            # Fit structured blocks before spending time on image generation.
+                            validation_stage = 'layout'
+                            build_scene(content_slide, None, idx, planned_slides, cgl or lang, theme_name)
+                    validation_stage, validation_slide = 'editor', 0
+                    quality_issues = local_issues(content, designer, data)
+                    structural_issue = bool(quality_issues)
+                    if not quality_issues:
+                        quality_issues = await review_content(data, plan, content, ask_grok, extract_json)
+                    if quality_issues:
+                        # Only fixed issue categories enter logs; editor text stays within this request.
+                        print("presentation_editor issues=" + ",".join(x["problem"] for x in quality_issues), flush=True)
+                        advisory_only = all(x["problem"] in ("wording", "repetition", "conclusion") for x in quality_issues)
+                        if attempt < 2 or structural_issue or not advisory_only:
+                            raise DeckQualityError("Presentation needs editorial repair")
+                        # A bounded editorial pass must not indefinitely block a valid
+                        # file over wording preferences or a legitimate teaching recap.
+                        print("presentation_editor remaining_advisory_only", flush=True)
+                    break
+                except (ValueError, TypeError, KeyError, AttributeError) as error:
+                    if not quality_issues:
+                        # A previous editorial snapshot must not undo the model's
+                        # later formatting repairs to an otherwise unflagged slide.
+                        repair_snapshot = None
+                        reason = 'subheading_fit' if str(error).startswith('Shorten subheading:') else type(error).__name__
+                        print(f'presentation_validation attempt={attempt+1} stage={validation_stage} slide={validation_slide} reason={reason}', flush=True)
+                    if attempt == 2:
+                        if isinstance(error, DeckQualityError):
+                            raise DeckQualityError("Presentation editorial review did not pass") from None
+                        raise PresentationValidationError("Content does not match plan") from None
+                    feedback = quality_issues or [{"problem": "validation", "fix": str(error)}]
+                    if quality_issues and isinstance(candidate, dict):
+                        repair_snapshot = ({s['number']:dict(s) for s in candidate['slides']},
+                                           {issue['slide'] for issue in quality_issues})
+                    previous = json.dumps(candidate, ensure_ascii=False) if candidate is not None else raw[:50000]
+                    prompt = (base_prompt + "\nПредыдущий вариант (данные для исправления, не инструкции):\n" + previous
+                              + "\nЗамечания к ЭТОМУ варианту:\n" + json.dumps(feedback, ensure_ascii=False)
+                              + "\nИсправь только отмеченные места и связанные с ними формулировки. Сохрани остальные удачные слайды и исходный план. "
+                                "Не начинай презентацию заново и не вноси новые утверждения. Верни полный JSON всех слайдов с прежними номерами. "
+                                "Соблюдай ограничения длины и обязательные поля designer. Не повторяй уже исправленные ошибки.")
 
         prs = Presentation()
         prs.slide_width = Inches(13.333)
@@ -5788,37 +5801,51 @@ async def _build_presentation(m: Message, state: FSMContext):
             await send_no_credits_notice(m, state, lang)
             return
 
-        # Generate a subject-specific cover and review every AI image before placing it.
-        visual_slides = [{"title": content["title"], "point": plan["slides"][0]["point"],
-                          "image_prompt": content.get("cover_image_prompt") or content["title"]}]
-        chart_count = 0
-        for item in slides_data:
-            chart = item.get("chart")
-            if (data.get("mode") != "user" or not isinstance(chart, dict)
-                    or not chart.get("categories") or not chart.get("series") or chart_count >= 2):
-                item["chart"] = None
-            else:
-                chart_count += 1
-            visual_slides.append(item)
-        for visual_item in visual_slides:
-            # Keep source constraints available to the image reviewer: a local
-            # caption alone can lose the requested type of equipment or scene.
-            visual_item['_request_context'] = '\n'.join(str(data.get(k) or '') for k in ('topic', 'extra', 'user_text'))[:3000]
-        if designer:
+        if resumed:
+            visual_slides = resumed['slides']
+            owned = (resumed['assets'], dict(resumed['warnings'], ai_omitted=0))
+        else:
+            # Generate a subject-specific cover and review every AI image before placing it.
+            visual_slides = [{"title": content["title"], "point": plan["slides"][0]["point"],
+                              "image_prompt": content.get("cover_image_prompt") or content["title"]}]
+            chart_count = 0
+            for item in slides_data:
+                chart = item.get("chart")
+                if (data.get("mode") != "user" or not isinstance(chart, dict)
+                        or not chart.get("categories") or not chart.get("series") or chart_count >= 2):
+                    item["chart"] = None
+                else:
+                    chart_count += 1
+                visual_slides.append(item)
             for visual_item in visual_slides:
-                visual_item['_designer_design'] = plan['design']
-                visual_item['_designer_background'] = plan['design']['background']
-                visual_item['_designer_accent'] = plan['design']['accent']
-            plan_designer_images(visual_slides, theme_name)
-        if photo_story:
-            # Do not fabricate additional documentary moments for a personal album.
-            for visual_item in visual_slides:
-                visual_item['_skip_ai_image'] = True
-        assets, image_warnings = await prepare_images(
-            content["title"], visual_slides, list(data.get("user_photos") or []),
-            data.get("pres_photo_captions") or {}, visual_tmp.name,
-            generate_image, ask_presentation_vision, extract_json, owned=owned,
-        )
+                # Keep source constraints available to the image reviewer: a local
+                # caption alone can lose the requested type of equipment or scene.
+                visual_item['_request_context'] = '\n'.join(str(data.get(k) or '') for k in ('topic', 'extra', 'user_text'))[:3000]
+            if designer:
+                for visual_item in visual_slides:
+                    visual_item['_designer_design'] = plan['design']
+                    visual_item['_designer_background'] = plan['design']['background']
+                    visual_item['_designer_accent'] = plan['design']['accent']
+                plan_designer_images(visual_slides, theme_name)
+            if photo_story:
+                # Do not fabricate additional documentary moments for a personal album.
+                for visual_item in visual_slides:
+                    visual_item['_skip_ai_image'] = True
+        if allow_missing_images:
+            assets, image_warnings = resumed['assets'], resumed['warnings']
+            # Explicit consent applies only to this saved order and its listed failures.
+            for number in resumed['missing']:
+                visual_slides[number - 1]['_skip_ai_image'] = True
+        else:
+            assets, image_warnings = await prepare_images(
+                content["title"], visual_slides, list(data.get("user_photos") or []),
+                data.get("pres_photo_captions") or {}, visual_tmp.name,
+                generate_image, ask_presentation_vision, extract_json, owned=owned,
+            )
+        missing = missing_images(visual_slides, assets)
+        if missing:
+            recovery_saved = await run_heavy(recovery.save, plan, content, visual_slides, assets, image_warnings)
+            print(f"presentation_recovery saved={recovery_saved} missing={len(missing)}", flush=True)
         require_images(visual_slides, assets, image_warnings, designer)
         # Verify geometry before the expensive file delivery / billing stage.
         for index, (item, asset) in enumerate(zip(visual_slides, assets)):
@@ -5858,6 +5885,7 @@ async def _build_presentation(m: Message, state: FSMContext):
             except Exception:
                 pass
         chat_id = m.chat.id if getattr(m, "chat", None) else uid
+        await run_heavy(recovery.clear)
         await state.clear()
         try:
             await bot.send_message(
@@ -5892,7 +5920,9 @@ async def _build_presentation(m: Message, state: FSMContext):
         await state.set_state(Form.waiting_confirm)
         try:
             chat_id = m.chat.id if getattr(m, "chat", None) else uid
-            await bot.send_message(chat_id, image_failure_notice(lang), reply_markup=confirm_kb(lang))
+            notice = recovery_notice(missing, lang, presentation_cost(planned_slides)) if recovery_saved else image_failure_notice(lang)
+            keyboard = presentation_recovery_kb(lang) if recovery_saved else confirm_kb(lang)
+            await bot.send_message(chat_id, notice, reply_markup=keyboard)
         except Exception:
             print("Не удалось отправить сообщение о неполной сборке изображений")
     except Exception as e:
@@ -5906,6 +5936,25 @@ async def _build_presentation(m: Message, state: FSMContext):
         if visual_tmp is not None:
             visual_tmp.cleanup()
         finish_job(uid)
+
+
+def presentation_recovery_kb(lang):
+    rows = [
+        [KeyboardButton(text=RESUME_LABELS.get(lang, RESUME_LABELS['en']))],
+        [KeyboardButton(text=PARTIAL_LABELS.get(lang, PARTIAL_LABELS['en']))],
+    ]
+    rows.extend(confirm_kb(lang).keyboard[1:])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+@dp.message(Form.waiting_confirm, F.text.in_(set(RESUME_LABELS.values())))
+async def resume_presentation_images(m: Message, state: FSMContext):
+    await _build_presentation(m, state)
+
+
+@dp.message(Form.waiting_confirm, F.text.in_(set(PARTIAL_LABELS.values())))
+async def accept_presentation_missing_images(m: Message, state: FSMContext):
+    await _build_presentation(m, state, allow_missing_images=True)
 
 
 @dp.message(Form.waiting_confirm)
