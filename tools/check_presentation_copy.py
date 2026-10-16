@@ -42,6 +42,7 @@ async def main():
     async with AsyncOpenAI(api_key=os.environ['XAI_API_KEY'],base_url='https://api.x.ai/v1',max_retries=0) as client:
         api=adapters(client)
         for name,topic,style,extra in CASES:
+            if len(sys.argv)>1 and name not in sys.argv[1:]:continue
             env,state,sent=fixtures.BuildTests().build_env(6)
             env.update({k:api[k] for k in ('ask_grok','extract_json','grok_failed','_create_presentation_plan')})
             env.update(local_issues=pq.local_issues,DeckQualityError=pq.DeckQualityError)
