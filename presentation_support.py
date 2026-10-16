@@ -1,3 +1,4 @@
+from presentation_diagrams import DIAGRAM_INSTRUCTION, validate_diagram
 """Validated presentation plans; no network, Telegram or billing dependencies."""
 from presentation_copy import source_instruction, personal_photo_story
 import copy
@@ -169,6 +170,7 @@ def plan_prompt(data, language_instruction):
 Всего ровно {count} слайдов ВКЛЮЧАЯ обложку: номер 1 — обложка, 2–{count} — содержание.
 Сохрани явно указанное название, цель, аудиторию и все обязательные разделы. Не заменяй тему
 неожиданным журнальным углом. Для учебной презентации объясняй последовательно и понятно.
+Для механизма предусмотрите все необходимые переходы и условия, включая возврат в цикле. Явно запрошенной схеме выдели слайд с подходящей мыслью. Не добавляй этапы ради красивого плана.
 Каждому слайду — короткое название и одна главная мысль. Сначала реши, что именно читатель
 поймёт на слайде, и запиши это в point. Не повторяй в point название раздела другими словами.
 point обложки станет видимым подзаголовком: только смысл темы, без указаний «на обложке фото»,
@@ -264,6 +266,7 @@ def content_prompt(data, plan, language_instruction):
 и аудиторию проекта, а не приглашать воспользоваться несуществующим сервисом.
 «В такой концепции датчик может уменьшать свет в пустом номере» точнее, чем
 «Все отели автоматически экономят ресурсы». Не обещай эффект, который не следует из механизма.
+Сначала выбери visual_kind по правилам diagram ниже. Следующие требования image_prompt относятся ТОЛЬКО к photo; для technical_diagram image_prompt пустой.
 image_prompt — конкретная физическая сцена или предмет, непосредственно объясняющий смысл
 этого слайда, на английском: 1–2 предложения, до 60 слов. Начинай с главного объекта и действия.
 Это подпись к воображаемой фотографии, а не инструкция создать слайд.
@@ -286,10 +289,12 @@ visual_layout: "split" для объяснения с фото рядом, "wide
 cover_image_prompt — отдельная сцена по теме всей презентации на английском с теми же правилами.
 Не изображай вымышленный аппарат как конкретный исторический объект.
 {chart_rule}
+{DIAGRAM_INSTRUCTION}
 {source_instruction(data)}
 Только JSON: {{"title":"...","cover_image_prompt":"...","slides":[{{"number":2,"title":"...",
-"content":"короткий текст","image_prompt":"...","visual_layout":"split|wide|focus","chart":null}}]}}.
-Заполни все {count} элементов.{language_instruction}'''
+"content":"короткий текст","visual_kind":"photo|technical_diagram","diagram":null,"image_prompt":"...","visual_layout":"split|wide|focus","chart":null}}]}}.
+Заполни все {count} элементов. При исправлении image_mismatch с требованием technical_diagram обязательно замени photo на technical_diagram, заполни diagram, очисти image_prompt и designer.blocks. Простая смена ракурса детали не исправляет это замечание.
+На diagram видны ТОЛЬКО title и nodes: нужные уточнения внеси в nodes, а не только в content.{language_instruction}'''
 
 
 def validate_content(value, plan):
@@ -310,6 +315,14 @@ def validate_content(value, plan):
     for slide, item in zip(value['slides'], expected):
         if not isinstance(slide, dict) or type(slide.get('number')) is not int or slide['number'] != item['number']:
             raise PresentationValidationError('Body slide numbers do not match plan')
+        diagram = validate_diagram(slide.get('diagram'))
+        visual_kind = slide.get('visual_kind', 'photo')
+        if visual_kind not in ('photo', 'technical_diagram'):
+            raise PresentationValidationError('Invalid visual kind')
+        if visual_kind == 'technical_diagram' and not diagram:
+            raise PresentationValidationError('Technical explanation needs an editable diagram, not an invented component photo')
+        if diagram and slide.get('chart'):
+            raise PresentationValidationError('Use either diagram or chart on one slide')
         body_value = slide.get('content')
         # Structured layouts already carry visible copy. Models occasionally omit
         # the redundant prose field; recover it verbatim rather than regenerate.
@@ -332,7 +345,8 @@ def validate_content(value, plan):
         # Plan titles are authoritative even if the model tries to rename them.
         result['slides'].append({**slide, 'title': item['title'],
             'content': body,
-            'image_prompt': _text(slide.get('image_prompt'), 1000, 'image prompt')})
+            'diagram': diagram, 'visual_kind': visual_kind,
+            'image_prompt': '' if diagram else _text(slide.get('image_prompt'), 1000, 'image prompt')})
     return result
 
 

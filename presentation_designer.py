@@ -1,3 +1,4 @@
+from presentation_diagrams import effective_diagram, build_diagram_scene
 """Opt-in technology layouts. Pure scene planning plus an adapter for the existing bot.
 
 No network, credentials, billing or Telegram operations. Dimensions are CSS pixels.
@@ -49,7 +50,7 @@ content должен передавать тот же смысл, что таб�
 blocks=[]; тогда используется content. content обязателен и содержит тот же смысл,
 что блоки, для текстовой копии. Не добавляй фактов, процентов или чисел ради дизайна.
 Для statement content до 220 символов. Для photo content до 320 символов.
-Не менее половины слайдов планируй с предметными фото (photo/auto), включая обложку.
+Для визуальных тем планируй предметные фото (photo/auto), включая обложку. Учебные технические схемы важнее количества фото. diagram имеет приоритет, для него designer={"layout":"auto","blocks":[]}.
 statement используй не более одного раза. process — только реальная последовательность
 действий или этапов. Стрелки соединяют каждый соседний шаг: проверь смысл каждой связи.
 Альтернативы и исключения выноси в sections или пояснение, не ставь их очередным шагом; для перечня болезней, свойств или мер профилактики используй sections.
@@ -101,6 +102,9 @@ def plan_designer_images(slides, style):
             template=TEMPLATES[item['_designer_design']['template_id']]
             portrait=comp=='cover_split' and template['system']!='cinema' and len(str(item.get('title') or ''))<=44
             item['_designer_aspect_ratio']='3:4' if portrait else '16:9'
+        if effective_diagram(item):
+            item['_skip_ai_image'] = True
+            continue
         item['_skip_ai_image'] = bool(item.get('chart')) or (i > 0 and item.get('designer', {}).get('layout') in (
             'process', 'comparison', 'sections', 'statement', 'conclusion'))
         # Sparse section lists gain a meaningful photo; comparisons and processes stay native.
@@ -117,7 +121,7 @@ def plan_designer_images(slides, style):
         s = slides[i]
         if current >= target:
             break
-        if s['_skip_ai_image'] and not s.get('chart') and s.get('designer', {}).get('layout') in ('statement', 'sections'):
+        if s['_skip_ai_image'] and not s.get('chart') and not effective_diagram(s) and s.get('designer', {}).get('layout') in ('statement', 'sections'):
             s['_skip_ai_image'] = False
             current += 1
 
@@ -247,6 +251,8 @@ GRADIENT = {'angle': 0, 'stops': [(0, '#080B10', 1), (.45, '#14225B', 1),
 
 def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
     """Plan the complete slide before mutating a PPTX; never truncate content."""
+    if effective_diagram(item):
+        return build_diagram_scene(item,number,total,lang,style,asset=asset)
     if (item.get('_designer_design', {}).get('template_id') in TEMPLATES
             and TEMPLATES[item['_designer_design']['template_id']]['family']==item['_designer_design'].get('family')):
         return build_catalog_scene(item, asset, number, total, lang, style)
@@ -695,6 +701,13 @@ def render_scene(slide, scene, chart_renderer=None):
             photo_geometry(shape,node,pw,ph)
             if node.get('border_color'):
                 shape.line.color.rgb=RGBColor.from_string(node['border_color'][1:]);shape.line.width=Pt(node.get('border_width',1.5))
+        elif node['type']=='diagram_edge':
+            a,b,c,d=node['points']
+            shape=slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,Inches(a/96),Inches(b/96),Inches(c/96),Inches(d/96))
+            shape.name='Diagram connection'
+            shape.line.color.rgb=RGBColor.from_string(node['color'][1:]);shape.line.width=Pt(2)
+            if node['arrow']:
+                tail=OxmlElement('a:tailEnd');tail.set('type','triangle');shape._element.spPr.get_or_add_ln().append(tail)
         elif node['type']=='connector':
             shape=slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,Inches(x),Inches(y),Inches(x if node.get('vertical') else x+w),Inches(y+h if node.get('vertical') else y))
             shape.line.color.rgb=RGBColor.from_string(node['color'][1:]);shape.line.width=Pt(1.5)

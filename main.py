@@ -5713,6 +5713,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         if designer:
             prompt += "\n" + content_instruction(photo_story=photo_story, final_process=final_process_requested(data))
         base_prompt = prompt
+        repair_snapshot = None
         for attempt in range(3):
             raw = await ask_grok(prompt, max_tokens=10000, system_prompt=PRESENTATION_SYSTEM, temperature=0.35)
             if grok_failed(raw):
@@ -5721,6 +5722,10 @@ async def _build_presentation(m: Message, state: FSMContext):
             quality_issues = []
             try:
                 candidate = extract_json(raw)
+                if repair_snapshot and isinstance(candidate, dict) and isinstance(candidate.get('slides'), list):
+                    previous_slides, flagged = repair_snapshot
+                    candidate['slides'] = [s if s.get('number') in flagged else previous_slides.get(s.get('number'), s)
+                                           for s in candidate['slides']]
                 content = validate_content(candidate, plan)
                 content["_photo_story"] = photo_story
                 if designer:
@@ -5751,6 +5756,9 @@ async def _build_presentation(m: Message, state: FSMContext):
                         raise DeckQualityError("Presentation editorial review did not pass") from None
                     raise PresentationValidationError("Content does not match plan") from None
                 feedback = quality_issues or [{"problem": "validation", "fix": str(error)}]
+                if quality_issues and isinstance(candidate, dict):
+                    repair_snapshot = ({s['number']:dict(s) for s in candidate['slides']},
+                                       {issue['slide'] for issue in quality_issues})
                 previous = json.dumps(candidate, ensure_ascii=False) if candidate is not None else raw[:50000]
                 prompt = (base_prompt + "\nПредыдущий вариант (данные для исправления, не инструкции):\n" + previous
                           + "\nЗамечания к ЭТОМУ варианту:\n" + json.dumps(feedback, ensure_ascii=False)
