@@ -670,6 +670,11 @@ def render_scene(slide, scene, chart_renderer=None):
                         'User photograph' if node['origin']=='user' else 'AI illustration')
             if node.get('flip_h'):shape._element.spPr.xfrm.set('flipH','1')
             if node.get('flip_v'):shape._element.spPr.xfrm.set('flipV','1')
+            if node['type']=='background_image' and 'opacity' in node:
+                blip=shape._element.blipFill.find(qn('a:blip'))
+                alpha=OxmlElement('a:alphaModFix')
+                alpha.set('amt',str(round(max(0,min(1,node['opacity']))*100000)))
+                blip.append(alpha)
             if node.get('crop'):
                 iw,ih=shape.image.size;source_ratio=iw/ih;target_ratio=w/h
                 if source_ratio>target_ratio:

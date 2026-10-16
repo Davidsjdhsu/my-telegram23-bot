@@ -6,6 +6,7 @@ from pathlib import Path
 from presentation_profiles import resolved_profile, readable_color
 from presentation_visuals import fit_rect
 from presentation_catalog import TEMPLATES, composition_for, template_palette
+from presentation_patterns import add_pattern
 
 
 def has_custom_palette(design):
@@ -33,7 +34,7 @@ def decorate_fallback(scene,item,asset,number,style,custom=False):
             for row in node['cells']:
                 for cell in row:cell['color']=ink
         elif node['type']=='image' and asset and asset.get('origin')=='user':node['radius']=0
-    if not custom:
+    if not add_pattern(scene,d,style,number,custom=custom) and not custom:
         texture=Path(__file__).resolve().parent/'assets'/('soft-pastel-contours.jpg' if soft else f"strict-{direction['key']}-pattern.jpg")
         if texture.is_file():scene['nodes'].insert(0,{'type':'background_image','path':str(texture),'box':[0,0,1280,720],'origin':'decoration','crop':False,'radius':0})
     # These evidence layouts may touch margins: use an inset stroke, never enlarge them.
@@ -125,12 +126,13 @@ def build_style_scene(item,asset,number,total,lang,style):
                       'origin':asset.get('origin','ai'),'radius':radius,'mask':shape,
                       'crop':shape in ('circle','square','triangle','hexagon')})
     def rule(x,y,w,color=None):panel((x,y,w,2 if soft else 3),color or blend(accent,bg,.40))
-    if not soft:
+    patterned=add_pattern(scene,design,style,number)
+    if not soft and not patterned:
         texture=Path(__file__).resolve().parent/'assets'/f'strict-{mode}-pattern.jpg'
         if texture.is_file():
             nodes.append({'type':'background_image','path':str(texture),'box':[0,0,1280,720],
                           'origin':'decoration','radius':0,'crop':False})
-    if soft:
+    if soft and not patterned:
         texture=Path(__file__).resolve().parent/'assets'/'soft-pastel-contours.jpg'
         if texture.is_file():
             nodes.append({'type':'background_image','path':str(texture),'box':[0,0,1280,720],
