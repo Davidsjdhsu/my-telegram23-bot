@@ -118,8 +118,10 @@ def build_diagram_scene(item,number,total,lang='ru',style=None,colors=None,asset
         y=start+i*(rh+gap)
         # Native outline denotes one semantic node; all text remains editable.
         nodes.append({'type':'photo_frame','box':[150,y,1066,rh],'color':accent,'width':1.2,'radius':14 if style=='designer_soft' else 0})
-        text(node['label'],(170,y+9,285,rh-18),'subheading',30,22)
-        text(node['text'],(480,y+9,715,rh-18),'body',28,22)
+        # A five-node diagram has 76px rows. Two lines at the readable minimum
+        # need 58.68px; the old 58px inner box rejected valid two-line labels.
+        text(node['label'],(170,y+4,285,rh-8),'subheading',30,22)
+        text(node['text'],(480,y+4,715,rh-8),'body',28,22)
     def edge(x1,y1,x2,y2,arrow=True):
         nodes.append({'type':'diagram_edge','box':[min(x1,x2),min(y1,y2),max(1,abs(x2-x1)),max(1,abs(y2-y1))],
                       'points':[x1,y1,x2,y2],'color':accent,'arrow':arrow})

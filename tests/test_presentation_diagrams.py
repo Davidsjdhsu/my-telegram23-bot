@@ -23,6 +23,18 @@ def diagram(kind='sequence',count=4):
 
 
 class DiagramTests(unittest.TestCase):
+    def test_five_stage_water_diagram_fits_multiline_labels(self):
+        labels=['Водозабор и крупный мусор','Коагуляция и осветление','Обеззараживание воды',
+                'Подготовка к обеззараживанию','От станции до вашего дома']
+        item={'title':'Путь воды','diagram':{'kind':'sequence','nodes':[
+            {'label':label,'text':'Вода проходит обработку перед подачей в сеть.'} for label in labels]}}
+        for style in (None,'designer_soft','designer_strict'):
+            scene=dg.build_diagram_scene(item,8,8,style=style)
+            labels_out=[n for n in scene['nodes'] if n.get('role')=='subheading']
+            self.assertEqual(len(labels_out),5)
+            self.assertTrue(any('\n' in n['text'] for n in labels_out))
+            self.assertTrue(all(n['size']>=22 for n in labels_out))
+
     def test_invalid_nodes_and_kinds_rejected(self):
         for bad in ({'kind':'photo','nodes':[]},diagram(count=1),diagram(count=6),diagram('cycle',2),
                     {'kind':'sequence','nodes':[{'label':'Same','text':'Text'}]*2}):
@@ -81,6 +93,24 @@ class DiagramTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_format_repair_is_not_undone_by_old_editorial_snapshot(self):
+        env,state,sent=f.BuildTests().build_env(4)
+        original=f.make_content(4); repaired=copy.deepcopy(original)
+        repaired['slides'][1]['content']='Короткая исправленная подпись.'
+        env['ask_grok']=AsyncMock(side_effect=[json.dumps(original),json.dumps(original),json.dumps(repaired)])
+        validator=env['validate_content']; calls=0
+        def validate(*args):
+            nonlocal calls
+            calls+=1
+            if calls==2:raise ValueError('Formatting repair required')
+            return validator(*args)
+        env['validate_content']=validate
+        env['review_content']=AsyncMock(side_effect=[[{'slide':2,'problem':'language','fix':'Уточни формулировку.'}],[]])
+        await env['_build_presentation'](SimpleNamespace(from_user=SimpleNamespace(id=-1)),state)
+        self.assertEqual(len(sent),2)
+        final=env['review_content'].await_args_list[-1].args[2]
+        self.assertEqual(final['slides'][1]['content'],repaired['slides'][1]['content'])
+
     async def test_component_photo_review_batches_repairs_before_prose_review(self):
         c=f.make_content(4)
         for s in c['slides']:s['visual_kind']='photo'

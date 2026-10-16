@@ -5720,6 +5720,8 @@ async def _build_presentation(m: Message, state: FSMContext):
                 raise PresentationValidationError("Content generation failed")
             candidate = None
             quality_issues = []
+            validation_stage = 'content'
+            validation_slide = 0
             try:
                 candidate = extract_json(raw)
                 if repair_snapshot and isinstance(candidate, dict) and isinstance(candidate.get('slides'), list):
@@ -5730,12 +5732,15 @@ async def _build_presentation(m: Message, state: FSMContext):
                 content["_photo_story"] = photo_story
                 if designer:
                     for idx, content_slide in enumerate(content["slides"], 2):
+                        validation_stage, validation_slide = 'designer', idx
                         if "designer" not in content_slide:
                             raise PresentationValidationError("Missing designer layout")
                         content_slide["designer"] = validate_designer(content_slide)
                         content_slide['_designer_design'] = plan['design']
                         # Fit structured blocks before spending time on image generation.
+                        validation_stage = 'layout'
                         build_scene(content_slide, None, idx, planned_slides, cgl or lang, theme_name)
+                validation_stage, validation_slide = 'editor', 0
                 quality_issues = local_issues(content, designer, data)
                 structural_issue = bool(quality_issues)
                 if not quality_issues:
@@ -5751,6 +5756,12 @@ async def _build_presentation(m: Message, state: FSMContext):
                     print("presentation_editor remaining_advisory_only", flush=True)
                 break
             except (ValueError, TypeError, KeyError, AttributeError) as error:
+                if not quality_issues:
+                    # A previous editorial snapshot must not undo the model's
+                    # later formatting repairs to an otherwise unflagged slide.
+                    repair_snapshot = None
+                    reason = 'subheading_fit' if str(error).startswith('Shorten subheading:') else type(error).__name__
+                    print(f'presentation_validation attempt={attempt+1} stage={validation_stage} slide={validation_slide} reason={reason}', flush=True)
                 if attempt == 2:
                     if isinstance(error, DeckQualityError):
                         raise DeckQualityError("Presentation editorial review did not pass") from None
