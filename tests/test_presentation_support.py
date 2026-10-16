@@ -41,7 +41,7 @@ def load_functions(names, env=None):
     if len(nodes) != len(names):
         raise AssertionError(set(names)-{n.name for n in nodes})
     ns = {k: getattr(ps,k) for k in dir(ps) if not k.startswith('__')}
-    ns.update({k: getattr(pc,k) for k in ('personal_photo_story','needs_photo_context','photo_context_message','PHOTO_ONLY_LABELS','photo_sources')})
+    ns.update({k: getattr(pc,k) for k in ('final_process_requested','personal_photo_story','needs_photo_context','photo_context_message','PHOTO_ONLY_LABELS','photo_sources')})
     ns.update({k: getattr(pv,k) for k in ('prepare_own_images','prepare_images', 'render_slide', 'visual_quality_notice', 'require_images', 'ImageDeliveryError', 'image_failure_notice', 'photo_caption_hint')})
     ns.update({k: getattr(pd,k) for k in ('is_designer','render_designer_slide','content_instruction','validate_designer','build_scene','plan_designer_images','DesignerValidationError','designer_copy')})
     ns.update(env or {})

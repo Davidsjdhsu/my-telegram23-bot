@@ -152,7 +152,7 @@ def build_catalog_scene_previous(item, asset, number, total, lang, style):
         head((m,45,w-260 if asset else w,162))
         if asset:photo((1280-m-230,48,230,146))
         widths=[round(w*.24),round(w*.38),w-round(w*.24)-round(w*.38)]
-        heights=[78,118,118,118]
+        heights=[78]+[354/len(structured['rows'])]*len(structured['rows'])
         headers=['Критерий' if lang=='ru' else 'Criterion']+[b['heading'] for b in blocks]
         values=[headers]+[[r[k] for k in ('criterion','left','right')] for r in structured['rows']]
         cells=[[text_node(v,(0,0,widths[col]-32,heights[row]-20),c['accent'] if row==0 else c['ink'],

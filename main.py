@@ -1,7 +1,7 @@
 import os
 import asyncio
 import tempfile
-from presentation_copy import personal_photo_story, needs_photo_context, photo_context_message, PHOTO_ONLY_LABELS, photo_sources
+from presentation_copy import final_process_requested, personal_photo_story, needs_photo_context, photo_context_message, PHOTO_ONLY_LABELS, photo_sources
 from presentation_quality import local_issues, review_content, DeckQualityError, REVIEW_SYSTEM
 from presentation_visuals import prepare_own_images, prepare_images, render_slide, visual_quality_notice, photo_caption_hint, require_images, ImageDeliveryError, image_failure_notice
 from presentation_designer import is_designer, render_designer_slide, content_instruction, validate_designer, build_scene, plan_designer_images, DesignerValidationError, designer_copy
@@ -5709,7 +5709,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         prompt = content_prompt(data, plan, grok_json_lang_instruction(cgl or "ru"))
         designer = is_designer(data)
         if designer:
-            prompt += "\n" + content_instruction(photo_story=photo_story)
+            prompt += "\n" + content_instruction(photo_story=photo_story, final_process=final_process_requested(data))
         base_prompt = prompt
         for attempt in range(3):
             raw = await ask_grok(prompt, max_tokens=10000, system_prompt=PRESENTATION_SYSTEM, temperature=0.35)
@@ -5729,7 +5729,7 @@ async def _build_presentation(m: Message, state: FSMContext):
                         content_slide['_designer_design'] = plan['design']
                         # Fit structured blocks before spending time on image generation.
                         build_scene(content_slide, None, idx, planned_slides, cgl or lang, theme_name)
-                quality_issues = local_issues(content, designer)
+                quality_issues = local_issues(content, designer, data)
                 structural_issue = bool(quality_issues)
                 if not quality_issues:
                     quality_issues = await review_content(data, plan, content, ask_grok, extract_json)

@@ -32,7 +32,7 @@ def clean(value, limit, field, optional=False):
     return value.strip()
 
 
-def content_instruction(photo_story=False):
+def content_instruction(photo_story=False, final_process=False):
     rule = '''Дизайнерское оформление: крупные заголовки, короткие смысловые блоки.
 Для каждого содержательного слайда добавь designer:
 {"layout":"auto|photo|statement|process|comparison|sections|conclusion",
@@ -40,8 +40,8 @@ def content_instruction(photo_story=False):
 Для process нужно 3–4 последовательных шага, comparison ровно 2 стороны,
 sections 2–4 смысловых блока, conclusion 2–3 итоговых вывода.
 Для comparison добавь rows: [{"criterion":"критерий до 26 символов","left":"первая сторона до 75 символов","right":"вторая сторона до 75 символов"}].
-Ровно 3 строки, одинаковый критерий для обеих сторон в каждой строке. Два blocks задают названия сторон.
-Последний содержательный слайд всегда conclusion: 2–3 блока с полезным выводом,
+От 2 до 3 содержательных строк, одинаковый критерий для обеих сторон в каждой строке. Два blocks задают названия сторон.
+Для обычного итога используй conclusion: 2–3 блока с полезным выводом,
 условием применения или ограничением. Текст каждого итогового блока — полное предложение с конкретной деталью, а не два-три общих слова.
 Не пересказывай предыдущий слайд и не добавляй новый факт.
 content должен передавать тот же смысл, что таблица или выводы, для текстовой копии. Заголовок блока до 36 символов, текст до 120.
@@ -51,7 +51,8 @@ blocks=[]; тогда используется content. content обязател
 Для statement content до 220 символов. Для photo content до 320 символов.
 Не менее половины слайдов планируй с предметными фото (photo/auto), включая обложку.
 statement используй не более одного раза. process — только реальная последовательность
-действий или этапов; для перечня болезней, свойств или мер профилактики используй sections.
+действий или этапов. Стрелки соединяют каждый соседний шаг: проверь смысл каждой связи.
+Альтернативы и исключения выноси в sections или пояснение, не ставь их очередным шагом; для перечня болезней, свойств или мер профилактики используй sections.
 Чередуй фото, схемы и сравнения по смыслу; не делай все слайды одинаковыми.
 Если план содержит сопоставление, используй comparison, для последовательности действий — process.
 Структурный макет нужен только для настоящего сравнения, последовательности или объяснения
@@ -59,6 +60,12 @@ statement используй не более одного раза. process — 
 предпочитай photo с подходящей сценой. Не превращай два коротких пункта в пустой слайд.
 Не выдумывай этапы или противопоставления ради оформления. Данные пользователя сохраняй. При длинном материале выбирай auto. Все поля и
 количество слайдов из основного задания остаются обязательными.'''
+    if final_process:
+        rule += ('\nПользователь просит итоговую схему процесса. Последний слайд должен быть process '
+                 'с 3–4 укрупнёнными настоящими этапами в их порядке, а не conclusion. '
+                 'Сохрани условия из объяснения. Не добавляй исключение как очередной этап. '
+                 'Если последовательность объективно неверна для исходного материала, сообщи это '
+                 'в содержании и используй sections вместо ложных стрелок.')
     if photo_story:
         rule += ('\nДля личного фотоальбома исключение: последний слайд НЕ обязан иметь conclusion. '
                  'Выбирай photo/auto и одну короткую подпись, если нет настоящих итогов. '
@@ -140,10 +147,10 @@ def validate_designer(item):
     validated = {'layout': layout, 'blocks': result}
     if layout == 'comparison' and 'rows' in raw:
         rows=raw['rows']
-        if not isinstance(rows,list) or len(rows)!=3:raise DesignerValidationError('Comparison needs three shared criteria')
+        if not isinstance(rows,list) or not 2<=len(rows)<=3:raise DesignerValidationError('Comparison needs two or three shared criteria')
         validated['rows']=[{key:clean(row.get(key),26 if key=='criterion' else 75,'comparison '+key)
                             for key in ('criterion','left','right')} for row in rows if isinstance(row,dict)]
-        if len(validated['rows'])!=3:raise DesignerValidationError('Invalid comparison row')
+        if len(validated['rows'])!=len(rows):raise DesignerValidationError('Invalid comparison row')
     return validated
 
 
@@ -523,7 +530,7 @@ def build_profile_scene(item, asset, number, total, lang, style):
         if asset: photo((980,48,236,150))
         headers=['Критерий' if lang=='ru' else 'Criterion']+[b['heading'] for b in blocks]
         values=[headers]+[[r[k] for k in ('criterion','left','right')] for r in structured['rows']]
-        widths=[250,451,451]; heights=[74,118,118,118]
+        widths=[250,451,451]; heights=[74]+[354/len(structured['rows'])]*len(structured['rows'])
         cells=[]
         for row,values_row in enumerate(values):
             cells.append([text_node(value,(0,0,widths[col]-32,heights[row]-20),

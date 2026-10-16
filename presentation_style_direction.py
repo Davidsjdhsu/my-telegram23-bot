@@ -280,7 +280,7 @@ def build_style_scene(item,asset,number,total,lang,style):
                 text(b['text'],(594,y+24,622,rh-28),size=30,minimum=24)
     elif layout=='comparison' and structured.get('rows'):
         heading((64,48,1152,158),66)
-        widths=[280,436,436];heights=[96,118,118,118]
+        widths=[280,436,436];heights=[96]+[354/len(structured['rows'])]*len(structured['rows'])
         values=[['Критерий' if lang=='ru' else 'Criterion']+[b['heading'] for b in blocks]]+[[r[k] for k in ('criterion','left','right')] for r in structured['rows']]
         backgrounds=([blend(bg,c['secondary'],.35)]+[bg,blend(bg,c['secondary'],.15),bg]) if soft else [('#E1E5E8' if mode=='graphite' else accent),bg,bg,bg]
         cells=[]
