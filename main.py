@@ -1,6 +1,7 @@
 import os
 import asyncio
 import tempfile
+from presentation_pdf import convert_presentation_pdf, ensure_pdf_converter, PresentationPDFError, pdf_failure_notice
 from presentation_copy import final_process_requested, personal_photo_story, needs_photo_context, photo_context_message, PHOTO_ONLY_LABELS, photo_sources
 from presentation_quality import local_issues, review_content, DeckQualityError, REVIEW_SYSTEM
 from presentation_visuals import prepare_own_images, prepare_images, render_slide, visual_quality_notice, photo_caption_hint, require_images, ImageDeliveryError, image_failure_notice
@@ -2088,20 +2089,20 @@ TR = {
                       "es": "💳 Saldo: {credits} créditos\nPresentación — 5 cr./diapositiva · Word/Excel — 5 cr. · reconocimiento de fotos — 3 cr. · plantilla gratis",
                       "fr": "💳 Solde : {credits} crédits\nPrésentation — 5 cr./diapositive · Word/Excel — 5 cr. · reconnaissance photo — 3 cr. · modèle gratuit"},
     "msg_pptx_ready": {
-        "ru": "Готово ✅\n\nPPTX — презентация с оформлением и изображениями. Открывай в PowerPoint, Keynote или Google Презентациях. PDF — отдельная текстовая копия без изображений.",
-        "en": "Done ✅\n\nPPTX contains the designed presentation and images. Open it in PowerPoint, Keynote or Google Slides. PDF is a separate text copy without images.",
-        "de": "Fertig ✅\n\nPPTX enthält die gestaltete Präsentation mit Bildern. Öffne sie in PowerPoint, Keynote oder Google Präsentationen. PDF ist eine separate Textkopie ohne Bilder.",
-        "fr": "Terminé ✅\n\nLe PPTX contient la présentation mise en page avec images. Ouvre-le dans PowerPoint, Keynote ou Google Slides. Le PDF est une copie texte séparée sans images.",
-        "es": "Listo ✅\n\nEl PPTX contiene la presentación con diseño e imágenes. Ábrelo en PowerPoint, Keynote o Google Slides. El PDF es una copia de texto independiente sin imágenes.",
-        "zh": "完成 ✅\n\nPPTX 包含排版和图片，请使用 PowerPoint、Keynote 或 Google 幻灯片打开。PDF 是单独的纯文字副本，不含图片。",
-        "ar": "تم ✅\n\nيحتوي PPTX على العرض بتصميمه وصوره. افتحه في PowerPoint أو Keynote أو Google Slides. أما PDF فهو نسخة نصية منفصلة دون صور."
+        "ru": "Готово ✅\n\nPDF — для просмотра: все слайды с фотографиями и оформлением. Открывай его прямо в Telegram. PPTX — для редактирования в PowerPoint, Keynote или Google Презентациях.",
+        "en": "Done ✅\n\nPDF contains all slides, photographs and design for viewing in Telegram. Use PPTX for editing in PowerPoint, Keynote or Google Slides.",
+        "de": "Fertig ✅\n\nPDF enthält alle Folien mit Bildern und Gestaltung zum Ansehen in Telegram. PPTX ist zum Bearbeiten in PowerPoint, Keynote oder Google Präsentationen.",
+        "fr": "Terminé ✅\n\nLe PDF contient toutes les diapositives, images et mise en page pour les consulter dans Telegram. Le PPTX permet de les modifier dans PowerPoint, Keynote ou Google Slides.",
+        "es": "Listo ✅\n\nEl PDF contiene todas las diapositivas, fotos y diseño para verlos en Telegram. Usa el PPTX para editar en PowerPoint, Keynote o Google Slides.",
+        "zh": "完成 ✅\n\nPDF 包含所有幻灯片、图片和排版，可直接在 Telegram 中查看。PPTX 用于在 PowerPoint、Keynote 或 Google 幻灯片中编辑。",
+        "ar": "تم ✅\n\nيحتوي PDF على جميع الشرائح والصور والتصميم للعرض في Telegram. استخدم PPTX للتحرير في PowerPoint أو Keynote أو Google Slides."
 },
     "msg_pptx_caption": {"ru": "📊 PPTX — открывай этот файл", "en": "📊 PPTX — open this file", "de": "📊 PPTX — öffne diese Datei",
                          "ar": "📊 PPTX — افتح هذا الملف", "zh": "📊 PPTX——请打开此文件", "es": "📊 PPTX — abre este archivo", "fr": "📊 PPTX — ouvre ce fichier"},
-    "msg_pptx_pdf_caption": {"ru": "📄 PDF — полная текстовая копия (без фото)", "en": "📄 PDF — full text copy (without photos)",
-                             "de": "📄 PDF — vollständige Textkopie (ohne Fotos)", "ar": "📄 PDF — نسخة نصية كاملة (بدون صور)",
-                             "zh": "📄 PDF——完整文字副本（不含图片）", "es": "📄 PDF — copia completa en texto (sin fotos)",
-                             "fr": "📄 PDF — copie texte complète (sans photos)"},
+    "msg_pptx_pdf_caption": {"ru": "📄 PDF — все слайды с фото и оформлением. Открывай для просмотра.", "en": "📄 PDF — all slides with photos and design. Open to view.",
+                             "de": "📄 PDF — alle Folien mit Fotos und Gestaltung.", "ar": "📄 PDF — جميع الشرائح بالصور والتصميم.",
+                             "zh": "📄 PDF — 所有幻灯片，含图片和排版。", "es": "📄 PDF — todas las diapositivas con fotos y diseño.",
+                             "fr": "📄 PDF — toutes les diapositives avec photos et mise en page."},
     "msg_content_lang_prompt": {
         "ru": "На каком языке сделать содержимое? Это не обязательно тот же язык, что и у интерфейса.",
         "en": "What language should the content be in? It doesn't have to match the interface language.",
@@ -5678,6 +5679,7 @@ async def _build_presentation(m: Message, state: FSMContext):
     visual_tmp = None
     try:
         await bot.send_message(uid, tr("msg_building_pres_photos", lang))
+        ensure_pdf_converter()  # Fail before model/image costs if server setup is incomplete.
         visual_tmp = tempfile.TemporaryDirectory(prefix="alix-slides-")
 
         plan = data.get("pres_plan")
@@ -5819,47 +5821,7 @@ async def _build_presentation(m: Message, state: FSMContext):
             if asset and not any(shape.shape_type == 13 and shape.name != 'Designer texture' for shape in saved.slides[index].shapes):
                 raise ImageDeliveryError("Image missing from saved presentation")
         pdf_path = os.path.join(visual_tmp.name, "presentation.pdf")
-        pdf = canvas.Canvas(pdf_path, pagesize=A4)
-        w, h = A4
-        fn, fb = register_pdf_fonts()
-
-        # Титульная "обложка" копии — как в самой презентации.
-        pdf.setFont(fb, 22)
-        cover_y = h - 90
-        for line in wrap_lines(content.get("title", "Презентация"), fb, 22, w - 80):
-            pdf.drawString(40, cover_y, line)
-            cover_y -= 28
-        pdf.setFont(fn, 11)
-        pdf.drawString(40, cover_y - 12, "Текстовая копия презентации")
-        pdf.showPage()
-
-        y = h - 60
-        for i, s in enumerate(slides_data, 2):
-            if y < 100:
-                pdf.showPage()
-                y = h - 60
-            pdf.setFont(fb, 14)
-            for line in wrap_lines(f"{i}. {s.get('title', '')}", fb, 14, w - 80):
-                if y < 60:
-                    pdf.showPage()
-                    y = h - 60
-                    pdf.setFont(fb, 14)
-                pdf.drawString(40, y, line)
-                y -= 18
-            y -= 6
-            pdf.setFont(fn, 11)
-            paragraphs = [x.strip() for x in (designer_copy(s) if designer else (s.get("content") or "")).split("\n") if x.strip()]
-            for para in paragraphs:
-                for line in wrap_lines(para, fn, 11, w - 80):
-                    if y < 60:
-                        pdf.showPage()
-                        y = h - 60
-                        pdf.setFont(fn, 11)
-                    pdf.drawString(40, y, line)
-                    y -= 15
-                y -= 8
-            y -= 14
-        pdf.save()
+        await convert_presentation_pdf(pptx_path, pdf_path, planned_slides)
 
         pres_fname = safe_filename(content.get("title"), fallback="Презентация")
         chat_id = m.chat.id if getattr(m, "chat", None) else m.from_user.id
@@ -5888,6 +5850,14 @@ async def _build_presentation(m: Message, state: FSMContext):
             # Both files are delivered and billed. A failed courtesy message must
             # not report generation failure or leave a paid draft ready to rebuild.
             print("Не удалось отправить уведомление о готовой презентации:", type(notice_error).__name__)
+    except PresentationPDFError as error:
+        print("presentation_pdf failure=" + str(error), flush=True)
+        await state.set_state(Form.waiting_confirm)
+        try:
+            await bot.send_message(m.chat.id if getattr(m, "chat", None) else uid,
+                                   pdf_failure_notice(lang), reply_markup=confirm_kb(lang))
+        except Exception:
+            print("presentation_pdf notice_delivery_failed", flush=True)
     except DeckQualityError:
         await state.set_state(Form.waiting_confirm)
         notice = {

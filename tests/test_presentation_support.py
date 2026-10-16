@@ -15,6 +15,7 @@ import presentation_copy as pc
 import presentation_support as ps
 import presentation_visuals as pv
 import presentation_designer as pd
+import presentation_pdf as pp
 import tempfile
 
 
@@ -44,6 +45,7 @@ def load_functions(names, env=None):
     ns.update({k: getattr(pc,k) for k in ('final_process_requested','personal_photo_story','needs_photo_context','photo_context_message','PHOTO_ONLY_LABELS','photo_sources')})
     ns.update({k: getattr(pv,k) for k in ('prepare_own_images','prepare_images', 'render_slide', 'visual_quality_notice', 'require_images', 'ImageDeliveryError', 'image_failure_notice', 'photo_caption_hint')})
     ns.update({k: getattr(pd,k) for k in ('is_designer','render_designer_slide','content_instruction','validate_designer','build_scene','plan_designer_images','DesignerValidationError','designer_copy')})
+    ns.update({k: getattr(pp,k) for k in ('ensure_pdf_converter','convert_presentation_pdf','PresentationPDFError','pdf_failure_notice')})
     ns.update(env or {})
     module = ast.Module(body=[ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')],level=0)] + nodes, type_ignores=[])
     exec(compile(ast.fix_missing_locations(module),'main.py','exec'),ns)
@@ -244,6 +246,19 @@ class BuildTests(unittest.IsolatedAsyncioTestCase):
             color=tuple(hashlib.sha256(path.encode()).digest()[:3])
             Image.new('RGB',(640,480),color).save(path)
             return True
+        async def fixture_pdf(source, target, count):
+            # Delivery tests isolate conversion. Real rendering has its own integration check.
+            prs=Presentation(source)
+            pdf=canvas.Canvas(target,pagesize=(float(prs.slide_width)/12700,float(prs.slide_height)/12700))
+            for slide in prs.slides:
+                y=480
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        pdf.drawString(30,y,' '.join(shape.text.split()))
+                        y-=20
+                pdf.showPage()
+            pdf.save()
+            return target
         env=WorkflowTests().env(ask_grok=model)
         env.update({'local_issues':lambda *a:[], 'review_content':AsyncMock(return_value=[]), 'DeckQualityError':__import__('presentation_quality').DeckQualityError,'Presentation':Presentation,'Inches':Inches,'Pt':Pt,'RGBColor':RGBColor,
             'MSO_SHAPE':MSO_SHAPE,'PP_ALIGN':PP_ALIGN,'MSO_ANCHOR':MSO_ANCHOR,
@@ -252,6 +267,7 @@ class BuildTests(unittest.IsolatedAsyncioTestCase):
             'pick_theme':lambda t:('minimal',theme),'start_job':Mock(return_value=(True,None)),
             'finish_job':Mock(),'get_user':lambda uid:{'generations':0,'history':[]},
             'tempfile':tempfile,'ask_presentation_vision':AsyncMock(return_value=json.dumps({'relevant':True,'has_text':False,'has_chart':False,'defective':False})), 'add_chart':Mock(),
+            'ensure_pdf_converter':Mock(return_value='soffice'), 'convert_presentation_pdf':AsyncMock(side_effect=fixture_pdf),
             'run_heavy':run_heavy,'generate_image':AsyncMock(side_effect=generate_fixture),
             'register_pdf_fonts':lambda:('Helvetica','Helvetica-Bold'),
             'spend_credits':Mock(),'note_success':Mock(),'signature_line':AsyncMock(return_value=''),
