@@ -9,6 +9,39 @@ from presentation_catalog import TEMPLATES, composition_for, template_palette
 from presentation_patterns import add_pattern
 
 
+def photo_mask(asset, mode, number):
+    """Only use a crop approved for this image, with a full-frame failure path."""
+    user = asset.get('origin') == 'user'
+    allowed = asset.get('safe_frames', []) if not user or asset.get('frame_reviewed') is True else []
+    sequences = {'graphite': ('rect','circle','triangle','square'),
+                 'classic': ('rect','square','circle','triangle'),
+                 'technical': ('chamfer','hexagon','square','circle'),
+                 'natural': ('rect','triangle','circle','square'),
+                 None: ('rect','circle','square','triangle','hexagon','chamfer')}
+    sequence = sequences[mode]
+    offset = (number-1) % len(sequence)
+    requested = sequence[offset]
+    if requested in allowed:
+        return requested
+    if user and requested != 'rect':
+        # A circle-safe photograph should not remain rectangular just because this
+        # slide's first choice was a triangle. Never infer other safe shapes.
+        for shape in sequence[offset:]+sequence[:offset]:
+            if shape in allowed:
+                return shape
+    return 'rounded' if user and mode is None and 'rounded' in allowed else 'rect'
+
+
+def user_frame_note(scene, asset):
+    if not asset or asset.get('origin') != 'user':
+        return
+    shaped = any(n['type']=='image' and (n.get('crop') or n.get('radius') or n.get('mask','rect')!='rect')
+                 for n in scene['nodes'])
+    scene['notes'] = scene.get('notes','').replace('Image: supplied by user. Full frame preserved.',
+        'Image: supplied by user. Decorative crop approved by image review.' if shaped else
+        'Image: supplied by user. Full frame preserved.')
+
+
 def has_custom_palette(design):
     kit=TEMPLATES[design['template_id']];p=template_palette(kit)
     background='dark' if int(kit['paper'][1:3],16)<80 else 'light'
@@ -40,6 +73,19 @@ def decorate_fallback(scene,item,asset,number,style,custom=False):
     # These evidence layouts may touch margins: use an inset stroke, never enlarge them.
     for node in scene['nodes']:
         if node['type']=='image':node['border_color']=accent;node['border_width']=1.5
+    if asset and asset.get('origin')=='user':
+        # Dense/custom layouts keep their existing image bounds and text geometry.
+        mode=None if soft else direction['key']
+        mask=photo_mask(asset,mode,number)
+        for node in scene['nodes']:
+            if node['type']!='image':continue
+            x,y,w,h=node['box']
+            if mask in ('circle','square','triangle','hexagon'):
+                side=min(w,h);node['box']=[x+(w-side)/2,y+(h-side)/2,side,side]
+            node['mask']='rect' if mask=='rounded' else mask
+            node['radius']=min(42,min(node['box'][2:])*.08) if mask=='rounded' else 0
+            node['crop']=mask in ('circle','square','triangle','hexagon')
+        user_frame_note(scene,asset)
     return scene
 
 
@@ -99,16 +145,8 @@ def build_style_scene(item,asset,number,total,lang,style):
         text(title,box,'title',size,40,ink)
     def photo(box):
         if not asset:return
-        # Only a reviewed AI image may lose its edges. Uploaded photos retain their full frame.
-        allowed=asset.get('safe_frames',[]) if asset.get('origin')=='ai' else []
-        sequences={'graphite':('rect','circle','triangle','square'),
-                   'classic':('rect','square','circle','triangle'),
-                   'technical':('chamfer','hexagon','square','circle'),
-                   'natural':('rect','triangle','circle','square'),
-                   None:('rect','circle','square','triangle','hexagon','chamfer')}
-        sequence=sequences[mode]
-        requested=sequence[(number-1)%len(sequence)]
-        shape=requested if requested in allowed else 'rect'
+        selected=photo_mask(asset,mode,number)
+        shape='rect' if selected=='rounded' else selected
         bx,by,bw,bh=box;inner=(bx+16,by+16,bw-32,bh-32)
         if shape in ('circle','square','triangle','hexagon'):
             side=min(inner[2:]);fitted=(bx+(bw-side)/2,by+(bh-side)/2,side,side)
@@ -117,6 +155,7 @@ def build_style_scene(item,asset,number,total,lang,style):
         frame_color=blend(accent,bg,.24) if soft else {'graphite':'#A8B3BD','classic':'#829AB3',
                                        'technical':'#63BFD4','natural':'#829C71'}[mode]
         radius=42 if soft and shape=='rect' and asset.get('origin')!='user' else 0
+        if selected=='rounded':radius=min(42,min(fw,fh)*.08)
         # Native PowerPoint outlines follow the picture mask and remain editable.
         for gap,width in (((12,1.0),(5,1.5)) if soft else ((12,1.2),(5,2.0))):
             nodes.append({'type':'photo_frame','box':[fx-gap,fy-gap,fw+2*gap,fh+2*gap],
@@ -283,5 +322,6 @@ def build_style_scene(item,asset,number,total,lang,style):
         if soft:text(body,(240,355,920,270),size=38,minimum=28)
         else:text(body,(632,150,584,480),size=34,minimum=27);rule(570,80,2)
     if asset:scene['notes']+='\nImage: '+('supplied by user. Full frame preserved.' if asset.get('origin')=='user' else 'AI-generated illustration, not documentary evidence. Geometric framing only where approved by image review.')
+    user_frame_note(scene,asset)
     text(f'{number:02} / {total:02}',(64,680,1152,24),'footer',13,13,blend(ink,bg,.35))
     return validate_scene(scene)
