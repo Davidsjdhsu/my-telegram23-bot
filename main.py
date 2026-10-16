@@ -1,8 +1,9 @@
 import os
 import asyncio
 import tempfile
+from presentation_copy import personal_photo_story, needs_photo_context, photo_context_message, PHOTO_ONLY_LABELS, photo_sources
 from presentation_quality import local_issues, review_content, DeckQualityError, REVIEW_SYSTEM
-from presentation_visuals import prepare_images, render_slide, visual_quality_notice, photo_caption_hint, require_images, ImageDeliveryError, image_failure_notice
+from presentation_visuals import prepare_own_images, prepare_images, render_slide, visual_quality_notice, photo_caption_hint, require_images, ImageDeliveryError, image_failure_notice
 from presentation_designer import is_designer, render_designer_slide, content_instruction, validate_designer, build_scene, plan_designer_images, DesignerValidationError, designer_copy
 from contextlib import asynccontextmanager, suppress
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
@@ -1034,6 +1035,7 @@ class Form(StatesGroup):
     waiting_confirm = State()
     waiting_pres_photo_choice = State()
     waiting_pres_photos = State()
+    waiting_pres_photo_context = State()
     waiting_extra = State()
     waiting_style = State()
     waiting_word_category = State()
@@ -5332,7 +5334,7 @@ async def _start_presentation_request(m, state, text, lang, settings=None):
         "slides": extract_slide_count(text) or 8, "photo_mode": extract_photo_mode(text) or "ai",
         "mode": "ai", "content_lang": lang, "pres_plan": None, "pres_plan_key": None,
         "sample": None, "custom_colors": None, "user_photos": [], "pres_photo_captions": {}, "pres_brief_options": [],
-        "pres_request_id": str(uuid.uuid4()),
+        "pres_request_id": str(uuid.uuid4()), "pres_photo_context": None, "photo_album_only": False,
     }
     data.update(settings or {})
     if not can_afford(m.from_user.id, presentation_cost(data["slides"])):
@@ -5626,6 +5628,28 @@ async def finish_pres_photos(m: Message, state: FSMContext):
     await _build_presentation(m, state)
 
 
+async def ask_photo_context(m, state, lang):
+    keyboard = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text=PHOTO_ONLY_LABELS.get(lang, PHOTO_ONLY_LABELS['en']))],
+        [KeyboardButton(text=tr('btn_main_menu', lang))],
+    ], resize_keyboard=True)
+    await m.answer(photo_context_message(lang), reply_markup=keyboard)
+    await state.set_state(Form.waiting_pres_photo_context)
+
+
+@dp.message(Form.waiting_pres_photo_context)
+async def receive_photo_context(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    text = (m.text or '').strip()
+    if not text or len(text) > 3000:
+        await m.answer('Пришли короткий рассказ текстом (до 3000 символов) или выбери кнопку ниже.'
+                       if lang == 'ru' else 'Send a short description (up to 3000 characters) or choose the button below.')
+        return
+    only_photos = text in PHOTO_ONLY_LABELS.values() or text.lower() in ('только фото', 'по фото', 'photos only')
+    await state.update_data(pres_photo_context='' if only_photos else text, photo_album_only=only_photos)
+    await _build_presentation(m, state)
+
+
 @dp.message(Form.waiting_pres_photos)
 async def pres_photos_fallback(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
@@ -5635,6 +5659,9 @@ async def pres_photos_fallback(m: Message, state: FSMContext):
 async def _build_presentation(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
+    if needs_photo_context(data):
+        await ask_photo_context(m, state, lang)
+        return
     uid = m.from_user.id
     u = get_user(uid)
     # Баланс мог измениться с момента черновика (потрачен в другом месте) - перепроверяем
@@ -5658,6 +5685,20 @@ async def _build_presentation(m: Message, state: FSMContext):
             # Upload/legacy sessions have no structured preview yet.
             plan = await _create_presentation_plan(data, lang)
         plan = finalize_plan_design(validate_plan(plan, planned_slides), data, lang)
+        owned = None
+        photo_story = bool(data.get('user_photos') and personal_photo_story(data))
+        if data.get('user_photos'):
+            source_slides = [dict(s, _designer_design=plan['design'] if is_designer(data) else None,
+                                  _request_context='\n'.join(str(data.get(k) or '') for k in ('topic','extra','user_text')))
+                             for s in plan['slides']]
+            owned = await prepare_own_images(plan['title'], source_slides, data['user_photos'],
+                data.get('pres_photo_captions') or {}, visual_tmp.name, ask_presentation_vision, extract_json, describe=True)
+            data['photo_sources'] = photo_sources(owned[0])
+            # Personal stories need headings derived from actual photos and the user's account.
+            # Slot numbers stay fixed so text and photographs cannot drift apart.
+            if photo_story:
+                plan = await _create_presentation_plan(data, lang)
+                plan = finalize_plan_design(validate_plan(plan, planned_slides), data, lang)
         theme_name = data.get("theme_name") or pick_theme(data.get("topic", ""))[0]
         colors = data.get("custom_colors") or THEMES.get(theme_name, THEMES["default"])
         colors = apply_design(colors, plan)
@@ -5668,7 +5709,7 @@ async def _build_presentation(m: Message, state: FSMContext):
         prompt = content_prompt(data, plan, grok_json_lang_instruction(cgl or "ru"))
         designer = is_designer(data)
         if designer:
-            prompt += "\n" + content_instruction()
+            prompt += "\n" + content_instruction(photo_story=photo_story)
         base_prompt = prompt
         for attempt in range(3):
             raw = await ask_grok(prompt, max_tokens=10000, system_prompt=PRESENTATION_SYSTEM, temperature=0.35)
@@ -5679,6 +5720,7 @@ async def _build_presentation(m: Message, state: FSMContext):
             try:
                 candidate = extract_json(raw)
                 content = validate_content(candidate, plan)
+                content["_photo_story"] = photo_story
                 if designer:
                     for idx, content_slide in enumerate(content["slides"], 2):
                         if "designer" not in content_slide:
@@ -5747,10 +5789,14 @@ async def _build_presentation(m: Message, state: FSMContext):
                 visual_item['_designer_background'] = plan['design']['background']
                 visual_item['_designer_accent'] = plan['design']['accent']
             plan_designer_images(visual_slides, theme_name)
+        if photo_story:
+            # Do not fabricate additional documentary moments for a personal album.
+            for visual_item in visual_slides:
+                visual_item['_skip_ai_image'] = True
         assets, image_warnings = await prepare_images(
             content["title"], visual_slides, list(data.get("user_photos") or []),
             data.get("pres_photo_captions") or {}, visual_tmp.name,
-            generate_image, ask_presentation_vision, extract_json,
+            generate_image, ask_presentation_vision, extract_json, owned=owned,
         )
         require_images(visual_slides, assets, image_warnings, designer)
         # Verify geometry before the expensive file delivery / billing stage.

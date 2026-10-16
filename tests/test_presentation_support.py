@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import presentation_copy as pc
 import presentation_support as ps
 import presentation_visuals as pv
 import presentation_designer as pd
@@ -40,7 +41,8 @@ def load_functions(names, env=None):
     if len(nodes) != len(names):
         raise AssertionError(set(names)-{n.name for n in nodes})
     ns = {k: getattr(ps,k) for k in dir(ps) if not k.startswith('__')}
-    ns.update({k: getattr(pv,k) for k in ('prepare_images', 'render_slide', 'visual_quality_notice', 'require_images', 'ImageDeliveryError', 'image_failure_notice', 'photo_caption_hint')})
+    ns.update({k: getattr(pc,k) for k in ('personal_photo_story','needs_photo_context','photo_context_message','PHOTO_ONLY_LABELS','photo_sources')})
+    ns.update({k: getattr(pv,k) for k in ('prepare_own_images','prepare_images', 'render_slide', 'visual_quality_notice', 'require_images', 'ImageDeliveryError', 'image_failure_notice', 'photo_caption_hint')})
     ns.update({k: getattr(pd,k) for k in ('is_designer','render_designer_slide','content_instruction','validate_designer','build_scene','plan_designer_images','DesignerValidationError','designer_copy')})
     ns.update(env or {})
     module = ast.Module(body=[ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')],level=0)] + nodes, type_ignores=[])
