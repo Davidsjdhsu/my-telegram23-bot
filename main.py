@@ -5754,10 +5754,18 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
                             validation_stage = 'layout'
                             build_scene(content_slide, None, idx, planned_slides, cgl or lang, theme_name)
                     validation_stage, validation_slide = 'editor', 0
-                    quality_issues = local_issues(content, designer, data)
-                    structural_issue = bool(quality_issues)
-                    if not quality_issues:
-                        quality_issues = await review_content(data, plan, content, ask_grok, extract_json)
+                    local_findings = local_issues(content, designer, data)
+                    structural_issue = any(x['problem'] not in ('wording', 'repetition', 'conclusion')
+                                           for x in local_findings)
+                    if structural_issue:
+                        quality_issues = local_findings
+                    else:
+                        # Advisory local findings must not skip the factual review
+                        # or become fatal merely because a local checker found them.
+                        # Assign only after review succeeds: an unavailable reviewer
+                        # must never leave an advisory-only result eligible for delivery.
+                        reviewed = await review_content(data, plan, content, ask_grok, extract_json)
+                        quality_issues = local_findings + reviewed
                     if quality_issues:
                         # Only fixed issue categories enter logs; editor text stays within this request.
                         print("presentation_editor issues=" + ",".join(x["problem"] for x in quality_issues), flush=True)
