@@ -17,6 +17,7 @@ import presentation_visuals as pv
 import presentation_designer as pd
 import presentation_pdf as pp
 import presentation_recovery as pr
+from presentation_pricing import presentation_cost, presentation_price_notice
 import tempfile
 
 
@@ -140,7 +141,7 @@ class State:
 class WorkflowTests(unittest.IsolatedAsyncioTestCase):
     def env(self, **extra):
         env={'user_lang':lambda uid:'ru', 'can_afford':lambda *a:True,
-            'presentation_cost':lambda n:n*5, 'send_no_credits_notice':AsyncMock(),
+            'presentation_cost':presentation_cost, 'presentation_price_notice':presentation_price_notice, 'send_no_credits_notice':AsyncMock(),
             'process_slides':AsyncMock(), 'extract_slide_count':lambda t:int(re.search(r'(\d+) слайд',t)[1]) if re.search(r'(\d+) слайд',t) else None,
             'extract_style':lambda t:'minimal' if 'минимал' in t else None,
             'extract_photo_mode':lambda t:'own' if 'свои фото' in t else None,

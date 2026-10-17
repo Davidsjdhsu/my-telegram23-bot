@@ -114,7 +114,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
             prs=Presentation(io.BytesIO(sent[0][1]));self.assertEqual(len(prs.slides),3)
             names=[s.name for s in prs.slides[0].shapes]
             self.assertEqual(any(n.startswith('Designer') for n in names),name!='minimal')
-            env['spend_credits'].assert_called_once_with(-987654321,'presentation',amount=15)
+            env['spend_credits'].assert_called_once_with(-987654321,'presentation',amount=15 if name=='minimal' else 30)
             self.assertEqual(state.data,{})
 
     async def test_invalid_designer_response_not_charged(self):

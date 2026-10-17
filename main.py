@@ -1,6 +1,7 @@
 import os
 import asyncio
 import tempfile
+from presentation_pricing import presentation_cost, presentation_price_notice, PRESENTATION_CREDITS_PER_SLIDE, PRESENTATION_MIN_SLIDES
 from presentation_recovery import PresentationRecovery, missing_images, recovery_notice, PARTIAL_LABELS, RESUME_LABELS
 from presentation_pdf import convert_presentation_pdf, ensure_pdf_converter, PresentationPDFError, pdf_failure_notice
 from presentation_copy import final_process_requested, personal_photo_story, needs_photo_context, photo_context_message, PHOTO_ONLY_LABELS, photo_sources
@@ -601,21 +602,9 @@ STARTING_CREDITS = 100  # стартовый баланс для новых по
 # (текста, ИИ-фото). CREDIT_COSTS["presentation"] выше больше не используется для
 # расчёта реальной стоимости, оставлен только как исторический дефолт для
 # spend_credits() на случай, если где-то забыли передать явную сумму.
-PRESENTATION_CREDITS_PER_SLIDE = 5
-PRESENTATION_MIN_SLIDES = 3  # тот же минимум, что уже валидируется в gen_presentation/detect_slide_count
 WORD_CREDITS_PER_PAGE = 5
 WORD_MIN_PAGES = 1
 WORD_MAX_PAGES = 40  # раньше было 20 - не хватало на длинные работы вроде курсовой на 30 страниц
-
-
-def presentation_cost(slides) -> int:
-    """Стоимость презентации в кредитах по числу слайдов. Не роняется на нечисловом
-    вводе - откатывается на минимум, а не бросает исключение посреди генерации."""
-    try:
-        n = max(PRESENTATION_MIN_SLIDES, int(slides))
-    except (TypeError, ValueError):
-        n = PRESENTATION_MIN_SLIDES
-    return n * PRESENTATION_CREDITS_PER_SLIDE
 
 
 def word_cost(pages) -> int:
@@ -2082,13 +2071,13 @@ TR = {
                              "zh": "没能理解。请用下方按钮选择操作，或输入 /cancel 重新开始。",
                              "es": "No entendí. Elige una acción con el botón de abajo, o escribe /cancel para empezar de nuevo.",
                              "fr": "Je n'ai pas compris. Choisis une action avec le bouton ci-dessous, ou tape /cancel pour recommencer."},
-    "msg_plan_info": {"ru": "💳 Баланс: {credits} кредитов\nПрезентация — 5 кр./слайд · Word — 5 кр./страница · Excel — 5 кр. · распознавание фото — 3 кр. · шаблон бесплатно",
-                      "en": "💳 Balance: {credits} credits\nPresentation — 5 cr./slide · Word/Excel — 5 cr. · photo recognition — 3 cr. · template is free",
-                      "de": "💳 Guthaben: {credits} Credits\nPräsentation — 5 Cr./Folie · Word/Excel — 5 Cr. · Fotoerkennung — 3 Cr. · Vorlage kostenlos",
-                      "ar": "💳 الرصيد: {credits} كريدت\nعرض تقديمي — 5 لكل شريحة · وورد/إكسل — 5 · التعرف على الصور — 3 · القالب مجاني",
-                      "zh": "💳 余额：{credits} 积分\n演示文稿 — 每页5积分 · Word/Excel — 5 积分 · 图片识别 — 3 积分 · 模板免费",
-                      "es": "💳 Saldo: {credits} créditos\nPresentación — 5 cr./diapositiva · Word/Excel — 5 cr. · reconocimiento de fotos — 3 cr. · plantilla gratis",
-                      "fr": "💳 Solde : {credits} crédits\nPrésentation — 5 cr./diapositive · Word/Excel — 5 cr. · reconnaissance photo — 3 cr. · modèle gratuit"},
+    "msg_plan_info": {"ru": "💳 Баланс: {credits} кредитов\nОбычная презентация — 5 кр./слайд · Дизайнерская — 10 кр./слайд · Word — 5 кр./страница · Excel — 5 кр. · распознавание фото — 3 кр. · шаблон бесплатно",
+                      "en": "💳 Balance: {credits} credits\nStandard presentation — 5 cr./slide · Designer — 10 cr./slide · Word/Excel — 5 cr. · photo recognition — 3 cr. · template is free",
+                      "de": "💳 Guthaben: {credits} Credits\nStandardpräsentation — 5 Cr./Folie · Design — 10 Cr./Folie · Word/Excel — 5 Cr. · Fotoerkennung — 3 Cr. · Vorlage kostenlos",
+                      "ar": "💳 الرصيد: {credits} كريدت\nعرض عادي — 5 لكل شريحة · عرض مصمم — 10 لكل شريحة · وورد/إكسل — 5 · التعرف على الصور — 3 · القالب مجاني",
+                      "zh": "💳 余额：{credits} 积分\n普通演示文稿 — 每页5积分 · 设计版 — 每页10积分 · Word/Excel — 5 积分 · 图片识别 — 3 积分 · 模板免费",
+                      "es": "💳 Saldo: {credits} créditos\nPresentación normal — 5 cr./diapositiva · De diseño — 10 cr./diapositiva · Word/Excel — 5 cr. · reconocimiento de fotos — 3 cr. · plantilla gratis",
+                      "fr": "💳 Solde : {credits} crédits\nPrésentation standard — 5 cr./diapositive · Design — 10 cr./diapositive · Word/Excel — 5 cr. · reconnaissance photo — 3 cr. · modèle gratuit"},
     "msg_pptx_ready": {
         "ru": "Готово ✅\n\nPDF — для просмотра: все слайды с фотографиями и оформлением. Открывай его прямо в Telegram. PPTX — для редактирования в PowerPoint, Keynote или Google Презентациях.",
         "en": "Done ✅\n\nPDF contains all slides, photographs and design for viewing in Telegram. Use PPTX for editing in PowerPoint, Keynote or Google Slides.",
@@ -4602,7 +4591,7 @@ async def redisplay_pres_confirm(m: Message, state: FSMContext, lang: str):
     theme_name = data.get("theme_name", "default")
     style_label = THEME_LABELS_I18N.get(theme_name, {}).get(lang, THEME_LABELS.get(theme_name, theme_name))
     await _send_presentation_draft(m,
-        tr("msg_draft_ready_pres", lang, sample=sample, style=style_label), confirm_kb(lang))
+        tr("msg_draft_ready_pres", lang, sample=sample, style=style_label) + "\n\n" + presentation_price_notice(data.get("slides") or 8, data, lang), confirm_kb(lang))
     await state.set_state(Form.waiting_confirm)
 
 
@@ -5339,7 +5328,7 @@ async def _start_presentation_request(m, state, text, lang, settings=None):
         "pres_request_id": str(uuid.uuid4()), "pres_photo_context": None, "photo_album_only": False,
     }
     data.update(settings or {})
-    if not can_afford(m.from_user.id, presentation_cost(data["slides"])):
+    if not can_afford(m.from_user.id, presentation_cost(data["slides"], data)):
         await send_no_credits_notice(m, state, lang)
         return
     await state.update_data(**data)
@@ -5409,7 +5398,7 @@ async def process_slides(m: Message, state: FSMContext):
     slides = data.get("slides") or extract_slide_count(m.text or "") or (int(button_count[1]) if button_count else 8)
     slides = total_slides(slides)
     data.update(slides=slides)
-    if not can_afford(m.from_user.id, presentation_cost(slides)):
+    if not can_afford(m.from_user.id, presentation_cost(slides, data)):
         await send_no_credits_notice(m, state, lang)
         return
     await m.answer(tr("msg_building_sample", lang), reply_markup=cancel_kb(lang))
@@ -5425,7 +5414,7 @@ async def process_slides(m: Message, state: FSMContext):
     theme_name = data.get("theme_name", "default")
     style_label = THEME_LABELS_I18N.get(theme_name, {}).get(lang, THEME_LABELS.get(theme_name, theme_name))
     await _send_presentation_draft(m,
-        tr("msg_draft_ready_pres", lang, sample=sample, style=style_label), confirm_kb(lang))
+        tr("msg_draft_ready_pres", lang, sample=sample, style=style_label) + "\n\n" + presentation_price_notice(data.get("slides") or 8, data, lang), confirm_kb(lang))
     await state.set_state(Form.waiting_confirm)
 
 
@@ -5476,6 +5465,9 @@ async def process_style(m: Message, state: FSMContext):
     candidate = {**data, "theme_name": name, "extra": extra}
     if name.startswith("designer_"):
         candidate["custom_colors"] = None
+    if not can_afford(m.from_user.id, presentation_cost(candidate.get("slides") or 8, candidate)):
+        await send_no_credits_notice(m, state, lang)
+        return
     try:
         plan = await _create_presentation_plan(candidate, lang)
     except PresentationValidationError:
@@ -5485,7 +5477,7 @@ async def process_style(m: Message, state: FSMContext):
     await state.update_data(theme_name=name, custom_colors=candidate.get("custom_colors"), extra=extra, pres_plan=plan,
         pres_plan_key=plan_key(candidate), sample=sample)
     await _send_presentation_draft(m,
-        tr("msg_style_changed", lang, style=label, sample=sample), confirm_kb(lang))
+        tr("msg_style_changed", lang, style=label, sample=sample) + "\n\n" + presentation_price_notice(candidate.get("slides") or 8, candidate, lang), confirm_kb(lang))
     await state.set_state(Form.waiting_confirm)
 
 
@@ -5510,7 +5502,7 @@ async def process_extra(m: Message, state: FSMContext):
     extra = ((data.get("extra") or "") + "\n" + text).strip()
     candidate = {**data, "extra": extra,
                  "slides": extract_slide_count(text) or data.get("slides", 8)}
-    if not can_afford(m.from_user.id, presentation_cost(candidate["slides"])):
+    if not can_afford(m.from_user.id, presentation_cost(candidate["slides"], candidate)):
         await send_no_credits_notice(m, state, lang)
         return
     await m.answer(tr("msg_updating_draft", lang))
@@ -5524,7 +5516,7 @@ async def process_extra(m: Message, state: FSMContext):
     await state.update_data(extra=extra, slides=candidate["slides"],
         extra_used=data.get("extra_used", 0) + 1, pres_plan=plan,
         pres_plan_key=plan_key(candidate), sample=sample)
-    await _send_presentation_draft(m, tr("msg_draft_updated", lang, sample=sample), confirm_kb(lang))
+    await _send_presentation_draft(m, tr("msg_draft_updated", lang, sample=sample) + "\n\n" + presentation_price_notice(candidate["slides"], candidate, lang), confirm_kb(lang))
     await state.set_state(Form.waiting_confirm)
 
 
@@ -5670,7 +5662,8 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
     # перед тем, как заводить дорогую фоновую задачу (start_job ниже).
     planned_slides = total_slides(data.get("slides") or 8)
     data["slides"] = planned_slides
-    if not can_afford(uid, presentation_cost(planned_slides)):
+    order_cost = presentation_cost(planned_slides, data)
+    if not can_afford(uid, order_cost):
         await send_no_credits_notice(m, state, lang)
         return
     ok, reason = start_job(uid)
@@ -5682,7 +5675,7 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
     missing = []
     try:
         recovery = PresentationRecovery(uid, data, os.path.join(os.path.dirname(USERS_FILE), "presentation-recovery"))
-        await bot.send_message(uid, tr("msg_building_pres_photos", lang))
+        await bot.send_message(uid, tr("msg_building_pres_photos", lang) + "\n\n" + presentation_price_notice(planned_slides, data, lang))
         ensure_pdf_converter()  # Fail before model/image costs if server setup is incomplete.
         visual_tmp = tempfile.TemporaryDirectory(prefix="alix-slides-")
         resumed = await run_heavy(recovery.load, visual_tmp.name)
@@ -5805,7 +5798,7 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
         n = len(slides_data)
         if n + 1 != planned_slides:
             raise PresentationValidationError("Unexpected total slide count")
-        if not can_afford(uid, presentation_cost(planned_slides)):
+        if not can_afford(uid, order_cost):
             await send_no_credits_notice(m, state, lang)
             return
 
@@ -5883,7 +5876,7 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
         await bot.send_document(chat_id, FSInputFile(pdf_path, filename=f"{pres_fname}.pdf"), caption=tr("msg_pptx_pdf_caption", lang))
         u["generations"] += 1
         # Цена соответствует подтверждённому общему числу слайдов с обложкой.
-        spend_credits(uid, "presentation", amount=presentation_cost(planned_slides))
+        spend_credits(uid, "presentation", amount=order_cost)
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
         note_success(uid)
         for p in (pptx_path, pdf_path, *(data.get("user_photos") or [])):
@@ -5928,7 +5921,7 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
         await state.set_state(Form.waiting_confirm)
         try:
             chat_id = m.chat.id if getattr(m, "chat", None) else uid
-            notice = recovery_notice(missing, lang, presentation_cost(planned_slides)) if recovery_saved else image_failure_notice(lang)
+            notice = recovery_notice(missing, lang, order_cost) if recovery_saved else image_failure_notice(lang)
             keyboard = presentation_recovery_kb(lang) if recovery_saved else confirm_kb(lang)
             await bot.send_message(chat_id, notice, reply_markup=keyboard)
         except Exception:
@@ -9117,7 +9110,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
             slides = max(3, min(30, int(slides)))
         except (TypeError, ValueError):
             slides = 8
-        if not can_afford(m.from_user.id, presentation_cost(slides)):
+        if not can_afford(m.from_user.id, presentation_cost(slides, payload.get("style"))):
             await send_no_credits_notice(m, state, lang)
             return
         await _start_presentation_request(m, state, topic, lang, settings={
@@ -9414,7 +9407,7 @@ async def build_presentation_from_upload(m: Message, state: FSMContext, source_t
     lang = user_lang(m.from_user.id)
     uid = m.from_user.id
     slides = detect_slide_count(instruction)
-    if not can_afford(uid, presentation_cost(slides)):
+    if not can_afford(uid, presentation_cost(slides, await state.get_data())):
         await send_no_credits_notice(m, state, lang)
         return
     # Переиспользуем существующий сборщик презентаций целиком (тот же, что и в обычном
@@ -9686,7 +9679,7 @@ async def pres_clarify_handler(m: Message, state: FSMContext):
     style = extract_style(reply_text) or data.get("theme_name") or extract_style(topic) or "default"
     photo_mode = extract_photo_mode(reply_text) or data.get("photo_mode") or extract_photo_mode(topic) or "ai"
 
-    if not can_afford(m.from_user.id, presentation_cost(slides)):
+    if not can_afford(m.from_user.id, presentation_cost(slides, {**data, "theme_name": style})):
         await state.clear()
         await send_no_credits_notice(m, state, lang)
         return
