@@ -232,7 +232,7 @@ SUPPORT_USERNAME = (os.getenv("SUPPORT_USERNAME") or "AlixDocSupport").strip().l
 # WEB_BASE_URL - собственный публичный HTTPS-адрес этого сервиса (после переключения
 # Render с Background Worker на Web Service Render сам выдаёт такой адрес вида
 # https://<имя-сервиса>.onrender.com - без всякого отдельного домена).
-WEB_BASE_URL = (os.getenv("WEB_BASE_URL") or "").strip().rstrip("/")
+WEB_BASE_URL = (os.getenv("WEB_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
 # Папка со статикой Mini App (index.html, examples/...) - если решили разместить
 # страницу на этом же сервере, а не на GitHub Pages. Если папки нет - веб-сервер
 # просто не будет отдавать статику, вебхук и /api/action при этом продолжат работать.
@@ -4480,7 +4480,7 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
 # изменился, если сама ссылка выглядит одинаково. Добавляя это число в query-параметры,
 # каждая новая версия HTML получает технически другой адрес, и кэш Telegram больше не
 # может ошибочно посчитать её той же самой страницей.
-MINIAPP_VERSION = 17
+MINIAPP_VERSION = 18
 
 
 def build_miniapp_url(u):
@@ -5020,20 +5020,22 @@ def _usage_bar(credits, full_reference=200, width=12):
     return "▓" * filled + "░" * (width - filled)
 
 
-async def sync_menu_button(chat_id: int, u: dict, lang: str):
-    """Настраивает нативную кнопку меню Telegram (та, что сидит слева от поля ввода
-    сообщения, а не внутри Mini App).
+def native_miniapp_url(lang="ru"):
+    """Stable menu entry; identity and balance come from signed Telegram data."""
+    if not WEB_BASE_URL.startswith("https://"):
+        return None
+    return WEB_BASE_URL + "/index.html?" + urlencode({"entry": "menu", "lang": lang, "v": MINIAPP_VERSION})
 
-    Раньше здесь включалась MenuButtonWebApp, из-за чего кнопка "✨ Открыть меню"
-    дублировалась: один раз - нативной "таблеткой" у поля ввода, второй раз - тем же
-    пунктом внутри обычной reply-клавиатуры (см. main_kb/btn_open_miniapp), который
-    и остаётся единственным рабочим способом открыть Mini App. Поэтому нативную кнопку
-    меню теперь всегда возвращаем к стандартному виду (MenuButtonDefault) - лишнюю
-    "таблетку" убираем, а кнопка в клавиатуре продолжает работать как раньше."""
+
+async def sync_menu_button(chat_id: int | None, u: dict, lang: str):
+    url = native_miniapp_url(lang)
+    if not url:
+        return
     try:
-        await bot.set_chat_menu_button(chat_id=chat_id, menu_button=MenuButtonDefault())
+        await bot.set_chat_menu_button(chat_id=chat_id, menu_button=MenuButtonWebApp(
+            text=tr("btn_open_miniapp", lang), web_app=WebAppInfo(url=url)))
     except Exception as e:
-        print("Не удалось установить кнопку меню чата:", chat_id, e)
+        print("Не удалось установить кнопку меню чата:", type(e).__name__)
 
 
 _welcome_banner_file_id = {"value": None}  # file_id баннера после первой отправки: не заливать видео заново на каждый /start
@@ -9752,6 +9754,7 @@ def _cors_headers() -> dict:
         "Access-Control-Allow-Methods": "POST, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
         "Access-Control-Max-Age": "86400",
+        "Cache-Control": "no-store",
     }
 
 
@@ -9759,43 +9762,101 @@ async def api_action_options(request):
     return _aiohttp_web.Response(status=204, headers=_cors_headers())
 
 
-async def api_action_handler(request):
-    """Приём действий из Mini App через свой HTTP - работает при ЛЮБОМ способе
-    открытия Mini App, включая системную кнопку меню чата (где Telegram.WebApp.
-    sendData() платформой не поддерживается - см. sync_menu_button). Проверяет
-    initData (подлинность запроса реально от Telegram для этого пользователя),
-    строит облегчённую замену Message (_FakeMessageForApi) и прогоняет действие
-    через ТУ ЖЕ функцию _handle_miniapp_payload, что и настоящий web_app_data -
-    никакой отдельной логики для этого пути не заводится, чтобы поведение не
-    разъезжалось между способами открытия."""
+def miniapp_verified_user(init_data):
+    parsed = verify_telegram_init_data(init_data) if isinstance(init_data, str) else None
+    user = parsed.get("user") if isinstance(parsed, dict) else None
+    if not isinstance(user, dict) or type(user.get("id")) is not int or user["id"] <= 0:
+        return None
+    return user
+
+
+def miniapp_user_record(user):
+    u = get_user(user["id"])
+    name = str(user.get("first_name") or "").strip()
+    if name and u.get("name") != name:
+        u["name"] = name
+        save_users()
+    return u
+
+
+async def api_profile_handler(request):
     try:
         body = await request.json()
     except Exception:
-        return _aiohttp_web.json_response({"error": "bad json"}, status=400, headers=_cors_headers())
-    init_data = body.get("initData") or ""
-    action = (body.get("action") or "").strip()
-    payload = body.get("payload") or {}
-    parsed = verify_telegram_init_data(init_data)
-    if not parsed:
-        return _aiohttp_web.json_response({"error": "invalid init data"}, status=401, headers=_cors_headers())
-    user = parsed.get("user") or {}
-    uid = user.get("id")
-    if not uid or not action:
-        return _aiohttp_web.json_response({"error": "missing uid/action"}, status=400, headers=_cors_headers())
+        body = None
+    user = miniapp_verified_user(body.get("initData")) if isinstance(body, dict) else None
+    if not user:
+        return _aiohttp_web.json_response({"ok": False, "error": "invalid init data"}, status=401, headers=_cors_headers())
+    u = miniapp_user_record(user)
+    return _aiohttp_web.json_response({"ok": True, "profile": {
+        "name": u.get("name") or "", "credits": u.get("credits", 0),
+        "unlimited": user["id"] in ADMIN_IDS, "lang": user_lang(user["id"]),
+        "mode": u.get("control_mode", "buttons"),
+        "history": [str(h)[:200] for h in (u.get("history") or [])[-8:]],
+    }}, headers=_cors_headers())
+
+
+_miniapp_action_tasks = {}
+_miniapp_receipts = {}
+MINIAPP_ACTIONS = {"mode_buttons", "mode_voice", "topup", "gen_presentation", "gen_word",
+                   "gen_excel", "image", "chat", "history", "plan", "help", "presentation",
+                   "word", "excel", "template", "collab"}
+
+
+async def run_miniapp_action(user, payload, action):
+    uid = user["id"]
     try:
+        miniapp_user_record(user)
         fake_m = _FakeMessageForApi(uid, user.get("first_name", ""))
         m_proxy = ensure_answerable(fake_m)
         state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, chat_id=uid, user_id=uid))
         await _handle_miniapp_payload(m_proxy, state, payload, action)
     except Exception as e:
-        print("Ошибка /api/action:", repr(e))
-        import traceback
-        traceback.print_exc()
+        print("Ошибка действия Mini App:", type(e).__name__)
         try:
-            await bot.send_message(uid, "Что-то пошло не так при обработке запроса из меню. Попробуйте ещё раз.")
+            await bot.send_message(uid, "Не удалось выполнить запрос из меню. Откройте меню и повторите попытку.")
         except Exception:
             pass
-    return _aiohttp_web.json_response({"ok": True}, headers=_cors_headers())
+    finally:
+        _miniapp_action_tasks.pop(uid, None)
+
+
+async def api_action_handler(request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    headers = _cors_headers()
+    if not isinstance(body, dict) or not isinstance(body.get("payload", {}), dict):
+        return _aiohttp_web.json_response({"ok": False, "error": "bad request"}, status=400, headers=headers)
+    user = miniapp_verified_user(body.get("initData"))
+    if not user:
+        return _aiohttp_web.json_response({"ok": False, "error": "invalid init data"}, status=401, headers=headers)
+    action, payload = body.get("action"), body.get("payload") or {}
+    if not isinstance(action, str) or action not in MINIAPP_ACTIONS:
+        return _aiohttp_web.json_response({"ok": False, "error": "unknown action"}, status=400, headers=headers)
+    request_id = body.get("requestId")
+    if request_id is not None and (not isinstance(request_id, str) or not 1 <= len(request_id) <= 100):
+        return _aiohttp_web.json_response({"ok": False, "error": "bad request id"}, status=400, headers=headers)
+    uid = user["id"]
+    now = time.monotonic()
+    for key, receipt in list(_miniapp_receipts.items()):
+        if now - receipt[0] > 600:
+            del _miniapp_receipts[key]
+    key = (uid, request_id) if request_id else None
+    fingerprint = hashlib.sha256(json.dumps([action, payload], sort_keys=True).encode()).hexdigest()
+    if key in _miniapp_receipts:
+        if _miniapp_receipts[key][1] != fingerprint:
+            return _aiohttp_web.json_response({"ok": False, "error": "request id conflict"}, status=409, headers=headers)
+        return _aiohttp_web.json_response({"ok": True, "accepted": True}, status=202, headers=headers)
+    if uid in _miniapp_action_tasks or len(_miniapp_action_tasks) >= MAX_CONCURRENT_GENERATIONS:
+        return _aiohttp_web.json_response({"ok": False, "error": "busy"}, status=409, headers=headers)
+    _miniapp_action_tasks[uid] = asyncio.create_task(run_miniapp_action(user, payload, action))
+    if key:
+        if len(_miniapp_receipts) >= 2000:
+            del _miniapp_receipts[next(iter(_miniapp_receipts))]
+        _miniapp_receipts[key] = (now, fingerprint)
+    return _aiohttp_web.json_response({"ok": True, "accepted": True}, status=202, headers=headers)
 
 
 async def create_yookassa_payment(uid: int, amount_rub: int, credits: int, payment_method: str | None = None) -> str | None:
@@ -9946,7 +10007,7 @@ _STATIC_TEXT_TYPES = {
     ".css": "text/css; charset=utf-8",
 }
 _ROOT_STATIC_ALLOWED = re.compile(
-    r"^(index\.html|offer\.html|terms\.html|telegram-web-app\.js|preview-\d+\.jpg"
+    r"^(index\.html|offer\.html|terms\.html|miniapp-session\.js|telegram-web-app\.js|preview-\d+\.jpg"
     r"|assets/preview-[a-f0-9]{16}\.webp|examples/[^/\\]+\.(pptx|docx|xlsx))$"
 )
 _static_gzip_cache = {}  # путь -> ((mtime, size), сжатые байты)
@@ -10013,6 +10074,8 @@ async def start_web_server():
     app.router.add_get("/index.html", _miniapp_static_handler)
     app.router.add_get("/{filename:.+}", _miniapp_static_handler)
     app.router.add_post("/api/action", api_action_handler)
+    app.router.add_post("/api/profile", api_profile_handler)
+    app.router.add_options("/api/profile", api_action_options)
     try:
         app.router.add_options("/api/action", api_action_options)
     except Exception as e:  # CORS - дополнение, из-за него сервер не должен не стартовать
@@ -10030,6 +10093,7 @@ async def main():
     print("Бот запущен")
     print("REPLICATE TOKEN:", "YES" if REPLICATE_API_TOKEN else "NO")
     await start_web_server()
+    await sync_menu_button(None, {}, "ru")
     # Текст на экране бота ДО нажатия Start (карточка профиля бота в Telegram) -
     # выставляется один раз при каждом запуске, обёрнуто в try/except, потому что
     # это не критичная для работы бота вещь: если Telegram сейчас недоступен для
