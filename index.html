@@ -589,6 +589,7 @@
 
     <!-- ===== ЭКРАН: БЫСТРЫЙ СТАРТ (главный) ===== -->
     <div class="screen active" id="screen-quickstart">
+      <p id="sessionStatus" role="status" class="field-hint" hidden></p>
       <p class="greeting display" style="margin:0 0 4px" id="greetName">Привет, друг! 👋</p>
       <p class="chat-sub" data-i18n="quickstartSub">Вот что бот умеет делать — нажмите на пример, чтобы собрать свой</p>
 
@@ -1227,6 +1228,7 @@
   <button class="tab-item" data-tab="profile"><svg viewBox="0 0 24 24" stroke="#8b85a3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-user" xlink:href="#i-user"/></svg><span data-i18n="profileTitle">Профиль</span></button>
 </div>
 
+<script src="miniapp-session.js?v=18"></script>
 <script>
   // На медленной сети (видел живой случай на 3G) скрипт telegram-web-app.js может
   // не успеть догрузиться к моменту первого рендера - поэтому не кэшируем window.Telegram.WebApp
@@ -1263,8 +1265,9 @@
   // результат заново при каждом вызове (а не один раз в константу), а applyUserName()
   // ниже вызывается и сразу, и повторно после того как Telegram точно готов - так
   // имя подхватывается, даже если в момент первого рендера оно ещё не было доступно.
+  let verifiedProfileName = "";
   function currentName() {
-    return params.get('name') || (getTg()?.initDataUnsafe?.user?.first_name) || '';
+    return verifiedProfileName || (getTg()?.initDataUnsafe?.user?.first_name) || params.get('name') || '';
   }
   function applyUserName() {
     const name = currentName() || 'друг';
@@ -1277,13 +1280,15 @@
 
 
 
-  const credits = parseInt(params.get('credits') || '128', 10);
+  let credits = params.has('credits') ? parseInt(params.get('credits'), 10) : '…';
   // Адрес бэкенда бота - если задан и есть initData, формы отправляются через свой HTTP
   // (см. sendAction ниже), а не только через Telegram.WebApp.sendData(), который работает
   // ТОЛЬКО когда Mini App открыта через кнопку в reply-клавиатуре, а не через системную
   // кнопку меню чата (ограничение платформы, не наш баг).
-  const apiBase = params.get('api') || '';
-  const uiLang = params.get('lang') || 'ru';
+  const requestedApi = params.get('api');
+  const apiBase = requestedApi === 'https://alixdocbot-web.onrender.com' ? requestedApi : location.origin;
+  const miniSession = createMiniAppSession({ getTg, apiBase });
+  let uiLang = params.get('lang') || 'ru';
 
   // ==================== ЛОКАЛИЗАЦИЯ MINI APP ====================
   // Полный словарь на 7 языков (совпадают с языками бота: ru/en/de/ar/zh/es/fr).
@@ -1413,6 +1418,10 @@
   try { history = JSON.parse(params.get('history') || '[]'); } catch (e) { history = []; }
   const historyList = document.getElementById('historyList');
   const historyEmpty = document.getElementById('historyEmpty');
+  function renderHistory() {
+  historyList.replaceChildren();
+  historyList.style.display = history.length ? 'block' : 'none';
+  historyEmpty.style.display = history.length ? 'none' : 'block';
   if (history.length === 0) {
     historyList.style.display = 'none';
     historyEmpty.style.display = 'block';
@@ -1429,10 +1438,13 @@
     });
   }
 
+  }
+  renderHistory();
+
   // Круговая шкала: считаем "полным баком" условно 200 кредитов, плюс информативная подсказка
   const GAUGE_MAX = 200;
   const CIRC = 2 * Math.PI * 33; // ≈ 207.3
-  const pct = Math.max(0, Math.min(1, credits / GAUGE_MAX));
+  const pct = Math.max(0, Math.min(1, (Number(credits) || 0) / GAUGE_MAX));
   document.getElementById('gaugeFill').style.strokeDasharray = CIRC;
   document.getElementById('gaugeFill').style.strokeDashoffset = CIRC * (1 - pct);
   document.getElementById('gaugeNum').textContent = credits;
@@ -1555,22 +1567,21 @@
     // поддерживается. Если бэкенд не прокинут в ссылку или initData пустая (например,
     // запуск из кнопки в reply-клавиатуре — там initData не выдаётся вовсе) - откатываемся
     // на старый sendData, он для этого случая и работает.
-    if (apiBase && tg.initData) {
+    if (tg.initData) {
       try {
-        const resp = await fetch(apiBase + '/api/action', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action, initData: tg.initData, payload: extra || {} }),
-        });
-        if (!resp.ok) throw new Error('http ' + resp.status);
-        tg.close();
-        return;
+        if (await miniSession.send(action, extra || {})) tg.close();
       } catch (e) {
-        console.error('Ошибка отправки действия на сервер:', e);
-        const msg = 'Не удалось отправить запрос. Проверьте связь и попробуйте ещё раз.';
+        const msg = e.message === 'busy'
+          ? (uiLang === 'ru' ? 'Предыдущий запрос ещё выполняется. Дождитесь ответа в чате.' : 'A request is still running. Please wait for the reply in chat.')
+          : (uiLang === 'ru' ? 'Не удалось подтвердить приём запроса. Проверьте связь и повторите попытку.' : 'Could not confirm the request. Check your connection and retry.');
         if (tg.showAlert) tg.showAlert(msg); else alert(msg);
-        return;
       }
+      return;
+    }
+    if (params.get('entry') === 'menu') {
+      const msg = uiLang === 'ru' ? 'Telegram не передал данные входа. Закройте приложение и откройте синей кнопкой в чате бота.' : 'Please reopen this app from the bot menu button in Telegram.';
+      if (tg.showAlert) tg.showAlert(msg); else alert(msg);
+      return;
     }
     tg.sendData(JSON.stringify({ action, ...extra }));
     tg.close();
@@ -2003,6 +2014,33 @@
     };
     Object.keys(limits).forEach(id => { const el = document.getElementById(id); if (el) el.maxLength = limits[id]; });
   })();
+  async function refreshTelegramProfile() {
+    if (!getTg()?.initData) return;
+    const status = document.getElementById('sessionStatus');
+    status.hidden = false;
+    status.textContent = uiLang === 'ru' ? 'Обновляем профиль…' : 'Updating profile…';
+    try {
+      const { profile } = await miniSession.loadProfile();
+      verifiedProfileName = profile.name;
+      uiLang = profile.lang || uiLang;
+      credits = profile.unlimited ? '∞' : profile.credits;
+      applyI18n(); applyUserName();
+      for (const id of ['profCredits', 'pbBalanceNum', 'gaugeNum']) document.getElementById(id).textContent = credits;
+      document.getElementById('creditsCount').textContent = tpl('creditsCount', { n: credits });
+      const fraction = profile.unlimited ? 1 : Math.max(0, Math.min(1, Number(credits) / GAUGE_MAX));
+      document.getElementById('gaugeFill').style.strokeDashoffset = CIRC * (1 - fraction);
+      history = Array.isArray(profile.history) ? profile.history : [];
+      renderHistory();
+      document.getElementById('modeButtonsBtn').classList.toggle('active', profile.mode !== 'voice');
+      document.getElementById('modeVoiceBtn').classList.toggle('active', profile.mode === 'voice');
+      document.getElementById('creditsHint').textContent = t('presRates');
+      updatePresCostLabel(); updateWordCostLabel();
+      status.hidden = true;
+    } catch (e) {
+      status.textContent = uiLang === 'ru' ? 'Профиль не обновился. Проверьте связь и откройте приложение заново.' : 'Profile could not be refreshed. Check your connection and reopen the app.';
+    }
+  }
+
   (function initTelegramWithRetry(attemptsLeft = 20) {
     const tg = getTg();
     if (tg) {
@@ -2012,6 +2050,7 @@
       // имя именно в момент, когда мост точно готов (а не только один раз при первой
       // синхронной отрисовке страницы).
       applyUserName();
+      refreshTelegramProfile();
       return;
     }
     if (attemptsLeft > 0) setTimeout(() => initTelegramWithRetry(attemptsLeft - 1), 300);
