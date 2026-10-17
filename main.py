@@ -4480,7 +4480,7 @@ def add_chart(slide, l, t, w, h, chart_data_dict, colors):
 # изменился, если сама ссылка выглядит одинаково. Добавляя это число в query-параметры,
 # каждая новая версия HTML получает технически другой адрес, и кэш Telegram больше не
 # может ошибочно посчитать её той же самой страницей.
-MINIAPP_VERSION = 16
+MINIAPP_VERSION = 17
 
 
 def build_miniapp_url(u):
@@ -9947,7 +9947,7 @@ _STATIC_TEXT_TYPES = {
 }
 _ROOT_STATIC_ALLOWED = re.compile(
     r"^(index\.html|offer\.html|terms\.html|telegram-web-app\.js|preview-\d+\.jpg"
-    r"|examples/[^/\\]+\.(pptx|docx|xlsx))$"
+    r"|assets/preview-[a-f0-9]{16}\.webp|examples/[^/\\]+\.(pptx|docx|xlsx))$"
 )
 _static_gzip_cache = {}  # путь -> ((mtime, size), сжатые байты)
 

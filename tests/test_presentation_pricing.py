@@ -49,7 +49,7 @@ class PresentationPricingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(user['credits'], 100-amount)
                 env['spend_credits'].assert_called_once_with(-987654321, 'presentation', amount=amount)
                 ledger['save_users'].assert_called_once()
-                self.assertIn(str(amount)+' баллов', env['bot'].send_message.await_args_list[0].args[1])
+                self.assertIn(str(amount)+' кредитов', env['bot'].send_message.await_args_list[0].args[1])
 
     async def test_designer_insufficient_balance_stops_before_generation(self):
         for style in ('designer_soft', 'designer_strict'):
@@ -87,10 +87,10 @@ class PresentationPricingTests(unittest.IsolatedAsyncioTestCase):
         env['_create_presentation_plan'].assert_not_awaited()
         env['can_afford'] = lambda uid, cost: cost <= 80
         await env['process_style'](m, state)
-        self.assertIn('80 баллов', env['_send_presentation_draft'].await_args.args[1])
+        self.assertIn('80 кредитов', env['_send_presentation_draft'].await_args.args[1])
         m.text = 'Standard'
         await env['process_style'](m, state)
-        self.assertIn('40 баллов', env['_send_presentation_draft'].await_args.args[1])
+        self.assertIn('40 кредитов', env['_send_presentation_draft'].await_args.args[1])
 
     def test_quotes_include_total_and_formats_in_all_languages(self):
         for lang in ('ru','en','de','ar','zh','es','fr'):

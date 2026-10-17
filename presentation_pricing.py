@@ -23,7 +23,7 @@ def presentation_price_notice(slides, data=None, lang='ru'):
     rate = presentation_rate(data)
     cost = presentation_cost(slides, data)
     templates = {
-        'ru': 'Стоимость: {cost} баллов ({rate} за слайд, включая обложку). PPTX и PDF входят в стоимость.',
+        'ru': 'Стоимость: {cost} кредитов ({rate} за слайд, включая обложку). PPTX и PDF входят в стоимость.',
         'en': 'Price: {cost} credits ({rate} per slide, including the cover). PPTX and PDF are included.',
         'de': 'Preis: {cost} Credits ({rate} pro Folie, inklusive Titelfolie). PPTX und PDF sind enthalten.',
         'ar': 'السعر: {cost} رصيد ({rate} لكل شريحة، بما فيها الغلاف). يشمل PPTX وPDF.',
