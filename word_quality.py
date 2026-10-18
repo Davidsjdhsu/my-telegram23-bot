@@ -74,9 +74,29 @@ def word_section_budgets(content, target):
     nonbody = re.compile(r'содержани|литератур|источник|библиограф|references|bibliograph|contents', re.I)
     weights = [0 if nonbody.search(s.get('title', '')) else .3 if short.search(s.get('title', '')) else 1
                for s in sections]
-    total = sum(weights)
-    return [{'title': s.get('title', ''), 'target_words': round(target * w / total) if total else 0}
-            for s, w in zip(sections, weights)]
+    # Never ask the editor to shorten a section below the preservation gate.
+    # Keep existing prose budgets, then redistribute the remaining total among
+    # sections that can grow. References are retained but are not padded.
+    floors = [len((s.get('content') or '').split()) for s in sections]
+    budgets = list(floors)
+    remaining = max(int(target), sum(floors))
+    active = {i for i, weight in enumerate(weights) if weight > 0}
+    remaining -= sum(floors[i] for i in range(len(sections)) if i not in active)
+    while active:
+        total = sum(weights[i] for i in active)
+        locked = {i for i in active if remaining * weights[i] / total < floors[i]}
+        if locked:
+            remaining -= sum(floors[i] for i in locked)
+            active -= locked
+            continue
+        ordered = sorted(active)
+        for i in ordered:
+            budgets[i] = int(remaining * weights[i] / total)
+        for i in ordered[:remaining - sum(budgets[i] for i in ordered)]:
+            budgets[i] += 1
+        break
+    return [{'title': s.get('title', ''), 'target_words': budget}
+            for s, budget in zip(sections, budgets)]
 
 
 def clean_word_meta(meta, kind):
@@ -231,6 +251,7 @@ async def prepare_word_files(content, requested_pages, docx_path, pdf_path, *, b
                     revised_pages = await asyncio.to_thread(measure, revised_pdf)
                     revised_layout = await layout_at(revised_pdf)
                     revised_findings = word_review_findings(candidate, revised_pages, requested_pages, revised_layout)
+                    print(f'Word revision_candidate pages={revised_pages} findings={revised_findings}', flush=True)
                     # Same page count can improve substance or readability. Do not trade
                     # those for a new page-count error, emptier ending or lost prose.
                     closer = abs(revised_pages - requested_pages) < abs(actual - requested_pages)
@@ -248,6 +269,8 @@ async def prepare_word_files(content, requested_pages, docx_path, pdf_path, *, b
                         os.replace(revised_pdf, pdf_path)
                         content, actual, findings = candidate, revised_pages, revised_findings
                         accepted = True
+                    else:
+                        print('Word revision_rejected=layout_not_improved', flush=True)
         except Exception as exc:
             if promoting:
                 raise  # Never deliver a possibly mismatched DOCX/PDF pair.
@@ -272,29 +295,32 @@ def word_page_notice(lang, requested, actual, credits):
 
 def merge_word_expansion(original, expanded):
     """Only accept expanded paragraph text; never replace tables or user metadata."""
-    if not isinstance(expanded, dict):
+    def reject(reason):
+        print('Word revision_rejected=' + reason, flush=True)
         return original
+    if not isinstance(expanded, dict):
+        return reject('invalid_object')
     old, new = original.get('sections', []), expanded.get('sections', [])
     if not isinstance(new, list):
-        return original
+        return reject('invalid_sections')
     if len(old) != len(new) or not all(isinstance(b, dict) for b in new):
-        return original
+        return reject('section_count')
     if any(a.get('title') != b.get('title') or not isinstance(b.get('content'), str)
            for a, b in zip(old, new)):
-        return original
+        return reject('section_heading_or_content')
     for a, b in zip(old, new):
         before, after = a.get('content') or '', b['content']
         # A revision may polish prose, but must not erase a section or supplied numbers.
         if before.strip() and not after.strip():
-            return original
+            return reject('empty_section')
         if len(after.split()) < len(before.split()) * .8:
-            return original
+            return reject('section_shortened')
         numbers = lambda text: Counter(re.findall(r'\d+(?:[.,]\d+)*', text))
         if numbers(before) - numbers(after):
-            return original
+            return reject('numbers_changed')
         table_lines = lambda text: [p.strip() for p in text.splitlines() if p.strip().startswith('|')]
         if table_lines(before) != table_lines(after):
-            return original
+            return reject('table_changed')
     return {**original, 'sections': [{**a, 'content': b['content']} for a, b in zip(old, new)]}
 
 

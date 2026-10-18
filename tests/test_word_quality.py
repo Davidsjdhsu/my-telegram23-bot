@@ -13,7 +13,8 @@ from test_office import office_env
 import test_office
 from word_quality import (clean_word_meta, merge_word_expansion, prepare_word_files,
                           word_generation_schema, WORD_EDITORIAL_GUIDANCE,
-                          readable_word_paragraphs, word_review_findings, WORD_SYSTEM, WORD_REVIEW_SYSTEM)
+                          readable_word_paragraphs, word_review_findings, WORD_SYSTEM, WORD_REVIEW_SYSTEM,
+                          word_section_budgets)
 
 
 class WordMetadataTests(unittest.TestCase):
@@ -113,6 +114,25 @@ class WordPaginationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class WordContentReviewTests(unittest.IsolatedAsyncioTestCase):
+    def test_editor_budgets_can_pass_preservation_gate_for_long_introduction(self):
+        original = {'sections': [
+            {'title': title, 'content': ' '.join(['слово'] * count)}
+            for title, count in [('Введение', 62), ('Различия', 76), ('Условия', 86),
+                                 ('Пример', 86), ('Заключение', 57)]]}
+        budgets = word_section_budgets(original, 560)
+        self.assertEqual(sum(b['target_words'] for b in budgets), 560)
+        revised = {'sections': [{'title': b['title'], 'content': ' '.join(['пояснение'] * b['target_words'])}
+                                for b in budgets]}
+        self.assertIsNot(merge_word_expansion(original, revised), original)
+        self.assertTrue(all(b['target_words'] >= len(s['content'].split())
+                            for s, b in zip(original['sections'], budgets)))
+
+    def test_editor_budgets_preserve_existing_reference_text_without_expansion(self):
+        original = {'sections': [{'title': 'Источники', 'content': 'Источник указан пользователем'},
+                                 {'title': 'Тема', 'content': 'Подробное объяснение темы'}]}
+        self.assertEqual([b['target_words'] for b in word_section_budgets(original, 100)], [3, 97])
+        self.assertEqual([b['target_words'] for b in word_section_budgets(original, 2)], [3, 3])
+
     def test_prose_split_preserves_all_words_numbers_and_tables(self):
         text = ('Студент И. И. Иванов сохранил 3.14 МБ данных на компьютере. ' * 16).strip()
         split = readable_word_paragraphs(text)
