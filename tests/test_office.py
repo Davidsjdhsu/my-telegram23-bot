@@ -10,9 +10,9 @@ def office_env():
     tree=ast.parse((ROOT/'main.py').read_text());ns=dict(datetime=datetime,re=re,os=os,json=json,random=random,convert_word_pdf=word_quality.convert_word_pdf,merge_word_expansion=word_quality.merge_word_expansion)
     nodes=[ast.ImportFrom(module='__future__',names=[ast.alias(name='annotations')],level=0)]
     for n in tree.body:
-        if isinstance(n,ast.ImportFrom) and (n.module or '').split('.')[0] in ('docx','openpyxl'):nodes.append(n)
+        if isinstance(n,ast.ImportFrom) and (n.module or '').split('.')[0] in ('docx','openpyxl','word_quality'):nodes.append(n)
         elif isinstance(n,ast.Import) and any(x.name=='openpyxl' for x in n.names):nodes.append(n)
-        elif isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and (n.name.startswith('_xl_') or n.name in ('_run','_p','_vspace','_set_cell_borders','_student_title_page','_add_table','_parse_markdown_table','_body','build_word','build_excel_items','build_excel_startup','word_build','build_word_from_upload','safe_filename')):
+        elif isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and (n.name.startswith('_xl_') or n.name in ('_run','_p','_vspace','_set_cell_borders','_student_title_page','_tabbed_line','_add_table','_parse_markdown_table','_body','build_word','build_excel_items','build_excel_startup','word_build','build_word_from_upload','safe_filename')):
             n.decorator_list=[];nodes.append(n)
         elif isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('CONTRACT_FAMILY','ACT_FAMILY','STATEMENT_FAMILY','UNILATERAL_FAMILY','DECLARATION_FAMILY') for t in n.targets):nodes.append(n)
     exec(compile(ast.fix_missing_locations(ast.Module(body=nodes,type_ignores=[])),str(ROOT/'main.py'),'exec'),ns);return ns
@@ -42,6 +42,10 @@ class OfficeTests(unittest.TestCase):
 class WordWorkflowTests(unittest.IsolatedAsyncioTestCase):
     def env(self):
         e=office_env();e.update(user_lang=lambda _:'ru',get_user=Mock(return_value={'generations':0,'history':[]}),start_job=Mock(return_value=(True,'')),finish_job=Mock(),ensure_pdf_converter=Mock(),tr=lambda key,*a,**k:key,normalize_word_pages=lambda p:p,word_target_words=lambda p:p*250,grok_json_lang_instruction=lambda _:'',content_gen_lang=lambda *a:'ru',WORD_SIZE_KINDS=set(),STUDY_KINDS=set(),META_SCHEMAS={'doc':'{}'},WORD_KIND_DESC={'doc':'Документ'},ask_grok=AsyncMock(return_value='{"title":"Test","sections":[{"title":"Part","content":"Text"}]}'),extract_json=json.loads,run_heavy=AsyncMock(),convert_word_pdf=AsyncMock(),spend_credits=Mock(),word_cost=lambda p:p*10,note_success=Mock(),FSInputFile=lambda path,**kw:path,main_kb=lambda *a,**k:None,word_confirm_kb=lambda *a:None,signature_line=AsyncMock(return_value=''),can_afford=lambda *a:True,extract_page_count=lambda _:2,save_users=Mock())
+        async def prepare(*args, **kwargs):
+            # Only page measurement is stubbed; run the real orchestration and failure handling.
+            return await word_quality.prepare_word_files(*args, **kwargs, measure=lambda _: 2)
+        e['prepare_word_files'] = prepare
         m=SimpleNamespace(from_user=SimpleNamespace(id=-9901),answer=AsyncMock(),answer_document=AsyncMock());s=SimpleNamespace(get_data=AsyncMock(return_value={'word_kind':'doc','word_pages':2,'topic':'Test'}),clear=AsyncMock(),update_data=AsyncMock());return e,m,s
     async def test_model_failure_unlocks(self):
         e,m,s=self.env();e['ask_grok'].side_effect=RuntimeError('fixture');await e['word_build'](m,s);e['finish_job'].assert_called_once();e['spend_credits'].assert_not_called();m.answer_document.assert_not_awaited();s.clear.assert_not_awaited()

@@ -1,4 +1,8 @@
-from word_quality import convert_word_pdf, merge_word_expansion
+from word_quality import (
+    convert_word_pdf, merge_word_expansion, prepare_word_files, clean_word_meta,
+    word_generation_schema, WORD_EDITORIAL_GUIDANCE, INFORMATIONAL_WORD_KINDS,
+    expansion_word_target, word_page_notice,
+)
 import os
 import asyncio
 import tempfile
@@ -6045,6 +6049,24 @@ def _tabbed_line(doc, parts, tabs_cm=(7, 10), size=12, before=0, after=0):
 def _student_title_page(doc, kind_label, title, meta):
     """Титульный лист по образцу техникума/ссуза: жирные лейблы ВЫПОЛНИЛ/ПРОВЕРИЛ/ОЦЕНКА
     слева, линия подписи с ФИО справа от неё, мелкие подписи (подпись)/(ФИО) под линией."""
+    if not meta.get("_template"):
+        for key in ("org", "school"):
+            if meta.get(key):
+                _p(doc, meta[key], 13, align=WD_ALIGN_PARAGRAPH.CENTER, after=4)
+        _vspace(doc, 54)
+        _p(doc, kind_label, 16, True, WD_ALIGN_PARAGRAPH.CENTER, after=10)
+        heading = _p(doc, title, 16, True, WD_ALIGN_PARAGRAPH.CENTER, after=16)
+        heading.style = doc.styles["Title"]
+        labels = {"discipline": "Дисциплина", "specialty": "Специальность", "group": "Группа",
+                  "author": "Автор", "teacher": "Руководитель"}
+        for key, label in labels.items():
+            if meta.get(key):
+                _p(doc, f"{label}: {meta[key]}", 12, after=6)
+        place = " ".join(str(meta[k]) for k in ("city", "year") if meta.get(k))
+        if place:
+            _p(doc, place, 12, align=WD_ALIGN_PARAGRAPH.CENTER)
+        doc.add_page_break()
+        return
     _p(doc, meta.get("org") or "Министерство образования", 13, align=WD_ALIGN_PARAGRAPH.CENTER, after=0)
     _p(doc, meta.get("school") or "[Название учебного заведения]", 13, align=WD_ALIGN_PARAGRAPH.CENTER)
     _vspace(doc, 54)
@@ -6364,9 +6386,15 @@ def template_sections_for(kind):
 
 
 def build_word(path, title, sections, kind="doc", meta=None, extra_data=None):
-    meta = meta or {}
     extra_data = extra_data or {}
+    meta = dict(meta or {}) if extra_data.get("template") else clean_word_meta(meta, kind)
+    if extra_data.get("template"):
+        meta["_template"] = True
     doc = Document()
+    title_style = doc.styles["Title"]
+    title_style.font.color.rgb = DocxRGB(0, 0, 0)
+    for border in list(title_style.element.iter(qn("w:pBdr"))):
+        border.getparent().remove(border)
     sec = doc.sections[0]
     sec.page_width, sec.page_height = Cm(21), Cm(29.7)
     sec.top_margin = Cm(2)
@@ -6382,6 +6410,12 @@ def build_word(path, title, sections, kind="doc", meta=None, extra_data=None):
         sec.left_margin = Cm(2)
         sec.right_margin = Cm(2)
         _student_title_page(doc, "РЕФЕРАТ", title, meta)
+        _body(doc, sections, indent=True, head_center=True, size=14, line=1.2, first=1.0, head_size=14)
+
+    elif kind == "coursework" and not extra_data.get("template"):
+        sec.left_margin = Cm(2)
+        sec.right_margin = Cm(2)
+        _student_title_page(doc, "КУРСОВАЯ РАБОТА", title, meta)
         _body(doc, sections, indent=True, head_center=True, size=14, line=1.2, first=1.0, head_size=14)
 
     elif kind == "coursework":
@@ -6633,8 +6667,11 @@ def build_word(path, title, sections, kind="doc", meta=None, extra_data=None):
         _p(doc, f"Подпись: __________ / {meta.get('author') or '[ФИО]'} /", 12, before=20)
 
     else:
-        _p(doc, meta.get("org") or "", 11, True, after=0)
-        _p(doc, title, 16, True, WD_ALIGN_PARAGRAPH.CENTER, before=8, after=12)
+        if meta.get("org"):
+            _p(doc, meta["org"], 11, True, after=0)
+        heading = _p(doc, title, 16, True, WD_ALIGN_PARAGRAPH.CENTER, before=8, after=12)
+        heading.style = doc.styles["Title"]
+        heading.paragraph_format.keep_with_next = True
         _body(doc, sections, indent=True, head_center=False)
         if meta.get("sign"):
             _p(doc, "С уважением,", 12, before=16, after=0)
@@ -8278,7 +8315,7 @@ async def word_mode_template(m: Message, state: FSMContext):
             meta = json.loads(META_SCHEMAS.get(kind, META_SCHEMAS["doc"]))
         except Exception:
             meta = {}
-        (await run_heavy(build_word, tpl_path, "Документ", template_sections_for(kind), kind, meta))
+        (await run_heavy(build_word, tpl_path, "Документ", template_sections_for(kind), kind, meta, extra_data={"template": True}))
         await m.answer_document(FSInputFile(tpl_path), caption=tr("msg_template_caption", lang))
         try:
             os.remove(tpl_path)
@@ -8397,7 +8434,7 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
 Доп: {data.get('extra')}
 Итоговый документ будет иметь такой объём: {size_map[size]}. Но сейчас нужен не сам документ,
 а короткий план для согласования с пользователем.
-Исправь ошибки. {"Пиши формальным юридическим/деловым языком, без канцелярита-воды." if kind not in STUDY_KINDS else ANTI_AI_DETECTOR_STYLE}
+Исправь ошибки. {WORD_EDITORIAL_GUIDANCE if kind in INFORMATIONAL_WORD_KINDS else "Пиши деловым языком, точно и без канцелярита."}
 Важно: никогда не придумывай паспортные данные, суммы, даты или ФИО, которых нет в данных пользователя -
 для них ставь пропуски [указать ...]. Если документ содержательный (реферат, коммерческое предложение) -
 план должен отражать суть темы конкретно, а не общими фразами.
@@ -8527,8 +8564,9 @@ async def word_build(m: Message, state: FSMContext):
         # доверенности, КП поля вроде "кому"/"от кого" не заполнялись моделью
         # и в документе оставались заглушки, даже если пользователь их указал.
         meta_schema = META_SCHEMAS.get(kind, META_SCHEMAS["doc"])
-        if kind in STUDY_KINDS:
-            style_rule = ANTI_AI_DETECTOR_STYLE
+        meta_schema = word_generation_schema(kind, meta_schema)
+        if kind in INFORMATIONAL_WORD_KINDS:
+            style_rule = WORD_EDITORIAL_GUIDANCE
         elif kind == "resume":
             style_rule = (
                 "Пиши деловым, но живым языком резюме: короткие пункты вместо сплошных абзацев, "
@@ -8612,11 +8650,10 @@ async def word_build(m: Message, state: FSMContext):
     Если в данных пользователя есть даты, ФИО, паспортные данные, суммы, названия сторон - подставь их в meta и в текст
     точно как есть, ничего не меняя и не придумывая.
     Никогда не выдумывай паспортные данные, суммы, даты или ФИО, которых нет в данных пользователя -
-    для недостающих данных в тексте документа ставь [указать ...].
-    Для полей meta (school, discipline, group, teacher, city и т.п.), если данных нет - НЕ сочиняй свою формулировку
-    плейсхолдера и не добавляй к ней слово "указать": верни ровно то короткое значение в квадратных скобках, что
-    дано для этого поля в примере схемы meta ниже (например "[учебное заведение]", а не "[указать наименование
-    учебного заведения]") - иначе короткая подпись на титульном листе не помещается в строку и переносится некрасиво.
+    для обязательных реквизитов юридического документа ставь [указать ...]; необязательные сведения обычного документа пропусти.
+    Для полей meta используй только сведения пользователя. Если поле в схеме пустое и данных нет,
+    оставь пустую строку; не вставляй [учебное заведение], название министерства или текущий год от себя.
+    В шаблонах юридических документов сохрани предусмотренные схемой незаполненные реквизиты.
     Для содержательных документов (реферат, коммерческое предложение, заявление) разделы должны раскрывать
     тему конкретно и по существу, без воды и общих фраз.
     Не создавай в sections отдельный раздел «Титульный лист» - обложка (организация, учебное заведение, ФИО
@@ -8633,6 +8670,7 @@ async def word_build(m: Message, state: FSMContext):
     {json_example}{lang_instr}""", max_tokens=gen_max_tokens)
         try:
             content = extract_json(raw)
+            content["meta"] = clean_word_meta(content.get("meta"), kind)
             if not isinstance(content.get("sections"), list) or not content["sections"]:
                 raise ValueError("В ответе модели нет разделов документа")
         except Exception as e:
@@ -8641,90 +8679,45 @@ async def word_build(m: Message, state: FSMContext):
             await state.clear()
             return
 
-        # Числовые ориентиры по объёму в промпте модель выполняет непоследовательно -
-        # может уложиться в цель по одному разделу и заметно недобрать по другим,
-        # так что итоговый документ всё равно выходит в разы короче нужного. Вместо
-        # того чтобы полагаться на то, что промпт сработает с первого раза, меряем
-        # фактический объём и, если он далеко от цели, просим модель дописать черновик
-        # подробнее - раздел за разделом, с явной цифрой по каждому разделу отдельно
-        # (общая просьба "дописать подробнее" на практике не даёт нужного прироста).
-        # Минимум - ровно то, за что заплатил пользователь (страницы * WORDS_PER_PAGE). Раньше он брался
-        # по типу работы и не зависел от страниц: курсовая на 4 стр. дописывалась до ~6000 слов (~21 стр.),
-        # а на 40 стр. проверка проходила уже на 4200 словах.
-        min_total = words_total if (kind in WORD_SIZE_KINDS and pages >= 3) else None
-        if min_total:
-            actual_words = sum(len((b.get("content") or "").split()) for b in content.get("sections", []))
-            attempts = 0
-            while actual_words < min_total * 0.7 and attempts < 2:
-                attempts += 1
-                msg = tr("msg_writing_more", lang) if attempts == 1 else tr("msg_writing_a_bit_more", lang)
-                await m.answer(msg)
-                orig_sections = content.get("sections", [])
-                n_expandable = sum(
-                    1 for b in orig_sections
-                    if not any(k in (b.get('title') or '').lower() for k in _WORD_SECTION_SKIP_EXPAND)
-                )
-                section_min = word_expand_section_min(min_total, n_expandable)
-                targets_text = "\n".join(
-                    f"{i}. «{(b.get('title') or '').strip()}» — сейчас {len((b.get('content') or '').split())} слов, "
-                    + ("оставь как есть." if any(k in (b.get('title') or '').lower() for k in _WORD_SECTION_SKIP_EXPAND)
-                       else f"нужно не менее {section_min} слов.")
-                    for i, b in enumerate(orig_sections, 1)
-                )
-                expand_raw = await ask_grok(f"""Вот черновик документа в JSON, он слишком короткий: сейчас примерно {actual_words} слов, а нужно суммарно не менее {min_total}.
-    Раздел за разделом, вот что нужно дописать:
-    {targets_text}
-    В документе должно остаться РОВНО {len(orig_sections)} разделов, с теми же заголовками, в том же порядке -
-    не удаляй, не объединяй, не переименовывай и не убирай ни один раздел (включая "Содержание" и заголовки глав
-    вроде "Глава 1"), только доработай содержимое (content) там, где указана недостача.
-    Добавляй конкретные факты, примеры, аргументы, анализ, детали по теме - без воды и без повторов одной мысли разными словами.
-    Это критично: не пересказывай своими словами то, что уже написано в разделе, и не добавляй общие рассуждения
-    не по существу - это одновременно снижает уникальность текста (антиплагиат видит шаблонные обороты как
-    совпадения с другими работами) и делает текст более узнаваемым как сгенерированный. Расширяй раздел только
-    за счёт нового содержания: дополнительные примеры, цифры, источники, конкретные детали по теме, которых
-    раньше не было.
-    {style_rule}
-    Верни ТОЛЬКО JSON той же структуры, без пояснений:
-    {{"title":"...","meta":{meta_schema},"sections":[{{"title":"...","content":"..."}}]}}{lang_instr}
-    Черновик:
-    {json.dumps(content, ensure_ascii=False)}""", max_tokens=gen_max_tokens)
-                try:
-                    expanded = extract_json(expand_raw)
-                    expanded_sections = expanded.get("sections")
-                    expanded_words = sum(len((b.get("content") or "").split()) for b in expanded_sections or [])
-                    # Принимаем результат только если он не только длиннее, но и не потерял
-                    # разделы (модель иногда "экономит" объём, просто слив несколько
-                    # разделов в один или выкинув служебные заголовки при переписывании).
-                    if (isinstance(expanded_sections, list) and expanded_sections
-                            and len(expanded_sections) == len(orig_sections)
-                            and expanded_words > actual_words):
-                        content = merge_word_expansion(content, expanded)
-                        actual_words = sum(len((b.get("content") or "").split()) for b in content["sections"])
-                    else:
-                        break  # результат хуже или структурно испорчен - не продолжаем попытки
-                except Exception as e:
-                    print("Word expand parse error:", e)
-                    break
-
         try:
             docx_path = f"/tmp/doc_{uid}.docx"
-            (await run_heavy(build_word, 
-                docx_path,
-                content.get("title", "Документ"),
-                content.get("sections", []),
-                kind,
-                content.get("meta") or {},
-                extra_data={"skills": content.get("skills"), "languages": content.get("languages")}
-            ))
-
             pdf_path = f"/tmp/doc_{uid}.pdf"
-            await convert_word_pdf(docx_path, pdf_path)
+
+            async def render_content(value, path):
+                await run_heavy(build_word, path, value.get("title", "Документ"),
+                    value.get("sections", []), kind, value.get("meta") or {},
+                    extra_data={"skills": value.get("skills"), "languages": value.get("languages")})
+
+            async def expand_content(value, actual, requested):
+                await m.answer(tr("msg_writing_more", lang))
+                target = expansion_word_target(value, actual, requested)
+                prompt = f"""Готовый Word занимает {actual} стр. вместо выбранных {requested}.
+    Дополни основную часть содержательными пояснениями и примерами до примерно {target} слов суммарно.
+    Не раздувай введение, вывод, содержание или список источников. Не добавляй пустые абзацы и повторы.
+    Сохрани РОВНО те же разделы, их заголовки и порядок; меняй только content.
+    Таблицы, числа, имена, условия и реквизиты пользователя не меняй и не удаляй.
+    Не добавляй непроверенные факты, статистику или источники ради объёма.
+    Если исходных сведений недостаточно, сохрани честный короткий текст.
+    {WORD_EDITORIAL_GUIDANCE}
+    Задача пользователя: {data.get('topic') or ''}
+    Исходный текст: {data.get('user_text') or ''}
+    Дополнительные требования: {data.get('extra') or ''}
+    Верни JSON с sections (title, content). {lang_instr}
+    Документ: {json.dumps(value, ensure_ascii=False)}"""
+                return extract_json(await ask_grok(prompt, max_tokens=gen_max_tokens))
+
+            content, actual_pages = await prepare_word_files(content, pages, docx_path, pdf_path,
+                build=render_content, convert=convert_word_pdf,
+                expand=expand_content if kind in INFORMATIONAL_WORD_KINDS else None)
+            charged_pages = min(pages, actual_pages)
+            if actual_pages != pages:
+                await m.answer(word_page_notice(lang, pages, actual_pages, word_cost(charged_pages)))
 
             fname = safe_filename(content.get("title"), fallback=WORD_KIND_DESC.get(kind, "Документ"), author=(content.get("meta") or {}).get("author"))
             await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
             await m.answer_document(FSInputFile(pdf_path, filename=f"{fname}.pdf"), caption=tr("msg_pdf_caption", lang))
             u["generations"] += 1
-            spend_credits(uid, "word", amount=word_cost(pages))
+            spend_credits(uid, "word", amount=word_cost(charged_pages))
             u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
             note_success(uid)
             for p in (docx_path, pdf_path):
@@ -9336,6 +9329,7 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
             kind = "doc"
         kind_name = WORD_KIND_DESC.get(kind, "документ")
         meta_schema = META_SCHEMAS.get(kind, META_SCHEMAS["doc"])
+        meta_schema = word_generation_schema(kind, meta_schema)
         lang_instr = grok_json_lang_instruction(lang)
 
         raw = await ask_grok(f"""Собери Word-документ на основе присланного пользователем файла: {kind_name}.
@@ -9345,12 +9339,15 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
     На основе этого материала выполни задачу пользователя - напиши связный, содержательный текст, а не
     пересказывай материал построчно. Исправь ошибки, если они есть в исходнике.
     Не выдумывай факты, которых нет в материале и не следуют из него логично.
+    Неизвестные необязательные поля meta оставь пустыми, без заглушек.
+    {WORD_EDITORIAL_GUIDANCE}
     Только JSON:
     {{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\\n\\nабзац2"}},{{"title":"...","content":"..."}}]}}{lang_instr}""",
             max_tokens=8000)
 
         try:
             content = extract_json(raw)
+            content["meta"] = clean_word_meta(content.get("meta"), kind)
             if not isinstance(content.get("sections"), list) or not content["sections"]:
                 raise ValueError("В ответе модели нет разделов документа")
         except Exception as e:
