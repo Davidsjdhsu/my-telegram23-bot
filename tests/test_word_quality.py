@@ -1,17 +1,19 @@
 """Regressions for delivered Word defects and bounded page-aware recovery."""
 import asyncio
+import ast
 import copy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from docx import Document
 from test_office import office_env
 import test_office
 from word_quality import (clean_word_meta, merge_word_expansion, prepare_word_files,
                           word_generation_schema, WORD_EDITORIAL_GUIDANCE,
-                          readable_word_paragraphs, word_review_findings, WORD_SYSTEM)
+                          readable_word_paragraphs, word_review_findings, WORD_SYSTEM, WORD_REVIEW_SYSTEM)
 
 
 class WordMetadataTests(unittest.TestCase):
@@ -189,6 +191,47 @@ class WordContentReviewTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(pages, 2)
 
 
+class WordReviewRequestTests(unittest.IsolatedAsyncioTestCase):
+    def request_env(self):
+        source = ast.parse((Path(__file__).resolve().parents[1] / 'main.py').read_text())
+        function = next(n for n in source.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'ask_grok')
+        reply = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"sections": []}'), finish_reason='stop')])
+        create = AsyncMock(return_value=reply)
+        client = Mock(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        client.with_options.return_value = client
+        ns = dict(client=client, PRESENTATION_SYSTEM='presentation', REVIEW_SYSTEM='review',
+                  WORD_REVIEW_SYSTEM=WORD_REVIEW_SYSTEM, GROK_ERROR_PREFIX='ERROR:',
+                  asyncio=SimpleNamespace(sleep=AsyncMock()))
+        exec(compile(ast.Module(body=[function], type_ignores=[]), 'main.py', 'exec'), ns)
+        return ns, client, create
+
+    async def test_word_editor_uses_bounded_structured_request_and_keeps_author_model(self):
+        ns, client, create = self.request_env()
+        await ns['ask_grok']('Review', system_prompt=WORD_REVIEW_SYSTEM, temperature=.15)
+        client.with_options.assert_called_once_with(timeout=60., max_retries=0)
+        call = create.await_args.kwargs
+        self.assertEqual(call['model'], 'grok-4.6')
+        self.assertEqual(call['response_format'], {'type':'json_object'})
+        self.assertEqual(call['messages'][0]['content'], WORD_REVIEW_SYSTEM)
+        await ns['ask_grok']('Write', system_prompt=WORD_SYSTEM)
+        self.assertEqual(create.await_args.kwargs['model'], 'grok-4.3')
+        self.assertNotIn('response_format', create.await_args.kwargs)
+        await ns['ask_grok']('Slides', system_prompt='presentation')
+        self.assertEqual(create.await_args.kwargs['model'], 'grok-4.6')
+
+    async def test_word_editor_does_not_retry_truncated_json_or_loop_on_network_failure(self):
+        ns, client, create = self.request_env()
+        create.return_value.choices[0].finish_reason = 'length'
+        result = await ns['ask_grok']('Review', system_prompt=WORD_REVIEW_SYSTEM)
+        self.assertTrue(result.startswith('ERROR:'))
+        self.assertEqual(create.await_count, 1)
+        create.reset_mock()
+        create.side_effect = TimeoutError('fixture')
+        result = await ns['ask_grok']('Review', system_prompt=WORD_REVIEW_SYSTEM)
+        self.assertTrue(result.startswith('ERROR:'))
+        self.assertEqual(create.await_count, 2)
+
+
 class WordDeliveryPageTests(unittest.IsolatedAsyncioTestCase):
     def setup_env(self, actual):
         e,m,s=test_office.WordWorkflowTests().env()
@@ -223,8 +266,8 @@ class WordDeliveryPageTests(unittest.IsolatedAsyncioTestCase):
         e,m,s=self.setup_env(1)
         await e['word_build'](m,s)
         self.assertEqual(e['ask_grok'].await_count, 2)
-        for call in e['ask_grok'].await_args_list:
-            self.assertEqual(call.kwargs['system_prompt'], WORD_SYSTEM)
+        for call, system in zip(e['ask_grok'].await_args_list, (WORD_SYSTEM, WORD_REVIEW_SYSTEM)):
+            self.assertEqual(call.kwargs['system_prompt'], system)
             self.assertLessEqual(call.kwargs['temperature'], .25)
         self.assertIn('target_words', e['ask_grok'].await_args_list[-1].args[0])
 

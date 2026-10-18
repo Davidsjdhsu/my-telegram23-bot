@@ -2,7 +2,7 @@ from word_quality import (
     convert_word_pdf, merge_word_expansion, prepare_word_files, clean_word_meta,
     word_generation_schema, WORD_EDITORIAL_GUIDANCE, INFORMATIONAL_WORD_KINDS,
     expansion_word_target, word_page_notice, word_pdf_layout,
-    readable_word_paragraphs, word_revision_notice, WORD_SYSTEM, word_section_budgets,
+    readable_word_paragraphs, word_revision_notice, WORD_SYSTEM, WORD_REVIEW_SYSTEM, word_section_budgets,
 )
 import os
 import asyncio
@@ -3367,14 +3367,15 @@ async def ask_grok(prompt: str, max_tokens: int = 4000, *, system_prompt=None, t
     """Запрос к Grok с коротким повтором при сетевом сбое — одна ошибка API
     больше не роняет всю сборку документа с первой попытки."""
     last_err = None
-    structured = system_prompt in (PRESENTATION_SYSTEM, REVIEW_SYSTEM)
+    structured = system_prompt in (PRESENTATION_SYSTEM, REVIEW_SYSTEM, WORD_REVIEW_SYSTEM)
+    log_prefix = 'word_text' if system_prompt == WORD_REVIEW_SYSTEM else 'presentation_text'
     attempts = 2 if structured else 3
     api = client.with_options(timeout=60.0, max_retries=0) if structured else client
     options = {"response_format": {"type": "json_object"}, "extra_body": {"reasoning_effort": "low"}} if structured else {}
     for attempt in range(attempts):
         try:
             r = await api.chat.completions.create(
-                model="grok-4.6" if structured else "grok-4.3",  # Presentation authoring and editorial review share the verified structured model.
+                model="grok-4.6" if structured else "grok-4.3",  # Bounded structured authoring/review, including the independent Word editor.
                 messages=[
                     {"role": "system", "content": system_prompt or "Ты арт-директор презентаций. Пиши как живой сильный автор, не как нейросеть, и так, чтобы текст не триггерил детекторы ИИ-генерации: без канцелярита и шаблонных фраз («в современном мире», «является», «следует отметить», «данный», «невозможно переоценить», «таким образом», «подводя итог»), без идеально симметричной структуры абзацев и слишком гладких переходов. Чередуй короткие и длинные предложения неравномерно. Заголовки живые. Каждый ответ уникален. Исправляй ошибки. Только русский."},
                     {"role": "user", "content": prompt}
@@ -3385,7 +3386,7 @@ async def ask_grok(prompt: str, max_tokens: int = 4000, *, system_prompt=None, t
             content = (r.choices[0].message.content or "").strip()
             if structured and r.choices[0].finish_reason == "length":
                 last_err = "truncated_json"
-                print("presentation_text reason=truncated_json", flush=True)
+                print(f"{log_prefix} reason=truncated_json", flush=True)
                 break
             if content:
                 return content
@@ -3393,7 +3394,7 @@ async def ask_grok(prompt: str, max_tokens: int = 4000, *, system_prompt=None, t
         except Exception as e:
             last_err = e
             if structured:
-                print(f"presentation_text attempt={attempt+1} reason={type(e).__name__}", flush=True)
+                print(f"{log_prefix} attempt={attempt+1} reason={type(e).__name__}", flush=True)
             else:
                 print(f"Grok API error (попытка {attempt + 1}/3):", e)
         if attempt < attempts - 1:
@@ -8721,7 +8722,7 @@ async def word_build(m: Message, state: FSMContext):
     Верни JSON с sections (title, content). {lang_instr}
     Документ: {json.dumps(value, ensure_ascii=False)}"""
                 return extract_json(await ask_grok(prompt, max_tokens=gen_max_tokens,
-                    system_prompt=WORD_SYSTEM, temperature=0.15))
+                    system_prompt=WORD_REVIEW_SYSTEM, temperature=0.15))
 
             content, actual_pages = await prepare_word_files(content, pages, docx_path, pdf_path,
                 build=render_content, convert=convert_word_pdf,

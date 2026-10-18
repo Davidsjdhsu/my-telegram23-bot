@@ -175,10 +175,11 @@ class ComparisonHeaderTests(unittest.TestCase):
 class StructuredModelTests(unittest.IsolatedAsyncioTestCase):
     async def test_presentation_model_isolated_from_general_chat(self):
         from unittest.mock import Mock
+        from word_quality import WORD_REVIEW_SYSTEM
         result=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"issues":[]}'),finish_reason='stop')])
         client=Mock();client.with_options.return_value=client
         client.chat.completions.create=AsyncMock(return_value=result)
-        env=f.load_functions(['ask_grok'],{'client':client,'asyncio':asyncio,'REVIEW_SYSTEM':pq.REVIEW_SYSTEM,'GROK_ERROR_PREFIX':'ERROR'})
+        env=f.load_functions(['ask_grok'],{'client':client,'asyncio':asyncio,'REVIEW_SYSTEM':pq.REVIEW_SYSTEM,'WORD_REVIEW_SYSTEM':WORD_REVIEW_SYSTEM,'GROK_ERROR_PREFIX':'ERROR'})
         await env['ask_grok']('review',system_prompt=pq.REVIEW_SYSTEM)
         args=client.chat.completions.create.await_args.kwargs
         self.assertEqual(args['model'],'grok-4.6');self.assertEqual(args['extra_body'],{'reasoning_effort':'low'})
