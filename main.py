@@ -5033,7 +5033,7 @@ async def sync_menu_button(chat_id: int | None, u: dict, lang: str):
         return
     try:
         await bot.set_chat_menu_button(chat_id=chat_id, menu_button=MenuButtonWebApp(
-            text=tr("btn_open_miniapp", lang), web_app=WebAppInfo(url=url)))
+            text="Меню" if lang == "ru" else tr("btn_open_miniapp", lang), web_app=WebAppInfo(url=url)))
     except Exception as e:
         print("Не удалось установить кнопку меню чата:", type(e).__name__)
 
