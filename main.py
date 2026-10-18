@@ -1,3 +1,4 @@
+from word_quality import convert_word_pdf, merge_word_expansion
 import os
 import asyncio
 import tempfile
@@ -6146,6 +6147,8 @@ def _add_table(doc, table_data, size=11):
     t.alignment = WD_TABLE_ALIGNMENT.CENTER
     if headers:
         row = t.add_row()
+        repeat = OxmlElement("w:tblHeader")
+        row._tr.get_or_add_trPr().append(repeat)
         for i, htext in enumerate(headers):
             cell = row.cells[i]
             cell.text = ""
@@ -6153,6 +6156,8 @@ def _add_table(doc, table_data, size=11):
             _set_cell_borders(cell)
     for r in rows:
         row = t.add_row()
+        if max((len(str(value)) for value in r), default=0) < 500:
+            row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
         for i in range(ncols):
             cell = row.cells[i]
             cell.text = ""
@@ -6188,11 +6193,14 @@ def _body(doc, sections, indent=True, head_center=False, size=12, line=1.15, fir
         head = (block.get("title") or "").strip()
         body = block.get("content") or ""
         if head:
-            _p(
+            heading = _p(
                 doc, head, head_size, True,
                 align=WD_ALIGN_PARAGRAPH.CENTER if head_center else WD_ALIGN_PARAGRAPH.LEFT,
                 before=10, after=6
             )
+            heading.style = doc.styles["Heading 1"]
+            heading.paragraph_format.keep_with_next = True
+            heading.paragraph_format.keep_together = True
         raw_paras = [x.strip() for x in body.split("\n") if x.strip()]
         i = 0
         while i < len(raw_paras):
@@ -6360,6 +6368,7 @@ def build_word(path, title, sections, kind="doc", meta=None, extra_data=None):
     extra_data = extra_data or {}
     doc = Document()
     sec = doc.sections[0]
+    sec.page_width, sec.page_height = Cm(21), Cm(29.7)
     sec.top_margin = Cm(2)
     sec.bottom_margin = Cm(2)
     sec.left_margin = Cm(2.5)
@@ -6727,7 +6736,7 @@ def _xl_finalize_table(ws, colors, header_row, first_data_row, last_data_row, n_
     ws.freeze_panes = f"A{first_data_row}"
     last_col_letter = get_column_letter(n_cols)
     ws.auto_filter.ref = f"A{header_row}:{last_col_letter}{last_data_row}"
-    ws.row_dimensions[header_row].height = 26
+    ws.row_dimensions[header_row].height = 36
 
 
 def _xl_header_row(ws, row_idx, headers, colors):
@@ -6789,19 +6798,28 @@ def _xl_total_row(ws, row_idx, label, values, colors, n_cols, money_cols=None, p
         c = ws.cell(row=row_idx, column=i)
         c.border = Border(left=thin, right=thin, top=Side(style="double", color=_xl_hex(colors["mute"])), bottom=thin)
         c.font = XlFont(bold=True)
+        c.fill = fill
+        c.alignment = Alignment(vertical="center", wrap_text=True)
         if i > 1 and i - 2 < len(values) and values[i - 2] is not None:
             c.value = values[i - 2]
             if money_cols and i in money_cols:
                 c.number_format = '#,##0.00 ₽'
+                ws.column_dimensions[get_column_letter(i)].width = max(18, ws.column_dimensions[get_column_letter(i)].width)
             elif percent_cols and i in percent_cols:
                 c.number_format = '0.0%'
+
+    first_value_col = next((i + 2 for i, value in enumerate(values) if value is not None), n_cols + 1)
+    if first_value_col > 2:
+        ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=first_value_col - 1)
+    ws.row_dimensions[row_idx].height = 32
 
 
 def _xl_title(ws, title, colors, n_cols):
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
     c = ws.cell(row=1, column=1, value=title)
     c.font = XlFont(bold=True, size=14, color=_xl_hex(colors["ink"] if sum(colors["bg"]) > 400 else (30, 30, 30)))
-    ws.row_dimensions[1].height = 28
+    c.alignment = Alignment(wrap_text=True, vertical="center")
+    ws.row_dimensions[1].height = 42
 
 
 def _xl_subtitle(ws, text, colors, n_cols, row=2):
@@ -6810,6 +6828,8 @@ def _xl_subtitle(ws, text, colors, n_cols, row=2):
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n_cols)
     c = ws.cell(row=row, column=1, value=text)
     c.font = XlFont(italic=True, size=9, color=_xl_hex(colors["mute"]))
+    c.alignment = Alignment(wrap_text=True, vertical="center")
+    ws.row_dimensions[row].height = 32
 
 
 def _xl_category_list(rows):
@@ -6951,17 +6971,21 @@ def _xl_inject_cached_values(path, cache):
     tmp_path = path + ".tmp"
     with zipfile.ZipFile(path, "r") as zin:
         data = {n: zin.read(n) for n in zin.namelist()}
-    xml = data[sheet_path].decode("utf-8")
-    for ref, val in cache.items():
-        if val is None:
+    from xml.etree import ElementTree as ET
+    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    ET.register_namespace("", ns)
+    root = ET.fromstring(data[sheet_path])
+    for cell in root.iter("{" + ns + "}c"):
+        ref = cell.get("r")
+        if ref not in cache or cache[ref] is None or cell.find("{" + ns + "}f") is None:
             continue
-        # openpyxl уже пишет пустой <v></v> (или самозакрывающийся <v/>) сразу после
-        # </f> - подставляем число внутрь него, а не добавляем новый тег.
-        pattern = re.compile(r'(<c r="%s"[^>]*>(?:(?!</c>).)*?</f>)<v\s*/?>(?:</v>)?(</c>)' % re.escape(ref), re.DOTALL)
-        xml, n = pattern.subn(lambda m: f"{m.group(1)}<v>{val}</v>{m.group(2)}", xml, count=1)
-        if not n:
-            print(f"_xl_inject_cached_values: не нашёл ячейку {ref} с формулой (не критично)")
-    data[sheet_path] = xml.encode("utf-8")
+        val = cache[ref]
+        cell.set("t", "str" if isinstance(val, str) else "n")
+        v = cell.find("{" + ns + "}v")
+        if v is None:
+            v = ET.SubElement(cell, "{" + ns + "}v")
+        v.text = str(val)
+    data[sheet_path] = ET.tostring(root, encoding="utf-8")
     with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
         for n, content in data.items():
             zout.writestr(n, content)
@@ -7058,7 +7082,11 @@ def build_excel_items(path, title, kind, colors, rows, subtitle=None):
             # напишет ровно "доход"/"расход" - иначе SUMIF ниже просто не найдёт совпадение
             # (он сравнивает строки целиком, а не по смыслу) и итог молча окажется нулевым.
             raw_type = (row.get("type") or "").strip().lower()
-            norm_type = expense_label if "расход" in raw_type else income_label
+            type_map = {"доход": income_label, "доходы": income_label, "income": income_label,
+                        "расход": expense_label, "расходы": expense_label, "expense": expense_label, "expenses": expense_label}
+            if raw_type not in type_map:
+                raise ValueError("Неизвестный тип строки бюджета")
+            norm_type = type_map[raw_type]
             amount = _xl_num(row.get("amount"))
             if norm_type == income_label:
                 total_inc += amount
@@ -7211,17 +7239,22 @@ def build_excel_startup(path, title, colors, data):
     _xl_title(ws, title, colors, n_cols)
     cache = {}  # адрес ячейки -> посчитанное код значение, для _xl_inject_cached_values
 
-    ws.cell(row=2, column=1, value=f"Стартовые вложения: {investment:,.0f} ₽ · Сформировано: {datetime.now().strftime('%d.%m.%Y')}".replace(",", " ")).font = XlFont(italic=True, size=10)
-
-    # блок постоянных ежемесячных расходов - отдельной таблицей, чтобы сумма расходов
-    # в помесячном расчёте тоже была формулой (SUM), а не готовым числом
-    r = 4
+    _xl_subtitle(ws, "Синие ячейки — исходные данные. Постоянные цена, продажи и расходы по месяцам.", colors, n_cols)
+    for row, label, value in ((3, "Стартовые вложения, ₽", investment),
+                              (4, "Цена за единицу, ₽", price),
+                              (5, "Продажи в месяц, шт.", monthly_sales)):
+        _xl_body_row(ws, row, [label, None, None, None, value], colors,
+                     money_cols={5} if row != 5 else set())
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        ws.cell(row, 5).font = XlFont(color="1767B0", bold=True)
+    r = 8
     ws.cell(row=r, column=1, value="Ежемесячные расходы").font = XlFont(bold=True)
     r += 1
     exp_first = r
     total_exp_value = sum((e.get("amount") or 0) for e in expenses)
     for i, e in enumerate(expenses, 1):
-        _xl_body_row(ws, r, [None, e.get("name", ""), None, None, e.get("amount", 0)], colors, money_cols={5}, zebra=(i % 2 == 0))
+        _xl_body_row(ws, r, [e.get("name", ""), None, None, None, e.get("amount", 0)], colors, money_cols={5}, zebra=(i % 2 == 0))
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=4)
         r += 1
     exp_last = r - 1 if expenses else exp_first
     if not expenses:
@@ -7240,9 +7273,6 @@ def build_excel_startup(path, title, colors, data):
 
     r += 1
 
-    ws.cell(row=r, column=1, value=f"Цена за единицу: {price:,.0f} ₽ · Продажи в месяц: {monthly_sales:,.0f} шт.".replace(",", " ")).font = XlFont(italic=True, size=10)
-    r += 2
-
     headers = ["Месяц", "Выручка, ₽", "Расходы, ₽", "Прибыль, ₽", "Накопительно, ₽"]
     _xl_header_row(ws, r, headers, colors)
     table_start = r + 1
@@ -7259,11 +7289,11 @@ def build_excel_startup(path, title, colors, data):
         cum_values.append(running)
 
     for month in range(1, horizon + 1):
-        rev_formula = f"={price}*{monthly_sales}"
-        exp_formula = f"=E{total_exp_row}"
+        rev_formula = "=$E$4*$E$5"
+        exp_formula = f"=$E${total_exp_row}"
         profit_formula = f"=B{r}-C{r}"
         if month == 1:
-            cum_formula = f"=D{r}-{investment}"
+            cum_formula = f"=D{r}-$E$3"
         else:
             cum_formula = f"=D{r}+E{r - 1}"
         _xl_body_row(ws, r, [f"Месяц {month}", rev_formula, exp_formula, profit_formula, cum_formula], colors, money_cols={2, 3, 4, 5}, zebra=(month % 2 == 0))
@@ -7275,22 +7305,17 @@ def build_excel_startup(path, title, colors, data):
     table_end = r - 1
     _xl_finalize_table(ws, colors, table_start - 1, table_start, table_end, n_cols)
 
-    # срок окупаемости - первый месяц, где накопительный итог формулой стал неотрицательным;
-    # считается по-настоящему из реальных чисел пользователя (это математика, а не выдумка),
-    # но записывается как обычная сводная ячейка, а не как сложная формула поиска,
-    # чтобы не зависеть от array-формул, которые по-разному ведут себя в разных версиях Excel.
-    payback = next((i + 1 for i, v in enumerate(cum_values) if v >= 0), None)
-
+    import math
+    # Depends on the calculated monthly rows, so manual changes recalculate too.
     r += 1
-    ws.cell(row=r, column=1, value="Срок окупаемости").font = XlFont(bold=True)
-    ws.cell(row=r, column=2, value=(f"{payback} мес." if payback else f"не достигается за {horizon} мес."))
+    payback_formula = (f'=IF($E$3<=0,0,IF(COUNTIF(E{table_start}:E{table_end},">=0")=0,'
+                       f'"Не достигается",MATCH(TRUE,INDEX(E{table_start}:E{table_end}>=0,0),0)))')
+    _xl_total_row(ws, r, "Окупаемость в пределах расчёта, мес.", [None, None, None, payback_formula], colors, n_cols)
+    cache[f"E{r}"] = 0 if investment <= 0 else next((i + 1 for i, v in enumerate(cum_values) if v >= 0), "Не достигается")
     r += 1
-    ws.cell(row=r, column=1, value="Точка безубыточности (продаж/мес)").font = XlFont(bold=True)
-    be_cell = ws.cell(row=r, column=2, value=f"=ROUNDUP(E{total_exp_row}/{price},0)" if price else "—")
-    if price:
-        be_cell.number_format = '#,##0 "шт."'
-        import math
-        cache[f"B{r}"] = math.ceil(total_exp_value / price)
+    _xl_total_row(ws, r, "Точка безубыточности, продаж/мес.", [None, None, None,
+                  f'=IF($E$4>0,ROUNDUP(E{total_exp_row}/$E$4,0),"Укажите цену")'], colors, n_cols)
+    cache[f"E{r}"] = math.ceil(total_exp_value / price) if price > 0 else "Укажите цену"
 
     for i in range(1, n_cols + 1):
         ws.column_dimensions[get_column_letter(i)].width = 20
@@ -7638,6 +7663,8 @@ async def excel_build(m: Message, state: FSMContext):
                 raise ValueError("Модель не вернула строки таблицы")
             xlsx_path = f"/tmp/xl_{uid}.xlsx"
             xl_subtitle = f"Сформировано: {datetime.now().strftime('%d.%m.%Y')}"
+            if ai_mode:
+                xl_subtitle += " · Условный пример — замените числа своими"
             if topic and data.get("excel_mode") != "user":
                 topic_short = topic if len(topic) <= 60 else topic[:57] + "..."
                 xl_subtitle += f" · Тема: {topic_short}"
@@ -8481,259 +8508,244 @@ async def word_build(m: Message, state: FSMContext):
     if not ok:
         await m.answer(reason)
         return
-    await m.answer(tr("msg_building_word", lang))
-    kind = data.get("word_kind", "doc")
-    size = data.get("word_size", "short")
-    pages = normalize_word_pages(data.get("word_pages") or (2 if size == "short" else 6))
-    lang_instr = grok_json_lang_instruction(content_gen_lang(data, lang) or "ru")
-    size_map = {
-        "short": f"держи объём около {pages} страниц Word",
-        "long": f"держи объём около {pages} страниц Word, подробно",
-    }
-    kind_name = WORD_KIND_DESC.get(kind, "документ")
-    # Схема мета-полей своя под каждый тип документа (модульный словарь META_SCHEMAS,
-    # он же переиспользуется в режиме "Скачать шаблон") — раньше запрашивалась
-    # всегда одна и та же (реферат/договор), из-за чего для заявления,
-    # доверенности, КП поля вроде "кому"/"от кого" не заполнялись моделью
-    # и в документе оставались заглушки, даже если пользователь их указал.
-    meta_schema = META_SCHEMAS.get(kind, META_SCHEMAS["doc"])
-    if kind in STUDY_KINDS:
-        style_rule = ANTI_AI_DETECTOR_STYLE
-    elif kind == "resume":
-        style_rule = (
-            "Пиши деловым, но живым языком резюме: короткие пункты вместо сплошных абзацев, "
-            "конкретные обязанности и измеримые достижения (цифры, проценты, результаты), "
-            "без канцелярита и без юридических оборотов - это не договор."
-        )
-    else:
-        style_rule = "Пиши формальным юридическим/деловым языком, грамотно и точно по формулировкам ГК РФ, где применимо."
-    # Финальная сборка — это не короткий черновик-план, а весь текст документа целиком,
-    # поэтому фиксированного лимита в 4000 токенов не хватало на курсовую/реферат с
-    # "полным раскрытием темы" (там нужно 6000-10000+ слов), и модель тихо обрезала
-    # содержание. Лимит теперь подбирается по типу документа и выбранной глубине.
-    # Русский текст обычно занимает 1.5-2 токена на слово, плюс накладные расходы
-    # на JSON-обёртку (кавычки, экранирование, ключи полей) - лимит с запасом,
-    # чтобы модель физически не упёрлась в потолок на середине последнего раздела.
-    gen_max_tokens = min(20000, 2500 + pages * 900)
-    # Расплывчатые формулировки вроде "несколько содержательных абзацев" модель
-    # игнорирует и всё равно пишет коротко, даже с большим лимитом токенов -
-    # нужны точные числовые ориентиры по объёму на раздел, иначе она работает
-    # по привычке писать компактно, независимо от того, сколько токенов доступно.
-    words_total = word_target_words(pages)
-    if kind in WORD_SIZE_KINDS and pages >= 4:
-        # Курсовые/рефераты/доклады/эссе на серьёзный объём (4+ страниц - явно не
-        # "коротко для галочки") - плоская формула "страницы×280 слов" тут не годится:
-        # без явного минимума на раздел модель может размазать общий объём неровно,
-        # оставив часть разделов формальными 2-3 предложениями вместо полноценного
-        # раскрытия. Пороги примерно как для реальных учебных работ такого типа.
-        section_min = word_section_min(kind, words_total)
-        length_hint = (
-            f"\nЭто полноценная работа для сдачи (не черновик и не план), целевой объём — "
-            f"примерно {words_total} слов ({pages} страниц Word). Каждый содержательный "
-            f"раздел (кроме титульного листа, содержания и списка литературы) — "
-            f"НЕ МЕНЕЕ {section_min} слов: развёрнутые абзацы с фактами, примерами, "
-            "анализом, а не общие фразы в 2-3 предложения. Не экономь на глубине ради "
-            "краткости - лучше раскрыть меньше подтем, но каждую по-настоящему полно."
-        )
-        gen_max_tokens = max(gen_max_tokens, 8000)  # глубокому тексту нужен запас токенов с лихвой
-    else:
-        length_hint = (
-            f"\nЦелевой объём документа — {pages} страниц Word (примерно {words_total} слов). "
-            "Пиши ровно на этот объём: не короче и без воды ради объёма."
-        )
-    # Модель склонна писать заключение как краткий пересказ глав и не проверять
-    # число источников - это отдельная, часто игнорируемая инструкция, поэтому
-    # прописываем её явно, а не полагаемся на общее описание вида документа.
-    structure_hint = ""
-    if kind in ("coursework", "referat"):
-        structure_hint = (
-            "\nПервым разделом в sections обязательно должен идти раздел «Содержание» - "
-            "перечисли в его content все остальные разделы и подразделы документа по одному на строке "
-            "(без номеров страниц, они не нужны в черновике). Не пропускай этот раздел.\n"
-            "Заключение пиши как самостоятельные выводы по каждой задаче из введения "
-            "и рекомендации по теме - не пересказывай содержание глав.\n"
-            "Раздел со списком литературы должен содержать не менее 5 источников "
-            "(автор/название/год/издательство или ссылка), оформленных по ГОСТ.\n"
-            "ОБЯЗАТЕЛЬНО добавь хотя бы одну таблицу (ключ \"table\", см. схему ниже) в практическую/аналитическую "
-            "главу - это часть требований к курсовой/реферату, а не опция. Собери в неё конкретные цифры по теме: "
-            "результаты опроса, статистику, сравнение показателей до/после, данные по годам - придумай "
-            "правдоподобные иллюстративные значения, если реальных нет под рукой (как и с остальным текстом "
-            "черновика). Это требование не выполняется текстовым описанием цифр вместо таблицы."
-        )
-    # Схема примера JSON в конце промпта - для резюме отдельная (с skills/languages
-    # на верхнем уровне и без "table" в примере, это не нужно для CV), собирается
-    # заранее обычной строкой, а не внутри f-string, чтобы не городить тройную
-    # вложенность кавычек/фигурных скобок в одном литерале.
-    if kind == "resume":
-        json_example = (
-            '{"title":"...","meta":' + meta_schema + ',"skills":["...","..."],"languages":["..."],'
-            '"sections":[{"title":"О себе","content":"..."},{"title":"Опыт работы","content":"..."},'
-            '{"title":"Образование","content":"..."}]}'
-        )
-    else:
-        json_example = (
-            '{"title":"...","meta":' + meta_schema + ',"sections":[{"title":"Введение","content":"абзац1\\n\\nабзац2"},'
-            '{"title":"...","content":"...","table":{"headers":["...","..."],"rows":[["...","..."]]}}]}'
-        )
-    raw = await ask_grok(f"""Собери Word: {kind_name}.
-Данные: {data.get('topic')}
-Текст пользователя: {data.get('user_text')}
-Доп: {data.get('extra')}
-Объём: {size_map[size]}{length_hint}{structure_hint}
-{style_rule}
-Если в данных пользователя есть даты, ФИО, паспортные данные, суммы, названия сторон - подставь их в meta и в текст
-точно как есть, ничего не меняя и не придумывая.
-Никогда не выдумывай паспортные данные, суммы, даты или ФИО, которых нет в данных пользователя -
-для недостающих данных в тексте документа ставь [указать ...].
-Для полей meta (school, discipline, group, teacher, city и т.п.), если данных нет - НЕ сочиняй свою формулировку
-плейсхолдера и не добавляй к ней слово "указать": верни ровно то короткое значение в квадратных скобках, что
-дано для этого поля в примере схемы meta ниже (например "[учебное заведение]", а не "[указать наименование
-учебного заведения]") - иначе короткая подпись на титульном листе не помещается в строку и переносится некрасиво.
-Для содержательных документов (реферат, коммерческое предложение, заявление) разделы должны раскрывать
-тему конкретно и по существу, без воды и общих фраз.
-Не создавай в sections отдельный раздел «Титульный лист» - обложка (организация, учебное заведение, ФИО
-автора и руководителя, город, год) формируется отдельно из title и meta и так уже попадёт в документ;
-{"Это резюме - не создавай раздел «Введение». Раздел «Навыки»/«Языки» тоже НЕ создавай в sections - они уходят в отдельные поля skills/languages (см. схему JSON ниже) и рендерятся в боковую колонку резюме отдельно от основного текста. Первым разделом в sections должен идти «О себе» (короткий профессиональный профиль на 2-3 предложения), дальше «Опыт работы» (в обратном хронологическом порядке, с измеримыми достижениями) и «Образование»." if kind == "resume" else "первым разделом в sections должно идти «Введение» (или «Содержание», если оно есть в структуре документа)."}
-Если в разделе уместна таблица (перечень товаров/имущества с ценой и количеством в договоре/акте, статистика
-или практические данные в курсовой/реферате) - добавь в объект этого раздела ключ "table":
-{{"headers":["...","..."],"rows":[["...","..."],["...","..."]]}}. Не выдумывай реальные официальные цифры
-(даты, номера, суммы) для юридических документов - только то, что дал пользователь; для курсовых/рефератов
-данные в таблице могут быть иллюстративными для черновика, как и остальной текст. Таблицы уместны не в каждом
-разделе - добавляй только там, где это реально яснее текста, не в каждый раздел подряд.
-{'Дополнительно верни на верхнем уровне JSON поле "skills" - список из 6-10 коротких формулировок навыков (каждая отдельной строкой, без вводных слов), и, если в данных пользователя упомянуты языки, поле "languages" - список строк вида "Английский — B2". Если языки не упомянуты, верни пустой список.' if kind == "resume" else ""}
-Только JSON:
-{json_example}{lang_instr}""", max_tokens=gen_max_tokens)
+    docx_path = pdf_path = None
     try:
-        content = extract_json(raw)
-        if not isinstance(content.get("sections"), list) or not content["sections"]:
-            raise ValueError("В ответе модели нет разделов документа")
-    except Exception as e:
-        print("Word JSON parse error:", e)
-        finish_job(uid)
-        await m.answer(tr("msg_no_text", lang, btn=WORD_KIND_LABELS.get(kind, {}).get(lang) or tr("msg_which_doc", lang)), reply_markup=main_kb(lang, uid=m.from_user.id))
-        await state.clear()
-        return
-
-    # Числовые ориентиры по объёму в промпте модель выполняет непоследовательно -
-    # может уложиться в цель по одному разделу и заметно недобрать по другим,
-    # так что итоговый документ всё равно выходит в разы короче нужного. Вместо
-    # того чтобы полагаться на то, что промпт сработает с первого раза, меряем
-    # фактический объём и, если он далеко от цели, просим модель дописать черновик
-    # подробнее - раздел за разделом, с явной цифрой по каждому разделу отдельно
-    # (общая просьба "дописать подробнее" на практике не даёт нужного прироста).
-    # Минимум - ровно то, за что заплатил пользователь (страницы * WORDS_PER_PAGE). Раньше он брался
-    # по типу работы и не зависел от страниц: курсовая на 4 стр. дописывалась до ~6000 слов (~21 стр.),
-    # а на 40 стр. проверка проходила уже на 4200 словах.
-    min_total = words_total if (kind in WORD_SIZE_KINDS and pages >= 3) else None
-    if min_total:
-        actual_words = sum(len((b.get("content") or "").split()) for b in content.get("sections", []))
-        attempts = 0
-        while actual_words < min_total * 0.7 and attempts < 2:
-            attempts += 1
-            msg = tr("msg_writing_more", lang) if attempts == 1 else tr("msg_writing_a_bit_more", lang)
-            await m.answer(msg)
-            orig_sections = content.get("sections", [])
-            n_expandable = sum(
-                1 for b in orig_sections
-                if not any(k in (b.get('title') or '').lower() for k in _WORD_SECTION_SKIP_EXPAND)
+        ensure_pdf_converter()
+        await m.answer(tr("msg_building_word", lang))
+        kind = data.get("word_kind", "doc")
+        size = data.get("word_size", "short")
+        pages = normalize_word_pages(data.get("word_pages") or (2 if size == "short" else 6))
+        lang_instr = grok_json_lang_instruction(content_gen_lang(data, lang) or "ru")
+        size_map = {
+            "short": f"держи объём около {pages} страниц Word",
+            "long": f"держи объём около {pages} страниц Word, подробно",
+        }
+        kind_name = WORD_KIND_DESC.get(kind, "документ")
+        # Схема мета-полей своя под каждый тип документа (модульный словарь META_SCHEMAS,
+        # он же переиспользуется в режиме "Скачать шаблон") — раньше запрашивалась
+        # всегда одна и та же (реферат/договор), из-за чего для заявления,
+        # доверенности, КП поля вроде "кому"/"от кого" не заполнялись моделью
+        # и в документе оставались заглушки, даже если пользователь их указал.
+        meta_schema = META_SCHEMAS.get(kind, META_SCHEMAS["doc"])
+        if kind in STUDY_KINDS:
+            style_rule = ANTI_AI_DETECTOR_STYLE
+        elif kind == "resume":
+            style_rule = (
+                "Пиши деловым, но живым языком резюме: короткие пункты вместо сплошных абзацев, "
+                "конкретные обязанности и измеримые достижения (цифры, проценты, результаты), "
+                "без канцелярита и без юридических оборотов - это не договор."
             )
-            section_min = word_expand_section_min(min_total, n_expandable)
-            targets_text = "\n".join(
-                f"{i}. «{(b.get('title') or '').strip()}» — сейчас {len((b.get('content') or '').split())} слов, "
-                + ("оставь как есть." if any(k in (b.get('title') or '').lower() for k in _WORD_SECTION_SKIP_EXPAND)
-                   else f"нужно не менее {section_min} слов.")
-                for i, b in enumerate(orig_sections, 1)
+        else:
+            style_rule = "Пиши формальным юридическим/деловым языком, грамотно и точно по формулировкам ГК РФ, где применимо."
+        # Финальная сборка — это не короткий черновик-план, а весь текст документа целиком,
+        # поэтому фиксированного лимита в 4000 токенов не хватало на курсовую/реферат с
+        # "полным раскрытием темы" (там нужно 6000-10000+ слов), и модель тихо обрезала
+        # содержание. Лимит теперь подбирается по типу документа и выбранной глубине.
+        # Русский текст обычно занимает 1.5-2 токена на слово, плюс накладные расходы
+        # на JSON-обёртку (кавычки, экранирование, ключи полей) - лимит с запасом,
+        # чтобы модель физически не упёрлась в потолок на середине последнего раздела.
+        gen_max_tokens = min(20000, 2500 + pages * 900)
+        # Расплывчатые формулировки вроде "несколько содержательных абзацев" модель
+        # игнорирует и всё равно пишет коротко, даже с большим лимитом токенов -
+        # нужны точные числовые ориентиры по объёму на раздел, иначе она работает
+        # по привычке писать компактно, независимо от того, сколько токенов доступно.
+        words_total = word_target_words(pages)
+        if kind in WORD_SIZE_KINDS and pages >= 4:
+            # Курсовые/рефераты/доклады/эссе на серьёзный объём (4+ страниц - явно не
+            # "коротко для галочки") - плоская формула "страницы×280 слов" тут не годится:
+            # без явного минимума на раздел модель может размазать общий объём неровно,
+            # оставив часть разделов формальными 2-3 предложениями вместо полноценного
+            # раскрытия. Пороги примерно как для реальных учебных работ такого типа.
+            section_min = word_section_min(kind, words_total)
+            length_hint = (
+                f"\nЭто полноценная работа для сдачи (не черновик и не план), целевой объём — "
+                f"примерно {words_total} слов ({pages} страниц Word). Каждый содержательный "
+                f"раздел (кроме титульного листа, содержания и списка литературы) — "
+                f"НЕ МЕНЕЕ {section_min} слов: развёрнутые абзацы с фактами, примерами, "
+                "анализом, а не общие фразы в 2-3 предложения. Не экономь на глубине ради "
+                "краткости - лучше раскрыть меньше подтем, но каждую по-настоящему полно."
             )
-            expand_raw = await ask_grok(f"""Вот черновик документа в JSON, он слишком короткий: сейчас примерно {actual_words} слов, а нужно суммарно не менее {min_total}.
-Раздел за разделом, вот что нужно дописать:
-{targets_text}
-В документе должно остаться РОВНО {len(orig_sections)} разделов, с теми же заголовками, в том же порядке -
-не удаляй, не объединяй, не переименовывай и не убирай ни один раздел (включая "Содержание" и заголовки глав
-вроде "Глава 1"), только доработай содержимое (content) там, где указана недостача.
-Добавляй конкретные факты, примеры, аргументы, анализ, детали по теме - без воды и без повторов одной мысли разными словами.
-Это критично: не пересказывай своими словами то, что уже написано в разделе, и не добавляй общие рассуждения
-не по существу - это одновременно снижает уникальность текста (антиплагиат видит шаблонные обороты как
-совпадения с другими работами) и делает текст более узнаваемым как сгенерированный. Расширяй раздел только
-за счёт нового содержания: дополнительные примеры, цифры, источники, конкретные детали по теме, которых
-раньше не было.
-{style_rule}
-Верни ТОЛЬКО JSON той же структуры, без пояснений:
-{{"title":"...","meta":{meta_schema},"sections":[{{"title":"...","content":"..."}}]}}{lang_instr}
-Черновик:
-{json.dumps(content, ensure_ascii=False)}""", max_tokens=gen_max_tokens)
-            try:
-                expanded = extract_json(expand_raw)
-                expanded_sections = expanded.get("sections")
-                expanded_words = sum(len((b.get("content") or "").split()) for b in expanded_sections or [])
-                # Принимаем результат только если он не только длиннее, но и не потерял
-                # разделы (модель иногда "экономит" объём, просто слив несколько
-                # разделов в один или выкинув служебные заголовки при переписывании).
-                if (isinstance(expanded_sections, list) and expanded_sections
-                        and len(expanded_sections) >= len(orig_sections)
-                        and expanded_words > actual_words):
-                    content = expanded
-                    actual_words = expanded_words
-                else:
-                    break  # результат хуже или структурно испорчен - не продолжаем попытки
-            except Exception as e:
-                print("Word expand parse error:", e)
-                break
+            gen_max_tokens = max(gen_max_tokens, 8000)  # глубокому тексту нужен запас токенов с лихвой
+        else:
+            length_hint = (
+                f"\nЦелевой объём документа — {pages} страниц Word (примерно {words_total} слов). "
+                "Пиши ровно на этот объём: не короче и без воды ради объёма."
+            )
+        # Модель склонна писать заключение как краткий пересказ глав и не проверять
+        # число источников - это отдельная, часто игнорируемая инструкция, поэтому
+        # прописываем её явно, а не полагаемся на общее описание вида документа.
+        structure_hint = ""
+        if kind in ("coursework", "referat"):
+            structure_hint = (
+                "\nПервым разделом в sections обязательно должен идти раздел «Содержание» - "
+                "перечисли в его content все остальные разделы и подразделы документа по одному на строке "
+                "(без номеров страниц, они не нужны в черновике). Не пропускай этот раздел.\n"
+                "Заключение пиши как самостоятельные выводы по каждой задаче из введения "
+                "и рекомендации по теме - не пересказывай содержание глав.\n"
+                "Список литературы: не выдумывай источники, авторов, ссылки и годы. Если источник не проверен, "
+                "явно пометь, что его нужно проверить. Не заполняй список вымышленными публикациями ради количества.\n"
+                "Таблица уместна для сравнения или анализа. Используй данные пользователя либо качественное "
+                "сравнение без вымышленных цифр. Учебные расчёты на условных данных допустимы только с явной "
+                "подписью «Условный пример, не результаты исследования». Не выдавай выдуманный опрос за реальный."
+            )
+        # Схема примера JSON в конце промпта - для резюме отдельная (с skills/languages
+        # на верхнем уровне и без "table" в примере, это не нужно для CV), собирается
+        # заранее обычной строкой, а не внутри f-string, чтобы не городить тройную
+        # вложенность кавычек/фигурных скобок в одном литерале.
+        if kind == "resume":
+            json_example = (
+                '{"title":"...","meta":' + meta_schema + ',"skills":["...","..."],"languages":["..."],'
+                '"sections":[{"title":"О себе","content":"..."},{"title":"Опыт работы","content":"..."},'
+                '{"title":"Образование","content":"..."}]}'
+            )
+        else:
+            json_example = (
+                '{"title":"...","meta":' + meta_schema + ',"sections":[{"title":"Введение","content":"абзац1\\n\\nабзац2"},'
+                '{"title":"...","content":"...","table":{"headers":["...","..."],"rows":[["...","..."]]}}]}'
+            )
+        raw = await ask_grok(f"""Собери Word: {kind_name}.
+    Данные: {data.get('topic')}
+    Текст пользователя: {data.get('user_text')}
+    Доп: {data.get('extra')}
+    Объём: {size_map[size]}{length_hint}{structure_hint}
+    {style_rule}
+    Если в данных пользователя есть даты, ФИО, паспортные данные, суммы, названия сторон - подставь их в meta и в текст
+    точно как есть, ничего не меняя и не придумывая.
+    Никогда не выдумывай паспортные данные, суммы, даты или ФИО, которых нет в данных пользователя -
+    для недостающих данных в тексте документа ставь [указать ...].
+    Для полей meta (school, discipline, group, teacher, city и т.п.), если данных нет - НЕ сочиняй свою формулировку
+    плейсхолдера и не добавляй к ней слово "указать": верни ровно то короткое значение в квадратных скобках, что
+    дано для этого поля в примере схемы meta ниже (например "[учебное заведение]", а не "[указать наименование
+    учебного заведения]") - иначе короткая подпись на титульном листе не помещается в строку и переносится некрасиво.
+    Для содержательных документов (реферат, коммерческое предложение, заявление) разделы должны раскрывать
+    тему конкретно и по существу, без воды и общих фраз.
+    Не создавай в sections отдельный раздел «Титульный лист» - обложка (организация, учебное заведение, ФИО
+    автора и руководителя, город, год) формируется отдельно из title и meta и так уже попадёт в документ;
+    {"Это резюме - не создавай раздел «Введение». Раздел «Навыки»/«Языки» тоже НЕ создавай в sections - они уходят в отдельные поля skills/languages (см. схему JSON ниже) и рендерятся в боковую колонку резюме отдельно от основного текста. Первым разделом в sections должен идти «О себе» (короткий профессиональный профиль на 2-3 предложения), дальше «Опыт работы» (в обратном хронологическом порядке, с измеримыми достижениями) и «Образование»." if kind == "resume" else "первым разделом в sections должно идти «Введение» (или «Содержание», если оно есть в структуре документа)."}
+    Если в разделе уместна таблица (перечень товаров/имущества с ценой и количеством в договоре/акте, статистика
+    или практические данные в курсовой/реферате) - добавь в объект этого раздела ключ "table":
+    {{"headers":["...","..."],"rows":[["...","..."],["...","..."]]}}. Не выдумывай реальные официальные цифры
+    (даты, номера, суммы) для юридических документов - только то, что дал пользователь; для курсовых/рефератов
+    условные данные помечай «Условный пример, не результаты исследования». Не выдумывай статистику и источники. Таблицы уместны не в каждом
+    разделе - добавляй только там, где это реально яснее текста, не в каждый раздел подряд.
+    {'Дополнительно верни на верхнем уровне JSON поле "skills" - список из 6-10 коротких формулировок навыков (каждая отдельной строкой, без вводных слов), и, если в данных пользователя упомянуты языки, поле "languages" - список строк вида "Английский — B2". Если языки не упомянуты, верни пустой список.' if kind == "resume" else ""}
+    Только JSON:
+    {json_example}{lang_instr}""", max_tokens=gen_max_tokens)
+        try:
+            content = extract_json(raw)
+            if not isinstance(content.get("sections"), list) or not content["sections"]:
+                raise ValueError("В ответе модели нет разделов документа")
+        except Exception as e:
+            print("Word JSON parse error:", e)
+            await m.answer(tr("msg_no_text", lang, btn=WORD_KIND_LABELS.get(kind, {}).get(lang) or tr("msg_which_doc", lang)), reply_markup=main_kb(lang, uid=m.from_user.id))
+            await state.clear()
+            return
 
-    try:
-        docx_path = f"/tmp/doc_{uid}.docx"
-        (await run_heavy(build_word, 
-            docx_path,
-            content.get("title", "Документ"),
-            content.get("sections", []),
-            kind,
-            content.get("meta") or {},
-            extra_data={"skills": content.get("skills"), "languages": content.get("languages")}
-        ))
+        # Числовые ориентиры по объёму в промпте модель выполняет непоследовательно -
+        # может уложиться в цель по одному разделу и заметно недобрать по другим,
+        # так что итоговый документ всё равно выходит в разы короче нужного. Вместо
+        # того чтобы полагаться на то, что промпт сработает с первого раза, меряем
+        # фактический объём и, если он далеко от цели, просим модель дописать черновик
+        # подробнее - раздел за разделом, с явной цифрой по каждому разделу отдельно
+        # (общая просьба "дописать подробнее" на практике не даёт нужного прироста).
+        # Минимум - ровно то, за что заплатил пользователь (страницы * WORDS_PER_PAGE). Раньше он брался
+        # по типу работы и не зависел от страниц: курсовая на 4 стр. дописывалась до ~6000 слов (~21 стр.),
+        # а на 40 стр. проверка проходила уже на 4200 словах.
+        min_total = words_total if (kind in WORD_SIZE_KINDS and pages >= 3) else None
+        if min_total:
+            actual_words = sum(len((b.get("content") or "").split()) for b in content.get("sections", []))
+            attempts = 0
+            while actual_words < min_total * 0.7 and attempts < 2:
+                attempts += 1
+                msg = tr("msg_writing_more", lang) if attempts == 1 else tr("msg_writing_a_bit_more", lang)
+                await m.answer(msg)
+                orig_sections = content.get("sections", [])
+                n_expandable = sum(
+                    1 for b in orig_sections
+                    if not any(k in (b.get('title') or '').lower() for k in _WORD_SECTION_SKIP_EXPAND)
+                )
+                section_min = word_expand_section_min(min_total, n_expandable)
+                targets_text = "\n".join(
+                    f"{i}. «{(b.get('title') or '').strip()}» — сейчас {len((b.get('content') or '').split())} слов, "
+                    + ("оставь как есть." if any(k in (b.get('title') or '').lower() for k in _WORD_SECTION_SKIP_EXPAND)
+                       else f"нужно не менее {section_min} слов.")
+                    for i, b in enumerate(orig_sections, 1)
+                )
+                expand_raw = await ask_grok(f"""Вот черновик документа в JSON, он слишком короткий: сейчас примерно {actual_words} слов, а нужно суммарно не менее {min_total}.
+    Раздел за разделом, вот что нужно дописать:
+    {targets_text}
+    В документе должно остаться РОВНО {len(orig_sections)} разделов, с теми же заголовками, в том же порядке -
+    не удаляй, не объединяй, не переименовывай и не убирай ни один раздел (включая "Содержание" и заголовки глав
+    вроде "Глава 1"), только доработай содержимое (content) там, где указана недостача.
+    Добавляй конкретные факты, примеры, аргументы, анализ, детали по теме - без воды и без повторов одной мысли разными словами.
+    Это критично: не пересказывай своими словами то, что уже написано в разделе, и не добавляй общие рассуждения
+    не по существу - это одновременно снижает уникальность текста (антиплагиат видит шаблонные обороты как
+    совпадения с другими работами) и делает текст более узнаваемым как сгенерированный. Расширяй раздел только
+    за счёт нового содержания: дополнительные примеры, цифры, источники, конкретные детали по теме, которых
+    раньше не было.
+    {style_rule}
+    Верни ТОЛЬКО JSON той же структуры, без пояснений:
+    {{"title":"...","meta":{meta_schema},"sections":[{{"title":"...","content":"..."}}]}}{lang_instr}
+    Черновик:
+    {json.dumps(content, ensure_ascii=False)}""", max_tokens=gen_max_tokens)
+                try:
+                    expanded = extract_json(expand_raw)
+                    expanded_sections = expanded.get("sections")
+                    expanded_words = sum(len((b.get("content") or "").split()) for b in expanded_sections or [])
+                    # Принимаем результат только если он не только длиннее, но и не потерял
+                    # разделы (модель иногда "экономит" объём, просто слив несколько
+                    # разделов в один или выкинув служебные заголовки при переписывании).
+                    if (isinstance(expanded_sections, list) and expanded_sections
+                            and len(expanded_sections) == len(orig_sections)
+                            and expanded_words > actual_words):
+                        content = merge_word_expansion(content, expanded)
+                        actual_words = sum(len((b.get("content") or "").split()) for b in content["sections"])
+                    else:
+                        break  # результат хуже или структурно испорчен - не продолжаем попытки
+                except Exception as e:
+                    print("Word expand parse error:", e)
+                    break
 
-        pdf_path = f"/tmp/doc_{uid}.pdf"
-        pdf = canvas.Canvas(pdf_path, pagesize=A4)
-        w, h = A4
-        fn, fb = register_pdf_fonts()
+        try:
+            docx_path = f"/tmp/doc_{uid}.docx"
+            (await run_heavy(build_word, 
+                docx_path,
+                content.get("title", "Документ"),
+                content.get("sections", []),
+                kind,
+                content.get("meta") or {},
+                extra_data={"skills": content.get("skills"), "languages": content.get("languages")}
+            ))
 
-        pdf.setFont(fb, 14)
-        pdf.drawString(40, h - 50, content.get("title", "")[:65])
-        y = h - 80
-        for s in content.get("sections", []):
-            if y < 70:
-                pdf.showPage()
-                y = h - 50
-            pdf.setFont(fb, 11)
-            pdf.drawString(40, y, (s.get("title") or "")[:70])
-            y -= 16
-            pdf.setFont(fn, 9)
-            for line in wrap_lines((s.get("content") or ""), fn, 9, w - 80):
-                if y < 50:
-                    pdf.showPage()
-                    y = h - 50
-                    pdf.setFont(fn, 9)
-                pdf.drawString(40, y, line)
-                y -= 12
-            y -= 10
-        pdf.save()
+            pdf_path = f"/tmp/doc_{uid}.pdf"
+            await convert_word_pdf(docx_path, pdf_path)
 
-        fname = safe_filename(content.get("title"), fallback=WORD_KIND_DESC.get(kind, "Документ"), author=(content.get("meta") or {}).get("author"))
-        await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
-        await m.answer_document(FSInputFile(pdf_path, filename=f"{fname}.pdf"), caption=tr("msg_pdf_caption", lang))
-        u["generations"] += 1
-        spend_credits(uid, "word", amount=word_cost(pages))
-        u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
-        note_success(uid)
-        for p in (docx_path, pdf_path):
-            try:
-                os.remove(p)
-            except Exception:
-                pass
-        final_msg = tr("msg_doc_ready", lang)
-        if kind not in STUDY_KINDS:
-            final_msg += tr("msg_check_gaps", lang)
-        final_msg += "\n\n" + await signature_line(lang)
-        await m.answer(final_msg, reply_markup=main_kb(lang, uid=m.from_user.id))
-        await state.clear()
+            fname = safe_filename(content.get("title"), fallback=WORD_KIND_DESC.get(kind, "Документ"), author=(content.get("meta") or {}).get("author"))
+            await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
+            await m.answer_document(FSInputFile(pdf_path, filename=f"{fname}.pdf"), caption=tr("msg_pdf_caption", lang))
+            u["generations"] += 1
+            spend_credits(uid, "word", amount=word_cost(pages))
+            u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
+            note_success(uid)
+            for p in (docx_path, pdf_path):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+            final_msg = tr("msg_doc_ready", lang)
+            if kind not in STUDY_KINDS:
+                final_msg += tr("msg_check_gaps", lang)
+            final_msg += "\n\n" + await signature_line(lang)
+            await m.answer(final_msg, reply_markup=main_kb(lang, uid=m.from_user.id))
+            await state.clear()
+        finally:
+            for path in (docx_path, pdf_path):
+                if path and os.path.exists(path):
+                    os.remove(path)
+
+    except Exception as exc:
+        print("Word build failure=" + type(exc).__name__, flush=True)
+        await m.answer(tr("msg_grok_error", lang), reply_markup=word_confirm_kb(lang))
     finally:
         finish_job(uid)
 
@@ -9312,61 +9324,66 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
         await m.answer(reason)
         return
 
-    low_instr = instruction.lower()
-    if "реферат" in low_instr:
-        kind = "referat"
-    elif "доклад" in low_instr:
-        kind = "report"
-    elif "эссе" in low_instr or "essay" in low_instr:
-        kind = "essay"
-    else:
-        kind = "doc"
-    kind_name = WORD_KIND_DESC.get(kind, "документ")
-    meta_schema = META_SCHEMAS.get(kind, META_SCHEMAS["doc"])
-    lang_instr = grok_json_lang_instruction(lang)
-
-    raw = await ask_grok(f"""Собери Word-документ на основе присланного пользователем файла: {kind_name}.
-Задача от пользователя: {instruction}
-Исходный материал (извлечён из присланного файла, может быть неидеально отформатирован построчно): 
-{source_text}
-На основе этого материала выполни задачу пользователя - напиши связный, содержательный текст, а не
-пересказывай материал построчно. Исправь ошибки, если они есть в исходнике.
-Не выдумывай факты, которых нет в материале и не следуют из него логично.
-Только JSON:
-{{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\\n\\nабзац2"}},{{"title":"...","content":"..."}}]}}{lang_instr}""",
-        max_tokens=8000)
-
     try:
-        content = extract_json(raw)
-        if not isinstance(content.get("sections"), list) or not content["sections"]:
-            raise ValueError("В ответе модели нет разделов документа")
-    except Exception as e:
-        print("Ошибка разбора JSON при генерации из файла:", e)
-        finish_job(uid)
-        await m.answer(tr("msg_grok_error", lang), reply_markup=main_kb(lang, uid=uid))
-        return
+        low_instr = instruction.lower()
+        if "реферат" in low_instr:
+            kind = "referat"
+        elif "доклад" in low_instr:
+            kind = "report"
+        elif "эссе" in low_instr or "essay" in low_instr:
+            kind = "essay"
+        else:
+            kind = "doc"
+        kind_name = WORD_KIND_DESC.get(kind, "документ")
+        meta_schema = META_SCHEMAS.get(kind, META_SCHEMAS["doc"])
+        lang_instr = grok_json_lang_instruction(lang)
 
-    u = get_user(uid)
-    docx_path = f"/tmp/upload_result_{uid}_{random.randint(1000, 9999)}.docx"
-    try:
-        (await run_heavy(build_word, docx_path, content.get("title") or kind_name, content["sections"], kind, content.get("meta") or {}))
-        fname = safe_filename(content.get("title"), fallback=kind_name)
-        await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
-        u["generations"] += 1
-        spend_credits(uid, "word", amount=word_cost(pages))
-        u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title') or kind_name} (из файла)")
-        save_users()
-        note_success(uid)
-    except Exception as e:
-        print("Ошибка сборки документа из файла:", e)
+        raw = await ask_grok(f"""Собери Word-документ на основе присланного пользователем файла: {kind_name}.
+    Задача от пользователя: {instruction}
+    Исходный материал (извлечён из присланного файла, может быть неидеально отформатирован построчно): 
+    {source_text}
+    На основе этого материала выполни задачу пользователя - напиши связный, содержательный текст, а не
+    пересказывай материал построчно. Исправь ошибки, если они есть в исходнике.
+    Не выдумывай факты, которых нет в материале и не следуют из него логично.
+    Только JSON:
+    {{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\\n\\nабзац2"}},{{"title":"...","content":"..."}}]}}{lang_instr}""",
+            max_tokens=8000)
+
+        try:
+            content = extract_json(raw)
+            if not isinstance(content.get("sections"), list) or not content["sections"]:
+                raise ValueError("В ответе модели нет разделов документа")
+        except Exception as e:
+            print("Ошибка разбора JSON при генерации из файла:", e)
+            await m.answer(tr("msg_grok_error", lang), reply_markup=main_kb(lang, uid=uid))
+            return
+
+        u = get_user(uid)
+        docx_path = f"/tmp/upload_result_{uid}_{random.randint(1000, 9999)}.docx"
+        try:
+            (await run_heavy(build_word, docx_path, content.get("title") or kind_name, content["sections"], kind, content.get("meta") or {}))
+            fname = safe_filename(content.get("title"), fallback=kind_name)
+            await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
+            u["generations"] += 1
+            spend_credits(uid, "word", amount=word_cost(pages))
+            u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title') or kind_name} (из файла)")
+            save_users()
+            note_success(uid)
+        except Exception as e:
+            print("Ошибка сборки документа из файла:", e)
+            await m.answer(tr("msg_grok_error", lang), reply_markup=main_kb(lang, uid=uid))
+        finally:
+            try:
+                if os.path.exists(docx_path):
+                    os.remove(docx_path)
+            except Exception:
+                pass
+
+    except Exception as exc:
+        print("Word upload failure=" + type(exc).__name__, flush=True)
         await m.answer(tr("msg_grok_error", lang), reply_markup=main_kb(lang, uid=uid))
     finally:
         finish_job(uid)
-        try:
-            if os.path.exists(docx_path):
-                os.remove(docx_path)
-        except Exception:
-            pass
 
 
 async def build_presentation_with_copied_style(m: Message, state: FSMContext, pptx_path: str, instruction: str):
