@@ -2,7 +2,7 @@ from word_quality import (
     convert_word_pdf, merge_word_expansion, prepare_word_files, clean_word_meta,
     word_generation_schema, WORD_EDITORIAL_GUIDANCE, INFORMATIONAL_WORD_KINDS,
     expansion_word_target, word_page_notice, word_pdf_layout,
-    readable_word_paragraphs, word_revision_notice,
+    readable_word_paragraphs, word_revision_notice, WORD_SYSTEM, word_section_budgets,
 )
 import os
 import asyncio
@@ -8444,7 +8444,7 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
 план должен отражать суть темы конкретно, а не общими фразами.
 Обычным текстом, коротко: название и 4 пункта структуры (каждый пункт — одна строка, без раскрытия
 содержания). Без JSON.{lang_instr}"""
-    sample = await ask_grok(prompt)
+    sample = await ask_grok(prompt, system_prompt=WORD_SYSTEM, temperature=0.25)
     if grok_failed(sample):
         await m.answer(
             tr("msg_grok_error", lang),
@@ -8525,7 +8525,8 @@ async def word_extra(m: Message, state: FSMContext):
     await m.answer(tr("msg_updating_draft", lang))
     lang_instr = grok_lang_instruction(content_gen_lang(data, lang) or "ru")
     sample = await ask_grok(
-        f"Обнови черновик документа.\nТема: {data.get('topic')}\nТекст: {data.get('user_text')}\nДоп: {extra}\nКороткий план. Без JSON.{lang_instr}"
+        f"Обнови черновик документа.\nТема: {data.get('topic')}\nТекст: {data.get('user_text')}\nДоп: {extra}\nКороткий план. Без JSON.{lang_instr}",
+        system_prompt=WORD_SYSTEM, temperature=0.25,
     )
     if grok_failed(sample):
         await m.answer(
@@ -8671,7 +8672,7 @@ async def word_build(m: Message, state: FSMContext):
     разделе - добавляй только там, где это реально яснее текста, не в каждый раздел подряд.
     {'Дополнительно верни на верхнем уровне JSON поле "skills" - список из 6-10 коротких формулировок навыков (каждая отдельной строкой, без вводных слов), и, если в данных пользователя упомянуты языки, поле "languages" - список строк вида "Английский — B2". Если языки не упомянуты, верни пустой список.' if kind == "resume" else ""}
     Только JSON:
-    {json_example}{lang_instr}""", max_tokens=gen_max_tokens)
+    {json_example}{lang_instr}""", max_tokens=gen_max_tokens, system_prompt=WORD_SYSTEM, temperature=0.25)
         try:
             content = extract_json(raw)
             content["meta"] = clean_word_meta(content.get("meta"), kind)
@@ -8701,6 +8702,9 @@ async def word_build(m: Message, state: FSMContext):
     Сейчас {actual} стр., выбрано {requested}; диагностические признаки: {json.dumps(findings, ensure_ascii=False)}.
     {'Нужно раскрыть тему глубже: последняя страница почти пуста или страниц недостаточно. Дополни основную часть пояснениями условий, отличий и практическим примером с объяснением выбора.' if needs_depth else 'Сохрани объём: исправь длинные абзацы и проверь категоричные утверждения.'}
     Ориентир — {target} слов в content суммарно. Основная часть — примерно 75–85% текста.
+    Ориентиры по каждому разделу (слова, не символы): {json.dumps(word_section_budgets(value, target), ensure_ascii=False)}.
+    До ответа проверь фактический объём каждого раздела. Добавь недостающие пояснения к основной части,
+    а не обещание раскрыть тему; не возвращай прежний короткий текст с несколькими добавленными фразами.
     Разделяй разные мысли на абзацы по 40–90 слов с помощью \\n\\n. Не наращивай страницы только переносами строк.
     Для каждого утверждения о невозможности, доступности, надёжности или гарантии проверь,
     от каких условий оно зависит и есть ли исключения. Исправляй смысл, а не просто вставляй слово «обычно».
@@ -8716,7 +8720,8 @@ async def word_build(m: Message, state: FSMContext):
     Дополнительные требования: {data.get('extra') or ''}
     Верни JSON с sections (title, content). {lang_instr}
     Документ: {json.dumps(value, ensure_ascii=False)}"""
-                return extract_json(await ask_grok(prompt, max_tokens=gen_max_tokens))
+                return extract_json(await ask_grok(prompt, max_tokens=gen_max_tokens,
+                    system_prompt=WORD_SYSTEM, temperature=0.15))
 
             content, actual_pages = await prepare_word_files(content, pages, docx_path, pdf_path,
                 build=render_content, convert=convert_word_pdf,
@@ -9356,7 +9361,7 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
     {WORD_EDITORIAL_GUIDANCE}
     Только JSON:
     {{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\\n\\nабзац2"}},{{"title":"...","content":"..."}}]}}{lang_instr}""",
-            max_tokens=8000)
+            max_tokens=8000, system_prompt=WORD_SYSTEM, temperature=0.25)
 
         try:
             content = extract_json(raw)

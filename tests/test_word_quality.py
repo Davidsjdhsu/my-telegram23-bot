@@ -11,7 +11,7 @@ from test_office import office_env
 import test_office
 from word_quality import (clean_word_meta, merge_word_expansion, prepare_word_files,
                           word_generation_schema, WORD_EDITORIAL_GUIDANCE,
-                          readable_word_paragraphs, word_review_findings)
+                          readable_word_paragraphs, word_review_findings, WORD_SYSTEM)
 
 
 class WordMetadataTests(unittest.TestCase):
@@ -218,3 +218,18 @@ class WordDeliveryPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(WORD_EDITORIAL_GUIDANCE,prompt)
         self.assertNotIn('точно по формулировкам ГК РФ',prompt)
         self.assertNotIn('детекторы ИИ-текста',prompt)
+
+    async def test_word_generation_and_revision_use_document_system_instead_of_slide_persona(self):
+        e,m,s=self.setup_env(1)
+        await e['word_build'](m,s)
+        self.assertEqual(e['ask_grok'].await_count, 2)
+        for call in e['ask_grok'].await_args_list:
+            self.assertEqual(call.kwargs['system_prompt'], WORD_SYSTEM)
+            self.assertLessEqual(call.kwargs['temperature'], .25)
+        self.assertIn('target_words', e['ask_grok'].await_args_list[-1].args[0])
+
+    async def test_uploaded_word_also_uses_document_system(self):
+        e,m,s=self.setup_env(2)
+        await e['build_word_from_upload'](m,s,'Учебные материалы','Сравни способы хранения')
+        self.assertEqual(e['ask_grok'].await_args.kwargs['system_prompt'], WORD_SYSTEM)
+        self.assertEqual(m.answer_document.await_count, 1)

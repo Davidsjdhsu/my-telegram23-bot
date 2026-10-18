@@ -33,6 +33,32 @@ WORD_EDITORIAL_GUIDANCE = (
     'работать с уже сохранённой локальной копией. Не выдавай синхронизацию за независимую резервную копию.'
 )
 
+# Word must not inherit the presentation art-director persona or its Russian-only
+# instruction. Keep the document's requested depth and language above style tricks.
+WORD_SYSTEM = (
+    'Ты редактор полноразмерных Word-документов. Выполняй задачу в указанном жанре, '
+    'на запрошенном языке и в запрошенном формате ответа. Документ должен раскрывать тему, '
+    'а не быть тезисами для слайда или кратким пересказом. '
+    'Если задан объём в словах, распределяй его по разделам и соблюдай ориентир с отклонением '
+    'не более 10%, если есть достаточно материала. Приоритеты: точность смысла, сохранность '
+    'пользовательских данных, полнота объяснения, затем стиль. Не сокращай содержание ради '
+    'лаконичности. Таблицы не заменяют объяснений условий и практического примера. '
+    'Перед ответом перечитай весь текст и устрани противоречия и необоснованные обобщения. '
+    + WORD_EDITORIAL_GUIDANCE
+)
+
+
+def word_section_budgets(content, target):
+    """Give the optional editor concrete prose budgets rather than one vague total."""
+    sections = content.get('sections', [])
+    short = re.compile(r'введени|вывод|заключени|introduction|conclusion|summary', re.I)
+    nonbody = re.compile(r'содержани|литератур|источник|библиограф|references|bibliograph|contents', re.I)
+    weights = [0 if nonbody.search(s.get('title', '')) else .3 if short.search(s.get('title', '')) else 1
+               for s in sections]
+    total = sum(weights)
+    return [{'title': s.get('title', ''), 'target_words': round(target * w / total) if total else 0}
+            for s, w in zip(sections, weights)]
+
 
 def clean_word_meta(meta, kind):
     """Omit unspecified optional details in generated informational documents only."""
