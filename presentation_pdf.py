@@ -67,9 +67,16 @@ async def _stop_process(process):
 
 
 async def convert_presentation_pdf(pptx_path, pdf_path, expected_slides, *, timeout=120, queue_timeout=240):
+    return await _convert_office_pdf(pptx_path, pdf_path, expected_slides,
+        source_suffix='.pptx', export_filter='pdf:impress_pdf_Export', validator=validate_pdf,
+        timeout=timeout, queue_timeout=queue_timeout)
+
+
+async def _convert_office_pdf(pptx_path, pdf_path, expected_slides, *, source_suffix,
+                              export_filter, validator, timeout=120, queue_timeout=240):
     executable = ensure_pdf_converter()
     source, target = Path(pptx_path).resolve(), Path(pdf_path).resolve()
-    if not source.is_file() or source.suffix.lower() != '.pptx' or target.suffix.lower() != '.pdf':
+    if not source.is_file() or source.suffix.lower() != source_suffix or target.suffix.lower() != '.pdf':
         raise PresentationPDFError('invalid_conversion_paths')
     slot = _slots.setdefault(asyncio.get_running_loop(), asyncio.Semaphore(1))
     try:
@@ -89,7 +96,7 @@ async def convert_presentation_pdf(pptx_path, pdf_path, expected_slides, *, time
                 process = await asyncio.create_subprocess_exec(
                     executable, '-env:UserInstallation=' + profile.as_uri(),
                     '--headless', '--nologo', '--nodefault', '--nofirststartwizard',
-                    '--convert-to', 'pdf:impress_pdf_Export', '--outdir', str(export), str(source),
+                    '--convert-to', export_filter, '--outdir', str(export), str(source),
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
                     start_new_session=True, env=env,
                 )
@@ -97,7 +104,7 @@ async def convert_presentation_pdf(pptx_path, pdf_path, expected_slides, *, time
                 if process.returncode != 0:
                     raise PresentationPDFError('converter_exit_' + str(process.returncode))
                 generated = export / (source.stem + '.pdf')
-                await asyncio.to_thread(validate_pdf, generated, source, expected_slides)
+                await asyncio.to_thread(validator, generated, source, expected_slides)
                 os.replace(generated, target)
             except asyncio.TimeoutError as exc:
                 raise PresentationPDFError('conversion_timeout') from exc
