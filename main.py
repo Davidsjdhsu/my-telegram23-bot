@@ -1,7 +1,8 @@
 from word_quality import (
     convert_word_pdf, merge_word_expansion, prepare_word_files, clean_word_meta,
     word_generation_schema, WORD_EDITORIAL_GUIDANCE, INFORMATIONAL_WORD_KINDS,
-    expansion_word_target, word_page_notice,
+    expansion_word_target, word_page_notice, word_pdf_layout,
+    readable_word_paragraphs, word_revision_notice,
 )
 import os
 import asyncio
@@ -6390,6 +6391,9 @@ def build_word(path, title, sections, kind="doc", meta=None, extra_data=None):
     meta = dict(meta or {}) if extra_data.get("template") else clean_word_meta(meta, kind)
     if extra_data.get("template"):
         meta["_template"] = True
+    elif kind in INFORMATIONAL_WORD_KINDS:
+        sections = [{**block, "content": readable_word_paragraphs(block.get("content") or "")}
+                    for block in sections or []]
     doc = Document()
     title_style = doc.styles["Title"]
     title_style.font.color.rgb = DocxRGB(0, 0, 0)
@@ -8688,11 +8692,19 @@ async def word_build(m: Message, state: FSMContext):
                     value.get("sections", []), kind, value.get("meta") or {},
                     extra_data={"skills": value.get("skills"), "languages": value.get("languages")})
 
-            async def expand_content(value, actual, requested):
-                await m.answer(tr("msg_writing_more", lang))
-                target = expansion_word_target(value, actual, requested)
-                prompt = f"""Готовый Word занимает {actual} стр. вместо выбранных {requested}.
-    Дополни основную часть содержательными пояснениями и примерами до примерно {target} слов суммарно.
+            async def expand_content(value, actual, requested, findings):
+                await m.answer(word_revision_notice(lang))
+                needs_depth = findings['short_pages'] or findings['sparse_last_page']
+                target = expansion_word_target(value, actual, requested) if needs_depth else sum(
+                    len((s.get('content') or '').split()) for s in value.get('sections', []))
+                prompt = f"""Отредактируй документ за один проход, объединив все замечания.
+    Сейчас {actual} стр., выбрано {requested}; диагностические признаки: {json.dumps(findings, ensure_ascii=False)}.
+    {'Нужно раскрыть тему глубже: последняя страница почти пуста или страниц недостаточно. Дополни основную часть пояснениями условий, отличий и практическим примером с объяснением выбора.' if needs_depth else 'Сохрани объём: исправь длинные абзацы и проверь категоричные утверждения.'}
+    Ориентир — {target} слов в content суммарно. Основная часть — примерно 75–85% текста.
+    Разделяй разные мысли на абзацы по 40–90 слов с помощью \\n\\n. Не наращивай страницы только переносами строк.
+    Для каждого утверждения о невозможности, доступности, надёжности или гарантии проверь,
+    от каких условий оно зависит и есть ли исключения. Исправляй смысл, а не просто вставляй слово «обычно».
+    Диагностический признак не доказывает ошибку: верные определения оставляй точными.
     Не раздувай введение, вывод, содержание или список источников. Не добавляй пустые абзацы и повторы.
     Сохрани РОВНО те же разделы, их заголовки и порядок; меняй только content.
     Таблицы, числа, имена, условия и реквизиты пользователя не меняй и не удаляй.
@@ -8708,7 +8720,8 @@ async def word_build(m: Message, state: FSMContext):
 
             content, actual_pages = await prepare_word_files(content, pages, docx_path, pdf_path,
                 build=render_content, convert=convert_word_pdf,
-                expand=expand_content if kind in INFORMATIONAL_WORD_KINDS else None)
+                expand=expand_content if kind in INFORMATIONAL_WORD_KINDS else None,
+                inspect=word_pdf_layout if kind in INFORMATIONAL_WORD_KINDS else None)
             charged_pages = min(pages, actual_pages)
             if actual_pages != pages:
                 await m.answer(word_page_notice(lang, pages, actual_pages, word_cost(charged_pages)))
