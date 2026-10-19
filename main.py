@@ -4710,12 +4710,12 @@ WORD_CATEGORY_TITLES = {
 WORD_CATEGORIES = {
     "physical": {
         "title": WORD_CATEGORY_TITLES["physical"]["ru"],
-        "main": ["dkp_car", "dkp", "rent", "proxy", "statement"],
+        "main": ["dkp_car", "rent_flat_ru", "claim_replace_ru", "dkp", "rent", "proxy", "statement"],
         "more": ["act", "loan", "claim", "consent", "marriage_contract", "gift", "lawsuit", "alimony"],
     },
     "entity": {
         "title": WORD_CATEGORY_TITLES["entity"]["ru"],
-        "main": ["offer", "services", "employment", "work_act"],
+        "main": ["services_ru", "services_act_ru", "offer", "services", "employment", "work_act"],
         "more": ["supply", "agency", "joint_activity", "nonresidential_rent", "cession", "nda",
                  "self_employed", "warranty_letter"],
     },
@@ -4729,6 +4729,11 @@ WORD_CATEGORIES = {
 # Название вида документа на каждом из 7 языков - используется и в кнопках выбора,
 # и как fallback-заголовок сгенерированного файла (если модель не даст лучше).
 WORD_KIND_LABELS = {
+    'services_ru': {"ru": '🤝 Договор услуг · шаблон РФ', "en": 'Договор возмездного оказания услуг · RU'},
+    'services_act_ru': {"ru": '✅ Акт услуг · шаблон РФ', "en": 'Акт оказанных услуг · RU'},
+    'rent_flat_ru': {"ru": '🏠 Найм квартиры · шаблон РФ', "en": 'Договор найма квартиры · RU'},
+    'claim_replace_ru': {"ru": '⚠️ Замена товара · шаблон РФ', "en": 'Претензия о замене некачественного товара · RU'},
+
     "dkp_car": {"ru": "🚗 ДКП автомобиля · РФ", "en": "🚗 Car sale agreement · Russia"},
     "doc": {"ru": "📄 Обычный документ", "en": "📄 Generic document", "de": "📄 Allgemeines Dokument",
             "ar": "📄 مستند عام", "zh": "📄 普通文档", "es": "📄 Documento genérico", "fr": "📄 Document générique"},
@@ -7793,9 +7798,12 @@ async def word_kind(m: Message, state: FSMContext):
         cat = data.get("word_category", "physical")
         await m.answer(tr("msg_pick_doc", lang), reply_markup=word_kind_kb(cat, lang=lang))
         return
-    await state.update_data(word_kind=kind, extra="", extra_used=0, car_sale=None, topic="", user_text="", content_lang=None)
+    await state.update_data(word_kind=kind, extra="", extra_used=0, car_sale=None, fixed_word=None, topic="", user_text="", content_lang=None)
     show_template = kind not in STUDY_KINDS
     hint = tr("msg_how_build_doc", lang)
+    from fixed_word_templates import CATALOG as FIXED_WORD_CATALOG
+    if lang == "ru" and (kind in FIXED_WORD_CATALOG or kind == "dkp_car"):
+        hint = "Шаблон уже подготовлен. Выбери заполнение по своим данным или скачай бесплатный пустой бланк. Перед сборкой Word и PDF покажу учтённые сведения и пропуски."
     if show_template:
         hint += tr("msg_template_hint_suffix", lang)
     await m.answer(hint, reply_markup=mode_kb(show_template, lang=lang, show_back=True))
@@ -7804,6 +7812,11 @@ async def word_kind(m: Message, state: FSMContext):
 
 
 WORD_KIND_HINTS_I18N = {
+    'services_ru': {"ai": {"ru": 'Договор для организаций и ИП в России. Услуги без специальных отраслевых требований; условия о передаче исключительных прав и обработке персональных данных оформляются отдельно, если нужны. Пришли сведения для заполнения. Перед сборкой покажу поля и пропуски.'}, "user": {"ru": 'Договор для организаций и ИП в России. Услуги без специальных отраслевых требований; условия о передаче исключительных прав и обработке персональных данных оформляются отдельно, если нужны. Пришли сведения по строкам «Название поля: значение» или обычным текстом.'}},
+    'services_act_ru': {"ai": {"ru": 'Акт для уже оказанных услуг. Укажи фактический объём, стоимость, даты и замечания. Отсутствие претензий и факт оплаты не предполагаются автоматически. Не форма КС-2 и не счёт-фактура. Пришли сведения для заполнения. Перед сборкой покажу поля и пропуски.'}, "user": {"ru": 'Акт для уже оказанных услуг. Укажи фактический объём, стоимость, даты и замечания. Отсутствие претензий и факт оплаты не предполагаются автоматически. Не форма КС-2 и не счёт-фактура. Пришли сведения по строкам «Название поля: значение» или обычным текстом.'}},
+    'rent_flat_ru': {"ai": {"ru": 'Найм квартиры для проживания между физлицами в России. Наймодатель — собственник, подписывает лично. Срок не более пяти лет; при сроке от года требуется регистрация обременения. Не поднаём и не аренда нежилого помещения. Пришли сведения для заполнения. Перед сборкой покажу поля и пропуски.'}, "user": {"ru": 'Найм квартиры для проживания между физлицами в России. Наймодатель — собственник, подписывает лично. Срок не более пяти лет; при сроке от года требуется регистрация обременения. Не поднаём и не аренда нежилого помещения. Пришли сведения по строкам «Название поля: значение» или обычным текстом.'}},
+    'claim_replace_ru': {"ai": {"ru": 'Обращение потребителя к продавцу в России с требованием замены товара на такую же марку и модель. Для технически сложного товара право на замену зависит от срока обращения и характера недостатка. Не иск в суд и не требование возврата денег. Пришли сведения для заполнения. Перед сборкой покажу поля и пропуски.'}, "user": {"ru": 'Обращение потребителя к продавцу в России с требованием замены товара на такую же марку и модель. Для технически сложного товара право на замену зависит от срока обращения и характера недостатка. Не иск в суд и не требование возврата денег. Пришли сведения по строкам «Название поля: значение» или обычным текстом.'}},
+
     "dkp_car": {
         "ai": {"ru": "Пришли данные для ДКП автомобиля: продавец и покупатель, автомобиль, цена, оплата и передача. Шаблон рассчитан на личную продажу собственником — физлицом. Перед сборкой покажу заполненные поля и пропуски."},
         "user": {"ru": "Пришли сведения для заполнения ДКП автомобиля. Можно по строкам: ФИО продавца, ФИО покупателя, Марка и модель, VIN, Цена, Способ оплаты. Перед сборкой покажу, какие данные учтены."}},
@@ -8324,12 +8337,16 @@ async def word_mode_template(m: Message, state: FSMContext):
             meta = json.loads(META_SCHEMAS.get(kind, META_SCHEMAS["doc"]))
         except Exception:
             meta = {}
-        if kind == "dkp_car":
+        from fixed_word_templates import CATALOG as FIXED_WORD_CATALOG, render as render_fixed_word
+        if kind in FIXED_WORD_CATALOG:
+            await run_heavy(render_fixed_word, tpl_path, kind)
+        elif kind == "dkp_car":
             from car_sale_template import render as render_car_sale
             await run_heavy(render_car_sale, tpl_path)
         else:
             await run_heavy(build_word, tpl_path, "Документ", template_sections_for(kind), kind, meta, extra_data={"template": True})
-        await m.answer_document(FSInputFile(tpl_path, filename="ДКП автомобиля — шаблон.docx") if kind == "dkp_car" else FSInputFile(tpl_path), caption=tr("msg_template_caption", lang))
+        filename = (FIXED_WORD_CATALOG[kind]['title'] + ' — шаблон.docx') if kind in FIXED_WORD_CATALOG else ('ДКП автомобиля — шаблон.docx' if kind == 'dkp_car' else None)
+        await m.answer_document(FSInputFile(tpl_path, filename=filename) if filename else FSInputFile(tpl_path), caption=tr("msg_template_caption", lang))
         try:
             os.remove(tpl_path)
         except Exception:
@@ -8408,9 +8425,10 @@ async def word_after_input(m: Message, state: FSMContext):
 async def word_topic(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     text = m.text or ""
+    from fixed_word_templates import applies as fixed_template_applies
     from car_sale_template import applies as car_sale_applies
     car_data = {**await state.get_data(), "topic": text}
-    limit = 4000 if car_sale_applies(car_data, lang) else 500
+    limit = 4000 if (car_sale_applies(car_data, lang) or fixed_template_applies(car_data, lang)) else 500
     if len(text) > limit:
         await m.answer(tr("msg_too_long_4000" if limit == 4000 else "msg_too_long_500", lang))
         return
@@ -8434,7 +8452,12 @@ async def word_user_text(m: Message, state: FSMContext):
 
 async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str):
     lang = user_lang(m.from_user.id)
+    from fixed_word_templates import applies as fixed_template_applies
     from car_sale_template import applies as car_sale_applies, preview as preview_car_sale
+    if fixed_template_applies(data, lang):
+        from fixed_word_templates import preview as preview_fixed_word
+        await preview_fixed_word(m, state, globals())
+        return
     if car_sale_applies(data, lang):
         await preview_car_sale(m, state, globals())
         return
@@ -8510,9 +8533,10 @@ async def word_size(m: Message, state: FSMContext):
 async def word_change(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
+    from fixed_word_templates import applies as fixed_template_applies
     from car_sale_template import applies as car_sale_applies
-    if car_sale_applies(data, lang):
-        await state.update_data(car_sale=None, extra="", extra_used=0)
+    if car_sale_applies(data, lang) or fixed_template_applies(data, lang):
+        await state.update_data(car_sale=None, fixed_word=None, extra="", extra_used=0)
     if data.get("mode") == "user":
         await m.answer(tr("msg_new_text", lang), reply_markup=cancel_kb(lang))
         await state.set_state(Form.waiting_word_text)
@@ -8524,7 +8548,14 @@ async def word_change(m: Message, state: FSMContext):
 @dp.message(Form.waiting_word_confirm, F.text.in_(ALL_BTN_ADD_INFO_LABELS))
 async def word_add(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
+    from fixed_word_templates import applies as fixed_template_applies
     from car_sale_template import applies as car_sale_applies, form_text as car_sale_form
+    fixed_data = await state.get_data()
+    if fixed_template_applies(fixed_data, lang):
+        from fixed_word_templates import form_text as fixed_form, send_chunks
+        await send_chunks(m, "Пришли только изменяемые поля. Пустое значение удалит прежнее.\n\n" + fixed_form(fixed_data['word_kind']), cancel_kb(lang))
+        await state.set_state(Form.waiting_word_extra)
+        return
     if car_sale_applies(await state.get_data(), lang):
         await m.answer("Пришли только поля, которые хочешь заполнить или исправить. Пустое значение удалит прежнее.\n\n" + car_sale_form(), reply_markup=cancel_kb(lang), parse_mode=None)
         await state.set_state(Form.waiting_word_extra)
@@ -8541,20 +8572,26 @@ async def word_extra(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
     text = m.text or ""
+    from fixed_word_templates import applies as fixed_template_applies
     from car_sale_template import applies as car_sale_applies
-    if car_sale_applies(data, lang) and len(text) > 4000:
+    if (car_sale_applies(data, lang) or fixed_template_applies(data, lang)) and len(text) > 4000:
         await m.answer(tr("msg_too_long_4000", lang))
         return
-    if not car_sale_applies(data, lang) and len(text) > 800:
+    if not (car_sale_applies(data, lang) or fixed_template_applies(data, lang)) and len(text) > 800:
         await m.answer(tr("msg_too_long_800", lang))
         return
     extra = ((data.get("extra") or "") + "\n" + text).strip()
-    if car_sale_applies(data, lang) and len(extra) > 12000:
+    if (car_sale_applies(data, lang) or fixed_template_applies(data, lang)) and len(extra) > 12000:
         await m.answer("Накопилось слишком много правок. Нажми «Изменить запрос» и пришли актуальные данные одним сообщением.", reply_markup=word_confirm_kb(lang))
         await state.set_state(Form.waiting_word_confirm)
         return
     await state.update_data(extra=extra, extra_used=data.get("extra_used", 0) + 1)
+    from fixed_word_templates import applies as fixed_template_applies
     from car_sale_template import applies as car_sale_applies, preview as preview_car_sale
+    if fixed_template_applies(await state.get_data(), lang):
+        from fixed_word_templates import preview as preview_fixed_word
+        await preview_fixed_word(m, state, globals())
+        return
     if car_sale_applies(await state.get_data(), lang):
         await preview_car_sale(m, state, globals())
         return
@@ -8580,7 +8617,12 @@ async def word_extra(m: Message, state: FSMContext):
 async def word_build(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
+    from fixed_word_templates import applies as fixed_template_applies
     from car_sale_template import applies as car_sale_applies, build as build_car_sale
+    if fixed_template_applies(data, lang):
+        from fixed_word_templates import build as build_fixed_word
+        await build_fixed_word(m, state, globals())
+        return
     if car_sale_applies(data, lang):
         await build_car_sale(m, state, globals())
         return
@@ -9017,7 +9059,7 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
             await send_no_credits_notice(m, state, lang)
             return
         kind = guess_word_kind(text)
-        await state.update_data(word_kind=kind, word_size="short" if pages <= 3 else "long", word_pages=pages, topic=text, user_text="", extra="", car_sale=None, content_lang=lang)
+        await state.update_data(word_kind=kind, word_size="short" if pages <= 3 else "long", word_pages=pages, topic=text, user_text="", extra="", car_sale=None, fixed_word=None, content_lang=lang)
         warning = thin_long_doc_warning(pages, text, lang)
         if warning:
             await bot.send_message(m.from_user.id, warning)
@@ -9207,7 +9249,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
             word_kind=kind,
             word_size="short" if pages <= 3 else "long",
             word_pages=pages,
-            topic=content, user_text="", extra=extra, car_sale=None, content_lang=lang, extra_used=0,
+            topic=content, user_text="", extra=extra, car_sale=None, fixed_word=None, content_lang=lang, extra_used=0,
         )
         warning = thin_long_doc_warning(pages, f"{content} {extra}".strip(), lang)
         if warning:
