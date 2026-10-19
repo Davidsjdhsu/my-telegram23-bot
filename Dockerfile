@@ -14,5 +14,5 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 # No network/model calls: check both export filters before replacing the live bot.
-RUN python tools/check_word_field_input.py && python tools/check_presentation_pdf_runtime.py && python tools/check_word_pdf_runtime.py && python tools/check_car_sale_runtime.py && python tools/check_fixed_word_runtime.py
+RUN python tools/check_academic_runtime.py && python tools/check_word_field_input.py && python tools/check_presentation_pdf_runtime.py && python tools/check_word_pdf_runtime.py && python tools/check_car_sale_runtime.py && python tools/check_fixed_word_runtime.py
 CMD ["python", "main.py"]

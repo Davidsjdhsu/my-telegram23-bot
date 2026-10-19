@@ -1,0 +1,100 @@
+{
+  "verified_on": "2026-10-20",
+  "forms": [
+    {
+      "kind": "bachelor",
+      "file": "bachelor.docx",
+      "reference": "ТГУ_ВКР_бакалавра_титульный_лист.docx",
+      "reference_sha256": "e8791d42b389b2a7205eda8c19d2297eca2c10ff9356ce3f34c80eebb1b61a55",
+      "sha256": "1fd90db2a93dde28422017cad84d0ebf6f65cac0f0069deb3bfc19cdbcdd7de7",
+      "source": "https://www.lib.tsu.ru/ru/oformlenie-rabot-i-spiskov-literatury",
+      "adaptation": "Institution, department and city/year replaced with neutral editable labels; original structure preserved."
+    },
+    {
+      "kind": "diploma",
+      "file": "diploma.docx",
+      "reference": "ТГУ_Дипломная_работа_титульный_лист.docx",
+      "reference_sha256": "1be12b9f77c5eefefcb743460758574e45bf3a86835b84d2010a0ac74f7db254",
+      "sha256": "9d8293ccd16b9e7fcf4c46cd43b72edbd3408a2e0fe85c42ed3024229a5017ce",
+      "source": "https://www.lib.tsu.ru/ru/oformlenie-rabot-i-spiskov-literatury",
+      "adaptation": "Institution, department and city/year replaced with neutral editable labels; original structure preserved."
+    },
+    {
+      "kind": "assignment",
+      "file": "assignment.docx",
+      "reference": "ТГУ_Задание_на_ВКР.docx",
+      "reference_sha256": "5a22a8737bbefddc9daa72d534eee241879641bf185c9affc071d118c5c6d9da",
+      "sha256": "9804145d267f9615c632ca3240d976f7abca37438647635222a578380cd2bff5",
+      "source": "https://www.lib.tsu.ru/ru/oformlenie-rabot-i-spiskov-literatury",
+      "adaptation": "Institution, department and city/year replaced with neutral editable labels; original structure preserved."
+    },
+    {
+      "kind": "coursework",
+      "file": "coursework.docx",
+      "reference": "ТГУ_Курсовая_работа_титульный_лист.docx",
+      "reference_sha256": "dae7d87d5034fc5392e2f7d6066380312a91de587d716db894617a430e5d52d3",
+      "sha256": "37375b78a25a58517e990d7029393f62fea1b72ef09b6e9f9867759250876e70",
+      "source": "https://www.lib.tsu.ru/ru/oformlenie-rabot-i-spiskov-literatury",
+      "adaptation": "Institution, department and city/year replaced with neutral editable labels; original structure preserved."
+    },
+    {
+      "kind": "course_project",
+      "file": "course_project.docx",
+      "reference": "ТГУ_Курсовой_проект_титульный_лист.docx",
+      "reference_sha256": "c769d13972e45a30261e87891854d9ebdb0b18757649abeb14ee2131a4eba8d9",
+      "sha256": "9fc5f7e16e5055ec272a6cc6f91f9373c5d6ad88c9d885fb958c7aa640fb1487",
+      "source": "https://www.lib.tsu.ru/ru/oformlenie-rabot-i-spiskov-literatury",
+      "adaptation": "Institution, department and city/year replaced with neutral editable labels; original structure preserved."
+    },
+    {
+      "kind": "lab",
+      "file": "lab.docx",
+      "reference": "ТГУ_Лабораторная_работа_титульный_лист.docx",
+      "reference_sha256": "1d5fb9e143b883a3160af1195469c34592010c14c782358dc3e0b3134066df42",
+      "sha256": "ade007b163b4e0171fe227f7be5b7c2d79608763821c008334e5d61299ebc38a",
+      "source": "https://www.lib.tsu.ru/ru/oformlenie-rabot-i-spiskov-literatury",
+      "adaptation": "Institution, department and city/year replaced with neutral editable labels; original structure preserved."
+    },
+    {
+      "kind": "master",
+      "file": "master.docx",
+      "reference": "ТГУ_Магистерская_диссертация_титульный_лист.docx",
+      "reference_sha256": "4c8de4519f192b6b190b93b5a1d2c5e2a2be620399ba29cb9ca5350033bf696c",
+      "sha256": "6c158d3ca6e813a306d2668d17e76f7a45e1045ad95ddef4fba241b098489db3",
+      "source": "https://www.lib.tsu.ru/ru/oformlenie-rabot-i-spiskov-literatury",
+      "adaptation": "Institution, department and city/year replaced with neutral editable labels; original structure preserved."
+    },
+    {
+      "kind": "practice",
+      "file": "practice.docx",
+      "reference": "ТГУ_Отчёт_по_практике_титульный_лист.docx",
+      "reference_sha256": "fc4fe18dc57b8cab4201fbb274adefd79be73e995d155002baa8094b383e73d0",
+      "sha256": "23ab6a4346a52ca1173ff61eb40cd9607ab85911715404b6946e9d5bca38f557",
+      "source": "https://www.lib.tsu.ru/ru/oformlenie-rabot-i-spiskov-literatury",
+      "adaptation": "Institution, department and city/year replaced with neutral editable labels; original structure preserved."
+    },
+    {
+      "kind": "referat",
+      "file": "referat.docx",
+      "reference": "ТГУ_Реферат_титульный_лист.docx",
+      "reference_sha256": "5aef1e16e20c2461cb5130517f783e21a513c44fd3de456b47a22083fe649d95",
+      "sha256": "c79f2e0ef6bbe4d42946c7fa531b34fc43becec8cb75f5614bddfd0543166ff2",
+      "source": "https://www.lib.tsu.ru/ru/oformlenie-rabot-i-spiskov-literatury",
+      "adaptation": "Institution, department and city/year replaced with neutral editable labels; original structure preserved."
+    }
+  ],
+  "body_rules": {
+    "source": "https://www.lib.tsu.ru/win/produkzija/metodichka/NB_Metodichka_2021_god_1.pdf",
+    "edition": 2026,
+    "pages": [
+      5,
+      12
+    ],
+    "scope": "TSU coursework/VKR rules adapted for bot, not universal certification"
+  },
+  "essay_notes": {
+    "source": "https://www.mpsu.ru/sveden/education/programs/psihologicheskoe-konsulytirovanie-37.03.01.html",
+    "edition": 2025,
+    "scope": "Psychological counselling independent work guidance; structure only"
+  }
+}

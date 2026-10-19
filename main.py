@@ -4820,6 +4820,8 @@ def word_kind_kb(category, more=False, lang="ru"):
     cat = WORD_CATEGORIES.get(category, WORD_CATEGORIES["physical"])
     ids = list(cat["main"]) + (list(cat["more"]) if more else [])
     rows = [[KeyboardButton(text=WORD_KIND_LABELS[k].get(lang, WORD_KIND_LABELS[k]["ru"]))] for k in ids]
+    if category == "study" and lang == "ru":
+        rows.append([KeyboardButton(text="📑 Учебные бланки")])
     if cat["more"] and not more:
         rows.append([KeyboardButton(text=tr("btn_more_docs", lang))])
     rows.append([KeyboardButton(text=tr("btn_back_categories", lang))])
@@ -6397,6 +6399,9 @@ def template_sections_for(kind):
 
 def build_word(path, title, sections, kind="doc", meta=None, extra_data=None):
     extra_data = extra_data or {}
+    from academic_templates import KINDS as ACADEMIC_KINDS, render as render_academic
+    if kind in ACADEMIC_KINDS and extra_data.get("academic", True) and not extra_data.get("template"):
+        return render_academic(path, title or "Документ", sections, kind, clean_word_meta(meta, kind), add_table=_add_table)
     meta = dict(meta or {}) if extra_data.get("template") else clean_word_meta(meta, kind)
     if extra_data.get("template"):
         meta["_template"] = True
@@ -7791,6 +7796,38 @@ async def word_kind_back(m: Message, state: FSMContext):
     await state.set_state(Form.waiting_word_category)
 
 
+async def send_academic_catalog(m):
+    from academic_templates import BLANKS, NOTICE
+    rows = [[InlineKeyboardButton(text=label, callback_data="study_blank:" + key)] for key, label in BLANKS.items()]
+    await m.answer("Бесплатные учебные бланки: восемь титульных листов и задание на ВКР. Это редактируемые формы, а не полные работы.\n\n" + NOTICE,
+                   reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@dp.message(Command("study_templates"))
+@dp.message(Form.waiting_word_kind, F.text == "📑 Учебные бланки")
+async def academic_catalog(m: Message):
+    await send_academic_catalog(m)
+
+
+@dp.callback_query(F.data.startswith("study_blank:"))
+async def academic_blank(c: CallbackQuery):
+    from academic_templates import BLANKS, blank_path
+    key = (c.data or "").partition(":")[2]
+    if key not in BLANKS or not c.message:
+        await c.answer("Этот бланк недоступен", show_alert=True)
+        return
+    ok, reason = start_job(c.from_user.id)
+    if not ok:
+        await c.answer(reason, show_alert=True)
+        return
+    try:
+        await c.answer()
+        await c.message.answer_document(FSInputFile(blank_path(key), filename=BLANKS[key]+".docx"),
+                                        caption="Редактируемый учебный бланк. Стоимость — 0 кредитов.")
+    finally:
+        finish_job(c.from_user.id)
+
+
 @dp.message(Form.waiting_word_kind)
 async def word_kind(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
@@ -7801,8 +7838,13 @@ async def word_kind(m: Message, state: FSMContext):
         await m.answer(tr("msg_pick_doc", lang), reply_markup=word_kind_kb(cat, lang=lang))
         return
     await state.update_data(word_kind=kind, extra="", extra_used=0, car_sale=None, fixed_word=None, topic="", user_text="", content_lang=None)
-    show_template = kind not in STUDY_KINDS
+    show_template = kind not in STUDY_KINDS or (lang == "ru" and kind in ("referat", "coursework"))
     hint = tr("msg_how_build_doc", lang)
+    if lang == "ru" and kind in ("referat", "report", "coursework", "essay", "notes"):
+        from academic_templates import NOTICE
+        hint += "\n\n" + NOTICE
+        if kind in ("referat", "coursework"):
+            hint += "\nБесплатный шаблон — только титульный лист. Для полной работы выбери создание текста или пришли свой."
     from fixed_word_templates import CATALOG as FIXED_WORD_CATALOG
     if lang == "ru" and (kind in FIXED_WORD_CATALOG or kind == "dkp_car"):
         hint = "Шаблон уже подготовлен. Выбери заполнение по своим данным или скачай бесплатный пустой бланк. Перед сборкой Word и PDF покажу учтённые сведения и пропуски."
@@ -8281,6 +8323,9 @@ def word_hint(kind: str, mode: str, lang: str = "ru") -> str:
     from fixed_word_templates import CATALOG as FIXED_WORD_CATALOG, form_text as fixed_form
     if lang == "ru" and kind in FIXED_WORD_CATALOG:
         return (FIXED_WORD_CATALOG[kind]['scope'] + "\n\nПришли известные сведения обычным текстом или заполни строки ниже. Неизвестные поля можно пропустить. Перед сборкой покажу, что учтено.\n\n" + fixed_form(kind))
+    from academic_templates import KINDS as ACADEMIC_KINDS, META_LABELS
+    if lang == "ru" and kind in ACADEMIC_KINDS:
+        return ("Пришли тему и требования к работе" if mode == "ai" else "Пришли свой текст или материалы") + ". Известные сведения можно указать строками ниже; неизвестные — пропустить.\n\nТема: \n" + "\n".join(label+": " for label in META_LABELS.values())
     variants = WORD_KIND_HINTS_I18N.get(kind, WORD_KIND_HINTS_I18N["doc"])[mode]
     return variants.get(lang) or variants["ru"]
 
@@ -8327,6 +8372,11 @@ async def word_mode_template(m: Message, state: FSMContext):
     data = await state.get_data()
     kind = data.get("word_kind", "doc")
     uid = m.from_user.id
+    if lang == "ru" and kind in ("referat", "coursework"):
+        from academic_templates import BLANKS, blank_path
+        await m.answer_document(FSInputFile(blank_path(kind), filename=BLANKS[kind]+".docx"),
+                                caption="Титульный лист для заполнения. Стоимость — 0 кредитов.")
+        return
     if kind in STUDY_KINDS:
         await m.answer(tr("msg_no_template_study", lang), reply_markup=mode_kb(False, lang=lang, show_back=True))
         return
@@ -8384,7 +8434,7 @@ async def word_mode_back(m: Message, state: FSMContext):
 async def waiting_word_mode_fallback(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
-    show_template = data.get("word_kind", "doc") not in STUDY_KINDS
+    show_template = data.get("word_kind", "doc") not in STUDY_KINDS or (lang == "ru" and data.get("word_kind") in ("referat", "coursework"))
     await m.answer(tr("msg_didnt_understand", lang), reply_markup=mode_kb(show_template, lang=lang, show_back=True))
 
 
@@ -8478,6 +8528,9 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
     }
     kind = data.get("word_kind", "doc")
     kind_name = WORD_KIND_DESC.get(kind, "документ")
+    from academic_templates import KINDS as ACADEMIC_KINDS, guidance as academic_guidance
+    if kind in ACADEMIC_KINDS and (content_gen_lang(data, lang) or "ru") == "ru":
+        kind_name = WORD_KIND_LABELS[kind]["ru"] + academic_guidance(kind)
     lang_instr = grok_lang_instruction(content_gen_lang(data, lang) or "ru")
     prompt = f"""Собери черновик-план (не полный текст): {kind_name}.
 Тема/данные: {data.get('topic')}
@@ -8721,6 +8774,12 @@ async def word_build(m: Message, state: FSMContext):
                 "сравнение без вымышленных цифр. Учебные расчёты на условных данных допустимы только с явной "
                 "подписью «Условный пример, не результаты исследования». Не выдавай выдуманный опрос за реальный."
             )
+        from academic_templates import KINDS as ACADEMIC_KINDS, guidance as academic_guidance, META_LABELS
+        academic = kind in ACADEMIC_KINDS and (content_gen_lang(data, lang) or "ru") == "ru"
+        if academic:
+            structure_hint = academic_guidance(kind)
+            meta_schema = json.dumps({key: "" for key in META_LABELS}, ensure_ascii=False)
+            kind_name = WORD_KIND_LABELS[kind]["ru"]
         # Схема примера JSON в конце промпта - для резюме отдельная (с skills/languages
         # на верхнем уровне и без "table" в примере, это не нужно для CV), собирается
         # заранее обычной строкой, а не внутри f-string, чтобы не городить тройную
@@ -8766,6 +8825,9 @@ async def word_build(m: Message, state: FSMContext):
         try:
             content = extract_json(raw)
             content["meta"] = clean_word_meta(content.get("meta"), kind)
+            if academic:
+                from academic_templates import explicit_meta
+                content["meta"] = explicit_meta(content["meta"], "\n".join(str(data.get(k) or "") for k in ("topic", "user_text", "extra")))
             if not isinstance(content.get("sections"), list) or not content["sections"]:
                 raise ValueError("В ответе модели нет разделов документа")
         except Exception as e:
@@ -8781,7 +8843,7 @@ async def word_build(m: Message, state: FSMContext):
             async def render_content(value, path):
                 await run_heavy(build_word, path, value.get("title", "Документ"),
                     value.get("sections", []), kind, value.get("meta") or {},
-                    extra_data={"skills": value.get("skills"), "languages": value.get("languages")})
+                    extra_data={"skills": value.get("skills"), "languages": value.get("languages"), "academic": academic})
 
             async def expand_content(value, actual, requested, findings):
                 await m.answer(word_revision_notice(lang))
@@ -9438,6 +9500,10 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
         kind_name = WORD_KIND_DESC.get(kind, "документ")
         meta_schema = META_SCHEMAS.get(kind, META_SCHEMAS["doc"])
         meta_schema = word_generation_schema(kind, meta_schema)
+        from academic_templates import guidance as academic_guidance, KINDS as ACADEMIC_KINDS, META_LABELS
+        academic = kind in ACADEMIC_KINDS and lang == "ru"
+        if academic:
+            meta_schema = json.dumps({key: "" for key in META_LABELS}, ensure_ascii=False)
         lang_instr = grok_json_lang_instruction(lang)
 
         raw = await ask_grok(f"""Собери Word-документ на основе присланного пользователем файла: {kind_name}.
@@ -9449,6 +9515,7 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
     Не выдумывай факты, которых нет в материале и не следуют из него логично.
     Неизвестные необязательные поля meta оставь пустыми, без заглушек.
     {WORD_EDITORIAL_GUIDANCE}
+    {academic_guidance(kind) if academic else ""}
     Только JSON:
     {{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\\n\\nабзац2"}},{{"title":"...","content":"..."}}]}}{lang_instr}""",
             max_tokens=8000, system_prompt=WORD_SYSTEM, temperature=0.25)
@@ -9456,6 +9523,9 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
         try:
             content = extract_json(raw)
             content["meta"] = clean_word_meta(content.get("meta"), kind)
+            if academic:
+                from academic_templates import explicit_meta
+                content["meta"] = explicit_meta(content["meta"], source_text + "\n" + instruction)
             if not isinstance(content.get("sections"), list) or not content["sections"]:
                 raise ValueError("В ответе модели нет разделов документа")
         except Exception as e:
@@ -9466,7 +9536,7 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
         u = get_user(uid)
         docx_path = f"/tmp/upload_result_{uid}_{random.randint(1000, 9999)}.docx"
         try:
-            (await run_heavy(build_word, docx_path, content.get("title") or kind_name, content["sections"], kind, content.get("meta") or {}))
+            (await run_heavy(build_word, docx_path, content.get("title") or kind_name, content["sections"], kind, content.get("meta") or {}, extra_data={"academic": academic}))
             fname = safe_filename(content.get("title"), fallback=kind_name)
             await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
             u["generations"] += 1

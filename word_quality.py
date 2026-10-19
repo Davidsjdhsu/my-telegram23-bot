@@ -354,6 +354,10 @@ def validate_word_pdf(pdf_path, docx_path, _unused=None):
 
 
 async def convert_word_pdf(docx_path, pdf_path, *, timeout=120, queue_timeout=240):
-    return await _convert_office_pdf(docx_path, pdf_path, None, source_suffix='.docx',
+    result = await _convert_office_pdf(docx_path, pdf_path, None, source_suffix='.docx',
         export_filter='pdf:writer_pdf_Export', validator=validate_word_pdf,
         timeout=timeout, queue_timeout=queue_timeout)
+
+    from academic_templates import cache_page_references
+    await asyncio.to_thread(cache_page_references, docx_path, pdf_path)
+    return result
