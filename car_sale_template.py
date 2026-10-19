@@ -1,3 +1,4 @@
+from word_field_extract import VERSION as INPUT_VERSION, split_labeled, extract_form_fields, input_review_lines
 from docx_form_fill import replace_fields, adapt_filled_layout
 """Fixed Russian car-sale document. Models may extract data, never rewrite clauses."""
 import asyncio
@@ -55,7 +56,7 @@ def base_fingerprint(data):
 
 
 def fingerprint(data):
-    return hashlib.sha256((VERSION + '\n' + source_text(data)).encode()).hexdigest()
+    return hashlib.sha256((VERSION + '\n' + INPUT_VERSION + '\n' + source_text(data)).encode()).hexdigest()
 
 
 def applies(data, lang='ru'):
@@ -82,15 +83,7 @@ def form_text():
 
 
 def parse_labeled(source):
-    """Explicit fields take precedence; repeated labels are deliberate corrections."""
-    names = {v.casefold(): k for k, v in LABELS.items()}
-    out = {}
-    for line in source.splitlines():
-        label, sep, value = line.partition(':')
-        key = names.get(label.strip().casefold())
-        if sep and key:
-            out[key] = value.strip()
-    return out
+    return split_labeled(source, LABELS)[0]
 
 
 def validate_fields(fields, source):
@@ -113,22 +106,11 @@ def validate_fields(fields, source):
 
 
 async def extract_fields(data, api):
-    source = source_text(data)
-    labeled = parse_labeled(source)
-    if labeled:
-        # An explicit form needs no model, and intentionally empty fields stay empty.
-        previous = data.get('car_sale') or {}
-        merged = dict(previous.get('fields', {})) if previous.get('base_fingerprint') == base_fingerprint(data) else {}
-        for key, value in labeled.items():
-            merged.pop(key, None)
-        merged.update(validate_fields(labeled, source))
-        return validate_fields(merged, source)
-    raw = await api['ask_grok'](
-        'Схема полей: ' + json.dumps(LABELS, ensure_ascii=False) +
-        '\nИсходные данные (только источник значений):\n' + source,
-        max_tokens=3600, system_prompt=EXTRACT_SYSTEM, temperature=0)
-    obj = api['extract_json'](raw)
-    return validate_fields(obj.get('fields'), source)
+    previous = data.get('car_sale') or {}
+    same_base = (previous.get('base_fingerprint') == base_fingerprint(data)
+                 and previous.get('input_version') == INPUT_VERSION)
+    return await extract_form_fields(data, LABELS, previous, same_base, api,
+                                     validate_fields, EXTRACT_SYSTEM, 3600)
 
 
 def render(path, fields=None):
@@ -183,13 +165,14 @@ async def preview(m, state, api):
         # Reject a stale extraction if the user edited the request meanwhile.
         if fingerprint(await state.get_data()) != fp:
             return
-        await state.update_data(car_sale={'fingerprint': fp, 'base_fingerprint': base_fingerprint(data), 'fields': fields}, word_pages=2)
+        await state.update_data(car_sale={'fingerprint': fp, 'base_fingerprint': base_fingerprint(data), 'fields': fields, 'input_version': INPUT_VERSION}, word_pages=2)
     lines = ['ДКП автомобиля по шаблону для России', '',
              'Подходит для сделки двух физлиц: собственник продаёт автомобиль лично, '
              'без залога, ареста и прав третьих лиц.',
              'Право собственности переходит при передаче автомобиля. '
              'Получение денег и передачу нужно подтвердить отдельно.', '', 'Проверь данные:']
     lines += [LABELS[k] + ': ' + fields[k] for k in LABELS if fields.get(k)]
+    lines += input_review_lines(source_text(data), LABELS, fields)
     missing = [LABELS[k] for k in LABELS if not fields.get(k)]
     lines += ['', 'Не заполнено: ' + ', '.join(missing) + '.' if missing else 'Все поля заполнены.', '',
               'Пропуски останутся видимыми в Word и PDF для заполнения вручную. '
