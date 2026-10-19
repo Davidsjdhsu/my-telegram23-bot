@@ -1,3 +1,4 @@
+from docx_form_fill import replace_fields, adapt_filled_layout
 """Fixed Russian car-sale document. Models may extract data, never rewrite clauses."""
 import asyncio
 import hashlib
@@ -13,7 +14,7 @@ from docx import Document
 ASSETS = Path(__file__).resolve().parent / 'assets' / 'word'
 TEMPLATE = ASSETS / 'dkp_car_ru_v1.docx'
 FIELDS = json.loads((ASSETS / 'dkp_car_ru_v1.fields.json').read_text(encoding='utf-8'))
-VERSION = 'dkp_car_ru_v1.1'
+VERSION = 'dkp_car_ru_approved_v4'
 TITLE = 'Договор купли-продажи автомобиля'
 LABELS = {
     'city': 'Город', 'date': 'Дата договора', 'seller_name': 'ФИО продавца',
@@ -144,16 +145,9 @@ def render(path, fields=None):
     values['seller_sign'] = values.get('seller_name', '')
     values['buyer_sign'] = values.get('buyer_name', '')
     d = Document(TEMPLATE)
-    paras = list(d.paragraphs) + [p for t in d.tables for row in t.rows for c in row.cells for p in c.paragraphs]
     replacements = {'[' + FIELDS[k] + ']': v for k, v in values.items() if v}
-    for p in paras:
-        for run in p.runs:
-            # Do not assign unchanged run.text: it destroys page breaks and fields.
-            for marker, value in replacements.items():
-                if marker in run.text:
-                    # User prose may already end with the template's punctuation.
-                    run.text = run.text.replace(marker + '.', value.rstrip('.') + '.')
-                    run.text = run.text.replace(marker, value)
+    replace_fields(d,replacements)
+    adapt_filled_layout(d)
     d.save(path)
     with ZipFile(path) as z:
         if z.testzip() is not None:

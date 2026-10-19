@@ -25,7 +25,23 @@
       "acceptance": "Срок проверки акта",
       "subcontract": "Привлечение третьих лиц",
       "contacts": "Адреса для уведомлений",
-      "extra": "Дополнительные условия"
+      "extra": "Дополнительные условия",
+      "applications": "Условия оказания услуг по заявкам",
+      "price_words": "Стоимость прописью",
+      "act_send_days": "Срок направления акта в рабочих днях",
+      "late_payment_rate": "Неустойка за просрочку оплаты процент в день",
+      "late_payment_cap": "Предел неустойки за оплату процент",
+      "late_service_rate": "Неустойка за просрочку услуг процент в день",
+      "late_service_cap": "Предел неустойки за услуги процент",
+      "liability_limit": "Предел ответственности исполнителя",
+      "force_notice_days": "Срок уведомления о форс мажоре в рабочих днях",
+      "secrecy_years": "Срок конфиденциальности после прекращения в годах",
+      "rights_transition": "Момент перехода интеллектуальных прав",
+      "valid_until": "Действие договора до",
+      "refusal_notice_days": "Срок уведомления об отказе в календарных днях",
+      "claim_days": "Срок рассмотрения претензии в рабочих днях",
+      "court": "Суд для рассмотрения спора",
+      "details_notice_days": "Срок уведомления о реквизитах в рабочих днях"
     },
     "blocks": [
       [
@@ -168,14 +184,31 @@
       "price": "15 000 рублей",
       "tax": "уточняется сторонами до подписания",
       "payment": "перевод после подписания акта, в течение 5 рабочих дней",
-      "acceptance": "5 рабочих дней",
+      "acceptance": "5",
       "subcontract": "только с письменного согласия Заказчика",
       "contacts": "тестовые адреса, подлежат заполнению до подписания",
-      "extra": "Проверочный образец, для подписания не использовать."
+      "extra": "Проверочный образец, для подписания не использовать.",
+      "applications": "Услуги оказываются без отдельных заявок",
+      "price_words": "Пятнадцать тысяч рублей",
+      "act_send_days": "3",
+      "late_payment_rate": "0,1",
+      "late_payment_cap": "10",
+      "late_service_rate": "0,1",
+      "late_service_cap": "10",
+      "liability_limit": "стоимости Услуг по Договору",
+      "force_notice_days": "5",
+      "secrecy_years": "3",
+      "rights_transition": "полной оплаты Услуг",
+      "valid_until": "полного исполнения Сторонами обязательств",
+      "refusal_notice_days": "10",
+      "claim_days": "10",
+      "court": "Арбитражный суд Республики Татарстан",
+      "details_notice_days": "5"
     },
-    "version": "services_ru_v1",
+    "version": "services_ru_approved_v4",
     "file": "services_ru_v1.docx",
-    "max_cost_pages": 2
+    "max_cost_pages": 2,
+    "qa_max_pages": 6
   },
   "services_act_ru": {
     "title": "Акт оказанных услуг",
@@ -199,7 +232,14 @@
       "tax": "НДС и основание",
       "remarks": "Замечания по услугам",
       "payment": "Сведения об оплате",
-      "attachments": "Приложения"
+      "attachments": "Приложения",
+      "subtotal": "Стоимость без НДС",
+      "price_words": "Сумма прописью",
+      "accepted": "Принятые услуги",
+      "quantity": "Количество",
+      "unit_price": "Цена единицы без НДС",
+      "line_total": "Сумма позиции без НДС",
+      "unit": "Единица измерения"
     },
     "blocks": [
       [
@@ -298,15 +338,23 @@
       "period": "20–27 октября 2026 года",
       "services": "Технические консультации и письменные ответы по тестовому оборудованию",
       "measurement": "3 консультации по 60 минут; 5 письменных ответов",
-      "price": "15 000 рублей",
-      "tax": "подлежит уточнению",
+      "price": "20000 рублей",
+      "tax": "Без НДС",
       "remarks": "Проверочный образец; сведения о приёмке вымышлены.",
       "payment": "факт оплаты не подтверждён",
-      "attachments": "перечень письменных ответов на 1 листе"
+      "attachments": "перечень письменных ответов на 1 листе",
+      "subtotal": "20000 рублей",
+      "price_words": "Двадцать тысяч рублей",
+      "accepted": "Услуги согласно перечню в настоящем акте",
+      "quantity": "2",
+      "unit_price": "10000",
+      "line_total": "20000",
+      "unit": "компл."
     },
-    "version": "services_act_ru_v1",
+    "version": "services_act_ru_approved_v4",
     "file": "services_act_ru_v1.docx",
-    "max_cost_pages": 2
+    "max_cost_pages": 2,
+    "qa_max_pages": 3
   },
   "rent_flat_ru": {
     "title": "Договор найма квартиры",
@@ -504,9 +552,10 @@
       "contacts": "тестовые контакты сторон",
       "extra": "Проверочный пример, для подписания не использовать."
     },
-    "version": "rent_flat_ru_v1",
+    "version": "rent_flat_ru_approved_v4",
     "file": "rent_flat_ru_v1.docx",
-    "max_cost_pages": 2
+    "max_cost_pages": 2,
+    "qa_max_pages": 4
   },
   "claim_replace_ru": {
     "title": "Претензия о замене некачественного товара",
@@ -622,12 +671,13 @@
       "return": "лично продавцу по согласованию времени",
       "attachments": "копия чека и две фотографии; пример вымышленный"
     },
-    "version": "claim_replace_ru_v1",
+    "version": "claim_replace_ru_approved_v4",
     "file": "claim_replace_ru_v1.docx",
-    "max_cost_pages": 2
+    "max_cost_pages": 2,
+    "qa_max_pages": 4
   },
   "dkp": {
-    "version": "dkp_ru_v1",
+    "version": "dkp_approved_v4",
     "file": "dkp_ru_v1.docx",
     "title": "Договор продажи движимого имущества",
     "label": "Договор продажи движимого имущества",
@@ -670,7 +720,7 @@
       "extra": "Осмотр при передаче"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_9027/"
     ],
@@ -746,7 +796,7 @@
     ]
   },
   "rent": {
-    "version": "rent_ru_v1",
+    "version": "rent_approved_v4",
     "file": "rent_ru_v1.docx",
     "title": "Договор аренды движимого имущества",
     "label": "Договор аренды движимого имущества",
@@ -791,7 +841,7 @@
       "extra": "Субаренда только по письменному согласию арендодателя"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_9027/"
     ],
@@ -867,7 +917,7 @@
     ]
   },
   "proxy": {
-    "version": "proxy_ru_v1",
+    "version": "proxy_approved_v4",
     "file": "proxy_ru_v1.docx",
     "title": "Доверенность на получение документов",
     "label": "Доверенность на получение документов",
@@ -900,7 +950,7 @@
       "expires": "30 ноября 2026 года"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_5142/"
     ],
@@ -940,7 +990,7 @@
     ]
   },
   "statement": {
-    "version": "statement_ru_v1",
+    "version": "statement_approved_v4",
     "file": "statement_ru_v1.docx",
     "title": "Заявление",
     "label": "Заявление",
@@ -969,7 +1019,7 @@
       "attachments": "Копия документа об оплате"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_5142/"
     ],
@@ -1009,7 +1059,7 @@
     ]
   },
   "act": {
-    "version": "act_ru_v1",
+    "version": "act_approved_v4",
     "file": "act_ru_v1.docx",
     "title": "Акт передачи и приёмки имущества",
     "label": "Акт передачи и приёмки имущества",
@@ -1029,7 +1079,9 @@
       "condition": "Состояние и комплектность",
       "notes": "Замечания принимающей стороны",
       "place": "Место передачи",
-      "extras": "Переданные документы"
+      "extras": "Переданные документы",
+      "unit": "Единица измерения",
+      "quantity": "Количество"
     },
     "sample": {
       "city": "Казань",
@@ -1043,10 +1095,12 @@
       "condition": "Работает; кабель питания, пульт",
       "notes": "Царапина на корпусе",
       "place": "Казань, ул. Учебная, д. 1",
-      "extras": "Инструкция — 1 экземпляр"
+      "extras": "Инструкция — 1 экземпляр",
+      "unit": "шт.",
+      "quantity": "1"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_9027/"
     ],
@@ -1118,7 +1172,7 @@
     ]
   },
   "loan": {
-    "version": "loan_ru_v1",
+    "version": "loan_approved_v4",
     "file": "loan_ru_v1.docx",
     "title": "Договор денежного займа между гражданами",
     "label": "Договор денежного займа между гражданами",
@@ -1155,7 +1209,7 @@
       "extra": "Об изменении реквизитов стороны уведомляют письменно"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_9027/"
     ],
@@ -1227,7 +1281,7 @@
     ]
   },
   "claim": {
-    "version": "claim_ru_v1",
+    "version": "claim_approved_v4",
     "file": "claim_ru_v1.docx",
     "title": "Досудебная претензия",
     "label": "Досудебная претензия",
@@ -1264,7 +1318,7 @@
       "attachments": "Копия договора, копия платёжного поручения"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_5142/"
     ],
@@ -1324,7 +1378,7 @@
     ]
   },
   "consent": {
-    "version": "consent_ru_v1",
+    "version": "consent_approved_v4",
     "file": "consent_ru_v1.docx",
     "title": "Согласие на выезд ребёнка за границу",
     "label": "Согласие на выезд ребёнка за границу",
@@ -1357,7 +1411,7 @@
       "companion": "Петрова Анна Викторовна, заграничный паспорт 00 7654321"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.kdmid.ru/cons/notary/certification-of-consent-to-the-departure-of-a-minor-citizen-of-the-Russian-Federation/"
     ],
@@ -1393,7 +1447,7 @@
     ]
   },
   "marriage_contract": {
-    "version": "marriage_contract_ru_v1",
+    "version": "marriage_contract_approved_v4",
     "file": "marriage_contract_ru_v1.docx",
     "title": "Брачный договор",
     "label": "Брачный договор",
@@ -1434,7 +1488,7 @@
       "extra": "Стороны раскрывают нотариусу сведения об имуществе и обязательствах"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_8982/"
     ],
@@ -1522,7 +1576,7 @@
     ]
   },
   "gift": {
-    "version": "gift_ru_v1",
+    "version": "gift_approved_v4",
     "file": "gift_ru_v1.docx",
     "title": "Договор дарения движимого имущества",
     "label": "Договор дарения движимого имущества",
@@ -1559,7 +1613,7 @@
       "accessories": "Объектив, чехол, инструкция"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_9027/",
       "https://www.consultant.ru/document/cons_doc_LAW_522498/62652ba719504ab273f9d86a49e2f7e2ee33d0a5/"
@@ -1628,7 +1682,7 @@
     ]
   },
   "lawsuit": {
-    "version": "lawsuit_ru_v1",
+    "version": "lawsuit_approved_v4",
     "file": "lawsuit_ru_v1.docx",
     "title": "Исковое заявление",
     "label": "Исковое заявление",
@@ -1671,7 +1725,7 @@
       "attachments": "Копия договора, платёжное поручение, расчёт, доказательства отправки копий участникам"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_39570/69470b15e4eb033f5bfa691094e1d083f32238e9/",
       "https://www.consultant.ru/document/cons_doc_LAW_39570/c04bddd90fe8dd05299705ec675c65ecd0f668dc/"
@@ -1748,7 +1802,7 @@
     ]
   },
   "alimony": {
-    "version": "alimony_ru_v1",
+    "version": "alimony_approved_v4",
     "file": "alimony_ru_v1.docx",
     "title": "Соглашение об уплате алиментов",
     "label": "Соглашение об уплате алиментов",
@@ -1787,7 +1841,7 @@
       "extra": "О смене счёта получатель уведомляет письменно"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_8982/"
     ],
@@ -1867,7 +1921,7 @@
     ]
   },
   "offer": {
-    "version": "offer_ru_v1",
+    "version": "offer_approved_v4",
     "file": "offer_ru_v1.docx",
     "title": "Коммерческое предложение",
     "label": "Коммерческое предложение",
@@ -1906,7 +1960,7 @@
       "contact": "example@example.com; согласовать дату обследования"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_5142/"
     ],
@@ -1991,7 +2045,23 @@
       "acceptance": "Срок проверки акта",
       "subcontract": "Привлечение третьих лиц",
       "contacts": "Адреса для уведомлений",
-      "extra": "Дополнительные условия"
+      "extra": "Дополнительные условия",
+      "applications": "Условия оказания услуг по заявкам",
+      "price_words": "Стоимость прописью",
+      "act_send_days": "Срок направления акта в рабочих днях",
+      "late_payment_rate": "Неустойка за просрочку оплаты процент в день",
+      "late_payment_cap": "Предел неустойки за оплату процент",
+      "late_service_rate": "Неустойка за просрочку услуг процент в день",
+      "late_service_cap": "Предел неустойки за услуги процент",
+      "liability_limit": "Предел ответственности исполнителя",
+      "force_notice_days": "Срок уведомления о форс мажоре в рабочих днях",
+      "secrecy_years": "Срок конфиденциальности после прекращения в годах",
+      "rights_transition": "Момент перехода интеллектуальных прав",
+      "valid_until": "Действие договора до",
+      "refusal_notice_days": "Срок уведомления об отказе в календарных днях",
+      "claim_days": "Срок рассмотрения претензии в рабочих днях",
+      "court": "Суд для рассмотрения спора",
+      "details_notice_days": "Срок уведомления о реквизитах в рабочих днях"
     },
     "blocks": [
       [
@@ -2134,19 +2204,35 @@
       "price": "15 000 рублей",
       "tax": "уточняется сторонами до подписания",
       "payment": "перевод после подписания акта, в течение 5 рабочих дней",
-      "acceptance": "5 рабочих дней",
+      "acceptance": "5",
       "subcontract": "только с письменного согласия Заказчика",
       "contacts": "тестовые адреса, подлежат заполнению до подписания",
-      "extra": "Проверочный образец, для подписания не использовать."
+      "extra": "Проверочный образец, для подписания не использовать.",
+      "applications": "Услуги оказываются без отдельных заявок",
+      "price_words": "Пятнадцать тысяч рублей",
+      "act_send_days": "3",
+      "late_payment_rate": "0,1",
+      "late_payment_cap": "10",
+      "late_service_rate": "0,1",
+      "late_service_cap": "10",
+      "liability_limit": "стоимости Услуг по Договору",
+      "force_notice_days": "5",
+      "secrecy_years": "3",
+      "rights_transition": "полной оплаты Услуг",
+      "valid_until": "полного исполнения Сторонами обязательств",
+      "refusal_notice_days": "10",
+      "claim_days": "10",
+      "court": "Арбитражный суд Республики Татарстан",
+      "details_notice_days": "5"
     },
-    "version": "services_legacy_ru_v1",
-    "file": "services_legacy_ru_v1.docx",
+    "version": "services_approved_v4",
+    "file": "services_ru_v1.docx",
     "max_cost_pages": 2,
-    "explicit_ru": false,
-    "qa_max_pages": 3
+    "qa_max_pages": 6,
+    "explicit_ru": false
   },
   "employment": {
-    "version": "employment_ru_v1",
+    "version": "employment_approved_v4",
     "file": "employment_ru_v1.docx",
     "title": "Трудовой договор",
     "label": "Трудовой договор",
@@ -2195,7 +2281,7 @@
       "acts": "Правила внутреннего трудового распорядка, положение об оплате труда, должностная инструкция"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_34683/"
     ],
@@ -2295,7 +2381,7 @@
     ]
   },
   "work_act": {
-    "version": "work_act_ru_v1",
+    "version": "work_act_approved_v4",
     "file": "work_act_ru_v1.docx",
     "title": "Акт выполненных работ",
     "label": "Акт выполненных работ",
@@ -2319,7 +2405,10 @@
       "price": "Стоимость с валютой",
       "tax": "НДС и основание",
       "quality": "Результат осмотра и замечания",
-      "remedy": "Срок и порядок устранения замечаний"
+      "remedy": "Срок и порядок устранения замечаний",
+      "unit": "Единица измерения",
+      "quantity": "Объём работ",
+      "line_total": "Стоимость позиции"
     },
     "sample": {
       "city": "Казань",
@@ -2337,10 +2426,13 @@
       "price": "6000 рублей",
       "tax": "НДС не предъявляется, основание уточняется сторонами",
       "quality": "На одном стуле требуется регулировка спинки",
-      "remedy": "Регулировка до 22.10.2026"
+      "remedy": "Регулировка до 22.10.2026",
+      "unit": "час",
+      "quantity": "4",
+      "line_total": "6000"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_9027/",
       "https://www.consultant.ru/document/cons_doc_LAW_122855/b24121ba7152f33673608559f2ca844ef5b6a74c/"
@@ -2413,7 +2505,7 @@
     ]
   },
   "supply": {
-    "version": "supply_ru_v1",
+    "version": "supply_approved_v4",
     "file": "supply_ru_v1.docx",
     "title": "Договор поставки товаров",
     "label": "Договор поставки товаров",
@@ -2460,7 +2552,7 @@
       "extra": "Передача оформляется накладной"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_9027/"
     ],
@@ -2536,7 +2628,7 @@
     ]
   },
   "agency": {
-    "version": "agency_ru_v1",
+    "version": "agency_approved_v4",
     "file": "agency_ru_v1.docx",
     "title": "Агентский договор",
     "label": "Агентский договор",
@@ -2581,7 +2673,7 @@
       "subagent": "Только с письменного согласия принципала"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_9027/"
     ],
@@ -2653,7 +2745,7 @@
     ]
   },
   "joint_activity": {
-    "version": "joint_activity_ru_v1",
+    "version": "joint_activity_approved_v4",
     "file": "joint_activity_ru_v1.docx",
     "title": "Договор простого товарищества",
     "label": "Договор простого товарищества",
@@ -2702,7 +2794,7 @@
       "exit": "После расчётов с кредиторами остаток распределяется пропорционально вкладам"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_9027/"
     ],
@@ -2782,7 +2874,7 @@
     ]
   },
   "nonresidential_rent": {
-    "version": "nonresidential_rent_ru_v1",
+    "version": "nonresidential_rent_approved_v4",
     "file": "nonresidential_rent_ru_v1.docx",
     "title": "Договор аренды нежилого помещения",
     "label": "Договор аренды нежилого помещения",
@@ -2833,7 +2925,7 @@
       "registration": "Для указанного срока менее года не предусмотрена"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_9027/"
     ],
@@ -2909,7 +3001,7 @@
     ]
   },
   "cession": {
-    "version": "cession_ru_v1",
+    "version": "cession_approved_v4",
     "file": "cession_ru_v1.docx",
     "title": "Договор уступки денежного требования",
     "label": "Договор уступки денежного требования",
@@ -2956,7 +3048,7 @@
       "documents": "Оригиналы передаются по акту в день перехода права"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_5142/"
     ],
@@ -3024,7 +3116,7 @@
     ]
   },
   "nda": {
-    "version": "nda_ru_v1",
+    "version": "nda_approved_v4",
     "file": "nda_ru_v1.docx",
     "title": "Соглашение о конфиденциальности",
     "label": "Соглашение о конфиденциальности",
@@ -3067,7 +3159,7 @@
       "contacts": "example@example.com; уведомление без необоснованной задержки"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_5142/",
       "https://www.consultant.ru/document/cons_doc_LAW_48699/0ca1b144b64eaa68cd80ca51ad37ac4047c47775/"
@@ -3140,7 +3232,7 @@
     ]
   },
   "self_employed": {
-    "version": "self_employed_ru_v1",
+    "version": "self_employed_approved_v4",
     "file": "self_employed_ru_v1.docx",
     "title": "Договор оказания услуг с плательщиком НПД",
     "label": "Договор оказания услуг с плательщиком НПД",
@@ -3179,7 +3271,7 @@
       "contacts": "example@example.com"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_9027/",
       "https://www.nalog.gov.ru/rn27/news/smi/13907247/"
@@ -3244,7 +3336,7 @@
     ]
   },
   "warranty_letter": {
-    "version": "warranty_letter_ru_v1",
+    "version": "warranty_letter_approved_v4",
     "file": "warranty_letter_ru_v1.docx",
     "title": "Гарантийное письмо об исполнении обязательства",
     "label": "Гарантийное письмо об исполнении обязательства",
@@ -3277,7 +3369,7 @@
       "attachments": "Акт сверки расчётов"
     },
     "max_cost_pages": 2,
-    "qa_max_pages": 3,
+    "qa_max_pages": 4,
     "sources": [
       "https://www.consultant.ru/document/cons_doc_LAW_5142/"
     ],

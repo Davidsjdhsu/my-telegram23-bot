@@ -46,7 +46,7 @@ class CarFieldsTests(unittest.TestCase):
             car.render(blank);self.assertEqual(blank.read_bytes(),car.TEMPLATE.read_bytes())
             car.render(filled,{'seller_name':'Петров Александр Константинович','price':'1 200 000'})
             d=Document(filled);before=Document(car.TEMPLATE)
-            texts='\n'.join(p.text for p in d.paragraphs)
+            texts='\n'.join(p.text for p in d.paragraphs)+'\n'+'\n'.join(c.text for t in d.tables for row in t.rows for c in row.cells)
             self.assertIn('Петров Александр Константинович',texts)
             self.assertIn('[ФИО покупателя полностью]',texts)
             self.assertIn('1 200 000',texts)

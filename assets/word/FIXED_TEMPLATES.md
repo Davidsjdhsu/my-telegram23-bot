@@ -1,4 +1,4 @@
-# Russian fixed Word templates, version 1
+# Russian fixed Word templates, owner-approved revision 4
 
 These are independently typeset, adapted working templates, not government-approved universal forms. No source logos, advertisements, hyperlinks or watermarks are embedded. References supplied/selected by the owner: services agreement DOCX, services-act PDF (Dogovor.expert), Rospotrebnadzor replacement claim (3330.doc), and Yandex apartment tenancy sample. Layout and branding were not copied.
 
@@ -15,7 +15,7 @@ Legal references checked 2026-10-19:
 
 The claim does not promise unconditional penalties/fines. Technical goods may need additional grounds depending on timing, as shown in the preview. Payment and absence of complaints are not invented. Tenancy separates signing from actual handover.
 
-Build with tools/build_fixed_word_templates.py. JSON sample fields are fictional test fixtures and are never automatically inserted into user documents. tools/check_fixed_word_runtime.py checks real DOCX/PDF export during deployment without external API calls.
+The checked-in DOCX assets are the approved source of truth; older builder scripts reproduce earlier layouts and must not overwrite them. JSON sample fields are fictional test fixtures and are never automatically inserted into user documents. tools/check_fixed_word_runtime.py checks real DOCX/PDF export during deployment without external API calls.
 
 Pricing: existing 5-credit Word page rate, capped at the two-page quote. Free blank DOCX download. Ready files and sent-file flags are retained for retries in the current bot session, with charging after both formats are sent. Retry state is not durable across process restarts. Failure/debit tests use mocked Telegram and balances, not real user accounts.
 
@@ -64,3 +64,11 @@ Legal reference set consulted 2026-10-19 (the applicable rule must still be chec
 - Trade secrets, 98-FZ article 10: https://www.consultant.ru/document/cons_doc_LAW_48699/0ca1b144b64eaa68cd80ca51ad37ac4047c47775/
 
 Notarial drafts explicitly state that they are not certified. No certification inscription, registry number, signature image, logo or seal is fabricated. Unknown identity, ownership, payment, tax and case details remain placeholders. The review screen is a user confirmation step, not an independent legal opinion. The scoped regex checks catch only explicit incompatible cases; they are not legal classification or validation of every user condition.
+
+## Approved layout integration — 2026-10-19
+
+The owner reviewed all 28 distinct Word layouts and authorized release after filling checks. Existing menu routes remain unchanged (services aliases services_ru). The service agreement preserves its eleven sections. Role-specific labels disambiguate repeated fields; the service act separates scope/quantity from measurement units. No model rewrites form clauses. The first editable item row accepts the supplied description; other rows remain available for manual additions. Multi-row structured entry is not introduced in this release.
+
+`docx_form_fill.py` replaces markers across split Word runs, including nested tables and footers, preserving formatting and unrelated breaks. Long table rows can expand and flow between pages; short signature blocks stay together. The employment receipt stays with the signatures. Missing fields remain visible. Versions invalidate previously prepared sessions so old layouts cannot be reused for a new confirmation. Prices are unchanged.
+
+Offline QA: `tools/qa_approved_forms.py` uses the actual word_build handler and production DOCX/PDF conversion with fictional labeled data. Telegram transport and balances are mocked, and paid extraction is never called. Runtime deployment checks render every catalog route. Local page inspection complements XML/field tests; these checks do not certify legal applicability or prove the live Telegram round trip.

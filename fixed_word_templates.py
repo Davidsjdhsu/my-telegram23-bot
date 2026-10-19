@@ -1,3 +1,4 @@
+from docx_form_fill import replace_fields, adapt_filled_layout
 """Versioned fixed Russian Word forms; language models only extract supplied fields."""
 import asyncio
 import hashlib
@@ -75,14 +76,8 @@ def render(path,kind,fields=None):
     d=Document(source)
     replacements={'['+spec['fields'][k]+']':v for k,v in values.items() if v}
     if not replacements:shutil.copyfile(source,path);return
-    pattern=re.compile('(?:'+'|'.join(re.escape(k) for k in sorted(replacements,key=len,reverse=True))+r')\.?')
-    for p in list(d.paragraphs)+[p for t in d.tables for row in t.rows for c in row.cells for p in c.paragraphs]:
-        for run in p.runs:
-            def sub(m):
-                token=m.group();dot=token.endswith('.');marker=token[:-1] if dot else token
-                value=replacements[marker]
-                return value.rstrip('.')+'.' if dot else value
-            if pattern.search(run.text):run.text=pattern.sub(sub,run.text)
+    replace_fields(d,replacements)
+    adapt_filled_layout(d)
     d.save(path)
     with ZipFile(path) as z:
         if z.testzip() is not None:raise ValueError('invalid_docx')
