@@ -59,6 +59,18 @@ class CarFieldsTests(unittest.TestCase):
                 xml=''.join(z.read(n).decode() for n in z.namelist() if n.endswith('.xml'))
                 self.assertNotIn('auto.ru',xml.lower());self.assertNotIn('авто.ру',xml.lower())
                 self.assertNotIn('TargetMode="External"',''.join(z.read(n).decode() for n in z.namelist() if n.endswith('.rels')))
+    def test_currency_payment_and_terminal_punctuation(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'filled.docx'
+            for unit in ('рублей', 'руб.', '₽'):
+                car.render(path, {'price':'850 000 '+unit, 'price_words':'восемьсот пятьдесят тысяч рублей', 'payment_method':'банковский перевод', 'extra':'Условие.', 'received_amount':'850 000 рублей', 'balance':'0 руб.'})
+                text='\n'.join(p.text for p in Document(path).paragraphs)
+                self.assertIn('850 000 (восемьсот пятьдесят тысяч) рублей.',text)
+                self.assertIn('Способ оплаты: банковский перевод.',text)
+                self.assertIn('Дополнительные условия: Условие. Изменения',text)
+                self.assertNotIn('рублей рублей',text)
+                self.assertNotIn('..',text)
+
     def test_all_entry_routes_call_shared_workflow(self):
         source=(Path(__file__).resolve().parents[1]/'main.py').read_text()
         tree=ast.parse(source);funcs={n.name:ast.get_source_segment(source,n) for n in tree.body if isinstance(n,ast.AsyncFunctionDef)}

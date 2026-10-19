@@ -13,7 +13,7 @@ from docx import Document
 ASSETS = Path(__file__).resolve().parent / 'assets' / 'word'
 TEMPLATE = ASSETS / 'dkp_car_ru_v1.docx'
 FIELDS = json.loads((ASSETS / 'dkp_car_ru_v1.fields.json').read_text(encoding='utf-8'))
-VERSION = 'dkp_car_ru_v1'
+VERSION = 'dkp_car_ru_v1.1'
 TITLE = 'Договор купли-продажи автомобиля'
 LABELS = {
     'city': 'Город', 'date': 'Дата договора', 'seller_name': 'ФИО продавца',
@@ -137,6 +137,10 @@ def render(path, fields=None):
     if not values:
         shutil.copyfile(TEMPLATE, path)
         return
+    # Currency is already supplied by the fixed clauses. Preserve numeric values.
+    for key in ('price', 'price_words', 'received_amount', 'balance'):
+        if key in values:
+            values[key] = re.sub(r'\s*(?:руб(?:лей|ля|ль)?\.?|₽)\s*[.]?$', '', values[key], flags=re.I).rstrip()
     values['seller_sign'] = values.get('seller_name', '')
     values['buyer_sign'] = values.get('buyer_name', '')
     d = Document(TEMPLATE)
@@ -147,6 +151,8 @@ def render(path, fields=None):
             # Do not assign unchanged run.text: it destroys page breaks and fields.
             for marker, value in replacements.items():
                 if marker in run.text:
+                    # User prose may already end with the template's punctuation.
+                    run.text = run.text.replace(marker + '.', value.rstrip('.') + '.')
                     run.text = run.text.replace(marker, value)
     d.save(path)
     with ZipFile(path) as z:
