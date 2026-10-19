@@ -4731,7 +4731,7 @@ WORD_CATEGORIES = {
 WORD_KIND_LABELS = {
     'services_ru': {"ru": '🤝 Договор услуг · шаблон РФ', "en": 'Договор возмездного оказания услуг · RU'},
     'services_act_ru': {"ru": '✅ Акт услуг · шаблон РФ', "en": 'Акт оказанных услуг · RU'},
-    'rent_flat_ru': {"ru": '🏠 Найм квартиры · шаблон РФ', "en": 'Договор найма квартиры · RU'},
+    'rent_flat_ru': {"ru": '🏠 Аренда квартиры · шаблон РФ', "en": 'Аренда квартиры · RU'},
     'claim_replace_ru': {"ru": '⚠️ Замена товара · шаблон РФ', "en": 'Претензия о замене некачественного товара · RU'},
 
     "dkp_car": {"ru": "🚗 ДКП автомобиля · РФ", "en": "🚗 Car sale agreement · Russia"},
@@ -4800,6 +4800,8 @@ KIND_LABELS = {k: v["ru"] for k, v in WORD_KIND_LABELS.items()}  # обратн�
 # Обратный словарь label->kind собирается по ВСЕМ языкам сразу, чтобы кнопка, нажатая
 # на любом из 7 языков, узнавалась одинаково, независимо от текущего языка пользователя.
 LABEL_TO_KIND = {label: k for k, variants in WORD_KIND_LABELS.items() for label in variants.values()}
+# Accept reply keyboards sent before the label was renamed.
+LABEL_TO_KIND.update({"🏠 Найм квартиры · шаблон РФ": "rent_flat_ru", "Договор найма квартиры · RU": "rent_flat_ru"})
 
 
 def word_category_kb(lang="ru"):
