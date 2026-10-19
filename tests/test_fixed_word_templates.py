@@ -25,7 +25,9 @@ class FieldsTests(unittest.TestCase):
     def test_grounding_rejects_invented_values(self):
         self.assertEqual(fixed.validate_fields({'provider':'ООО Тест','price':'100','unknown':'test'},'ООО Тест',fixed.CATALOG['services_ru']),{'provider':'ООО Тест'})
     def test_explicit_ru_kind_cannot_use_generic_generation(self):
-        self.assertTrue(fixed.applies({'word_kind':'services_ru','content_lang':'en'}));self.assertFalse(fixed.applies({'word_kind':'services'}))
+        self.assertTrue(fixed.applies({'word_kind':'services_ru','content_lang':'en'}))
+        self.assertTrue(fixed.applies({'word_kind':'services'}))
+        self.assertFalse(fixed.applies({'word_kind':'services','content_lang':'en'}))
     def test_actual_entrypoints(self):
         source=(Path(__file__).resolve().parents[1]/'main.py').read_text();tree=ast.parse(source)
         funcs={n.name:ast.get_source_segment(source,n) for n in tree.body if isinstance(n,ast.AsyncFunctionDef)}

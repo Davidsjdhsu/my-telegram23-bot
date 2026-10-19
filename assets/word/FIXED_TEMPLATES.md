@@ -18,3 +18,49 @@ The claim does not promise unconditional penalties/fines. Technical goods may ne
 Build with tools/build_fixed_word_templates.py. JSON sample fields are fictional test fixtures and are never automatically inserted into user documents. tools/check_fixed_word_runtime.py checks real DOCX/PDF export during deployment without external API calls.
 
 Pricing: existing 5-credit Word page rate, capped at the two-page quote. Free blank DOCX download. Ready files and sent-file flags are retained for retries in the current bot session, with charging after both formats are sent. Retry state is not durable across process restarts. Failure/debit tests use mocked Telegram and balances, not real user accounts.
+
+## Remaining Word menu forms
+
+The 24 older non-study menu entries now use fixed forms for Russian requests. Other content languages retain their prior workflow. The specialised car-sale route retains priority when the generic sale entry explicitly concerns a car. The separate Mini App real-estate sale flow is not changed by this batch.
+
+Editorial source: `tools/extend_fixed_catalog.py`; per-form scope, fields, fictional test data and reference URLs are in the catalog. These are independently drafted working forms based on the relevant rules, not reproductions of officially approved forms. They do not cover every transaction that could fall under a broad menu label. The precise scope is shown at input and confirmation, and on free download.
+
+| Menu kind | Fixed form and scope |
+| --- | --- |
+| dkp | Ordinary movable property sale between adults; car route remains separate |
+| rent | Ordinary movable property lease; separate apartment and commercial-premises forms remain available |
+| proxy | Simple written authority to collect listed documents, no disposition of property or litigation powers |
+| statement | General application to an organisation, not a prescribed administrative form |
+| act | Actual handover and acceptance of listed property/documents |
+| loan | Monetary loan between adult individuals; signing is not a receipt for money |
+| claim | General civil pre-action demand; grounds, amounts and deadline supplied by the user |
+| consent | Child travel consent draft for notarisation |
+| marriage_contract | Marital property agreement draft for notarisation |
+| gift | Ordinary movable property gift between adults, not real estate |
+| lawsuit | Civil claim draft under the Civil Procedure Code, not an arbitration/administrative claim |
+| alimony | Child-support agreement draft for notarisation |
+| offer | Commercial proposal for discussion, not a deliberately binding offer |
+| services | Reuses the existing reviewed B2B/IP service agreement |
+| employment | Indefinite main-job adult employment, no probation or remote regime |
+| work_act | Ordinary completed-work acceptance, not KS-2 or a tax invoice |
+| supply | Domestic ordinary-goods B2B/IP supply |
+| agency | Agent acts in the principal's name and at their expense |
+| joint_activity | Entrepreneurial simple partnership between IP/commercial organisations, draft for review |
+| nonresidential_rent | Direct commercial-premises lease from the owner |
+| cession | Paid assignment of an existing monetary business claim |
+| nda | Mutual confidentiality agreement, not a substitute for a trade-secret regime or personal-data processing basis |
+| self_employed | Independent ordinary services under NPD, not employment or agency |
+| warranty_letter | Debtor's letter about its own obligation, not an independent guarantee |
+
+Legal reference set consulted 2026-10-19 (the applicable rule must still be checked for each real transaction):
+- Civil Code Part I, representation, obligations and assignment: https://www.consultant.ru/document/cons_doc_LAW_5142/
+- Civil Code Part II, sale, gift, lease, services, loan, agency and partnership: https://www.consultant.ru/document/cons_doc_LAW_9027/
+- Family Code, articles 40–44, 46, 99–105: https://www.consultant.ru/document/cons_doc_LAW_8982/
+- Labour Code, articles 57, 67, 68, 115, 136: https://www.consultant.ru/document/cons_doc_LAW_34683/
+- Consular Department, child travel consent: https://www.kdmid.ru/cons/notary/certification-of-consent-to-the-departure-of-a-minor-citizen-of-the-Russian-Federation/
+- Civil Procedure Code 131: https://www.consultant.ru/document/cons_doc_LAW_39570/69470b15e4eb033f5bfa691094e1d083f32238e9/
+- Civil Procedure Code 132: https://www.consultant.ru/document/cons_doc_LAW_39570/c04bddd90fe8dd05299705ec675c65ecd0f668dc/
+- NPD income exclusions for current/recent employers: https://www.nalog.gov.ru/rn27/news/smi/13907247/
+- Trade secrets, 98-FZ article 10: https://www.consultant.ru/document/cons_doc_LAW_48699/0ca1b144b64eaa68cd80ca51ad37ac4047c47775/
+
+Notarial drafts explicitly state that they are not certified. No certification inscription, registry number, signature image, logo or seal is fabricated. Unknown identity, ownership, payment, tax and case details remain placeholders. The review screen is a user confirmation step, not an independent legal opinion. The scoped regex checks catch only explicit incompatible cases; they are not legal classification or validation of every user condition.

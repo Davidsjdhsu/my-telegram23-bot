@@ -50,7 +50,7 @@ def build(spec,path):
     t.rows[-1]._tr.get_or_add_trPr().append(OxmlElement('w:cantSplit'))
    t.rows[0]._tr.get_or_add_trPr().append(OxmlElement('w:tblHeader'))
  d.core_properties.author='';d.core_properties.last_modified_by='';d.core_properties.comments=''
- d.core_properties.title=spec['title'];d.core_properties.subject=spec['scope']
+ d.core_properties.title=spec['title'];d.core_properties.subject=spec['scope'][:255]
  d.save(path)
 
 if __name__=='__main__':

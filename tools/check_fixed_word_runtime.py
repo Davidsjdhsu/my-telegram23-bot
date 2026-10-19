@@ -11,7 +11,7 @@ async def main():
    root=Path(td);docx=root/(kind+'.docx');pdf=docx.with_suffix('.pdf')
    render(docx,kind,spec['sample']);await convert_word_pdf(docx,pdf)
    reader=PdfReader(pdf);text=' '.join(' '.join(p.extract_text().split()) for p in reader.pages)
-   assert 1<=len(reader.pages)<=2,(kind,len(reader.pages))
+   assert 1<=len(reader.pages)<=spec.get('qa_max_pages',2),(kind,len(reader.pages))
    assert all(not list(p.images) for p in reader.pages)
    for value in spec['sample'].values():assert ' '.join(value.rstrip('.').split()) in text,(kind,value)
    for label in spec['fields'].values():assert '['+label+']' not in text

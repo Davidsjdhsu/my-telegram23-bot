@@ -15,7 +15,13 @@ ASSETS=Path(__file__).resolve().parent/'assets'/'word'
 CATALOG=json.loads((ASSETS/'fixed_templates_ru.json').read_text(encoding='utf-8'))
 
 def applies(data,lang='ru'):
-    return data.get('word_kind') in CATALOG
+    spec=CATALOG.get(data.get('word_kind'))
+    if not spec:return False
+    if spec.get('explicit_ru',True):return True
+    if (data.get('content_lang') or lang)!='ru':return False
+    # Keep the existing specialised vehicle form, including the generic sale entry.
+    from car_sale_template import applies as car_applies
+    return not car_applies(data,lang)
 
 def spec_for(data):
     return CATALOG[data['word_kind']]
@@ -83,6 +89,17 @@ def render(path,kind,fields=None):
 
 def scope_issue(data):
     kind=data['word_kind'];text=source_text(data).casefold()
+    spec=spec_for(data)
+    pattern=spec.get('reject_pattern')
+    explicit=parse_labeled(source_text(data),spec)
+    # Addresses and identity details are not the subject of the requested deal.
+    scope_text='\n'.join(v for k,v in explicit.items() if k not in {
+        'party_a','party_b','details_a','details_b','signer_a','signer_b',
+        'employer_details','passport','provider','customer','author','recipient',
+        'contact','contacts','reply','city','date'}) if explicit else text
+    scope_text=re.sub(r'без (?:права )?передоверия|без испытательн\w*(?: срок\w*)?', '',scope_text.casefold())
+    if pattern and re.search(pattern,scope_text):
+        return 'Выбранная форма не подходит для указанных условий. '+spec['scope']
     if kind=='rent_flat_ru' and re.search(r'\b(?:ооо|пао|оао|зао)\b|нежил\w* помещен|подна[её]м|субаренд|по доверенности',text):
         return 'Этот шаблон предназначен для найма квартиры между физлицами с личным участием собственника. Для указанного варианта нужны другие условия.'
     if kind=='services_act_ru' and re.search(r'\bкс[ -]?2\b|сч[её]т[ -]фактур',text):
@@ -107,11 +124,14 @@ async def preview(m,state,api):
             await state.set_state(api['Form'].waiting_word_extra)
             await send_chunks(m,'Не удалось разобрать данные. Пришли известные поля из формы, остальные строки можно удалить.\n\n'+form_text(data['word_kind']),api['cancel_kb']('ru'))
             return
-        if not applies(await state.get_data()) or fingerprint(await state.get_data())!=fp:return
+        current=await state.get_data()
+        if not applies(current,api['user_lang'](m.from_user.id)) or fingerprint(current)!=fp:return
         order={'fingerprint':fp,'base_fingerprint':base_fingerprint(data),'kind':data['word_kind'],'fields':fields}
         await state.update_data(fixed_word=order,word_pages=2)
     missing=[label for k,label in spec['fields'].items() if not fields.get(k)]
-    lines=[spec['title'],'',spec['scope'],'','Проверь заполненные поля:']
+    lines=[spec['title'],'',spec['scope']]
+    if spec.get('notice'):lines += ['',spec['notice']]
+    lines += ['','Проверь заполненные поля:']
     lines += [label+': '+fields[k] for k,label in spec['fields'].items() if fields.get(k)]
     lines += ['',('Не заполнено: '+', '.join(missing)+'.') if missing else 'Все поля заполнены.',
         'Неизвестные сведения останутся в квадратных скобках. Проверь, что все переданные условия учтены. '
@@ -131,6 +151,7 @@ async def send_chunks(m,text,keyboard):
 
 async def build(m,state,api):
     data=await state.get_data();spec=spec_for(data);order=data.get('fixed_word') or {}
+    if scope_issue(data):await preview(m,state,api);return
     if order.get('fingerprint')!=fingerprint(data):await preview(m,state,api);return
     uid=m.from_user.id
     if not api['can_afford'](uid,api['word_cost'](2)) and not order.get('charged'):

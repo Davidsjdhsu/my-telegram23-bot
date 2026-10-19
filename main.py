@@ -8278,6 +8278,9 @@ WORD_KIND_HINTS = {k: {"ai": v["ai"]["ru"], "user": v["user"]["ru"]} for k, v in
 
 
 def word_hint(kind: str, mode: str, lang: str = "ru") -> str:
+    from fixed_word_templates import CATALOG as FIXED_WORD_CATALOG, form_text as fixed_form
+    if lang == "ru" and kind in FIXED_WORD_CATALOG:
+        return (FIXED_WORD_CATALOG[kind]['scope'] + "\n\nПришли известные сведения обычным текстом или заполни строки ниже. Неизвестные поля можно пропустить. Перед сборкой покажу, что учтено.\n\n" + fixed_form(kind))
     variants = WORD_KIND_HINTS_I18N.get(kind, WORD_KIND_HINTS_I18N["doc"])[mode]
     return variants.get(lang) or variants["ru"]
 
@@ -8339,15 +8342,18 @@ async def word_mode_template(m: Message, state: FSMContext):
             meta = json.loads(META_SCHEMAS.get(kind, META_SCHEMAS["doc"]))
         except Exception:
             meta = {}
-        from fixed_word_templates import CATALOG as FIXED_WORD_CATALOG, render as render_fixed_word
-        if kind in FIXED_WORD_CATALOG:
+        from fixed_word_templates import CATALOG as FIXED_WORD_CATALOG, render as render_fixed_word, applies as fixed_template_applies
+        fixed_selected = fixed_template_applies(data, lang)
+        if fixed_selected:
             await run_heavy(render_fixed_word, tpl_path, kind)
         elif kind == "dkp_car":
             from car_sale_template import render as render_car_sale
             await run_heavy(render_car_sale, tpl_path)
         else:
             await run_heavy(build_word, tpl_path, "Документ", template_sections_for(kind), kind, meta, extra_data={"template": True})
-        filename = (FIXED_WORD_CATALOG[kind]['title'] + ' — шаблон.docx') if kind in FIXED_WORD_CATALOG else ('ДКП автомобиля — шаблон.docx' if kind == 'dkp_car' else None)
+        filename = (FIXED_WORD_CATALOG[kind]['title'] + ' — шаблон.docx') if fixed_selected else ('ДКП автомобиля — шаблон.docx' if kind == 'dkp_car' else None)
+        if fixed_selected:
+            await m.answer(FIXED_WORD_CATALOG[kind]['scope'], parse_mode=None)
         await m.answer_document(FSInputFile(tpl_path, filename=filename) if filename else FSInputFile(tpl_path), caption=tr("msg_template_caption", lang))
         try:
             os.remove(tpl_path)
