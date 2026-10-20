@@ -4,6 +4,7 @@ from word_quality import (
     expansion_word_target, word_page_notice, word_pdf_layout,
     readable_word_paragraphs, word_revision_notice, WORD_SYSTEM, WORD_REVIEW_SYSTEM, word_section_budgets,
     focused_word_sections, apply_word_section_patch, word_volume_needs_choice,
+    word_growth_targets, apply_word_additions,
     WORD_REFINE, WORD_ACCEPT, word_quality_keyboard, word_quality_choice_notice,
 )
 import os
@@ -8925,6 +8926,40 @@ async def word_build(m: Message, state: FSMContext, quality_action=None):
                 target = expansion_word_target(value, actual, requested, front_matter_pages=front,
                                                layout=findings) if needs_depth or findings['excess_pages'] else sum(
                     len((s.get('content') or '').split()) for s in value.get('sections', []))
+                print(f"Word revision_budget attempt={findings.get('revision_attempt', 1)} "
+                      f"current_words={sum(len((s.get('content') or '').split()) for s in value.get('sections', []))} "
+                      f"target_words={target}", flush=True)
+                if academic and needs_depth and findings.get("revision_attempt", 1) >= 2:
+                    targets = word_growth_targets(value, target)
+                    if not targets:
+                        return value
+                    growth_prompt = f"""Дополни сохранённую учебную работу после редакторской проверки.
+Жанр: {kind_name}. {academic_guidance(kind)}
+Задача: {data.get('topic') or ''}
+Текст и требования пользователя: {data.get('user_text') or ''}\n{data.get('extra') or ''}
+Сейчас {actual - front} страниц основного текста, нужно {pages}. Уже написанные абзацы сохраняются программой.
+Верни ТОЛЬКО новые абзацы для вставки внутрь указанных разделов. Не переписывай старый текст.
+Для каждого раздела напиши add_words НОВЫХ слов (допуск 10%). Это объём добавления, не всего раздела.
+Раздели добавление на абзацы по 60–100 слов. Каждый раскрывает новый аспект: механизм,
+причину, ограничение, возражение или подробный условный пример с разбором результата.
+Сначала прочитай всю работу ниже. Не повторяй уже изложенные мысли, даже другими словами.
+Сохрани логику переходов, вставляй пояснение рядом с соответствующим аргументом, до итогового вывода.
+Для эссе — связная проза без заголовков и списков; для конспекта — короткие тематические пояснения.
+Не добавляй таблицы, источники, цитаты, статистику или исследования, которых нет в исходных данных.
+Проверь точность новых утверждений и причинные связи. Если тему нельзя честно раскрыть глубже,
+допустим меньший объём — не заполняй его повторами.
+{WORD_EDITORIAL_GUIDANCE}
+Вся работа для проверки связности и повторов: {json.dumps(value, ensure_ascii=False)}
+Задания на дополнение (paragraphs пронумерованы с нуля): {json.dumps(targets, ensure_ascii=False)}
+Верни JSON: {{"additions":[{{"section_index":0,"after_paragraph":0,"paragraphs":["новый абзац"]}}]}}.
+section_index — index из задания, after_paragraph — номер существующего абзаца, ПОСЛЕ которого вставить текст.
+Один раздел может иметь несколько мест вставки. Перед ответом проверь суммарное число НОВЫХ слов.
+{lang_instr}"""
+                    patch = extract_json(await ask_grok(growth_prompt,
+                        max_tokens=min(12000, max(2500, sum(t['add_words'] for t in targets) * 4 + 800)),
+                        system_prompt=WORD_SYSTEM + " В этом ответе верни только JSON additions по схеме запроса.",
+                        temperature=0.2))
+                    return apply_word_additions(value, patch, targets)
                 if academic and findings.get("revision_attempt", 1) >= 2:
                     targets = focused_word_sections(value, target, allow_shorten=findings['excess_pages'])
                     if not targets:

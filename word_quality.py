@@ -46,7 +46,9 @@ WORD_EDITORIAL_GUIDANCE = (
     'Не пересказывай таблицу по строкам: поясни существенные различия и условия применения. '
     'Каждый абзац добавляет новую мысль; отделяй абзацы символами \\n\\n внутри content. '
     'Обычно достаточно 40–90 слов на абзац; не собирай сравнение всех вариантов в один абзац. '
-    'Удали общие фразы и повторы. '
+    'Удали общие фразы и смысловые повторы, даже если одна мысль выражена разными словами. '
+    'Раскрывай каждый аргумент в одном месте; следующий абзац должен добавлять причину, '
+    'следствие, условие, возражение или разобранный пример, а не пересказывать предыдущий. '
     'Сохраняй оговорки и исключения: не превращай «обычно» или «при условии» в «всегда» или «невозможно». '
     'Не выдумывай статистику, исследования, источники, цитаты, личный опыт или реквизиты. '
     'Не заменяй отсутствующий источник словами «по разным оценкам». '
@@ -55,8 +57,7 @@ WORD_EDITORIAL_GUIDANCE = (
     'Перед возвратом JSON проверь причинные связи и категоричные утверждения о доступности, '
     'безопасности и невозможности действия. Различай свойства объекта, настройки и условия работы. '
     'Указывай конкретное условие или исключение рядом с утверждением; не добавляй оговорки механически '
-    'к достоверным определениям. Требование связи для обмена изменениями не означает, что нельзя '
-    'работать с уже сохранённой локальной копией. Не выдавай синхронизацию за независимую резервную копию. '
+    'к достоверным определениям. Объяснения и примеры должны относиться только к теме пользователя. '
     + WORD_ORIGINALITY_GUIDANCE
 )
 
@@ -82,10 +83,6 @@ WORD_REVIEW_SYSTEM = (
     'Сохраняй данные и таблицы, которые явно дал пользователь. Если таблица упрощает действительность, '
     'оставь ячейки без изменений, а условия и ограничения объясни в основном тексте. '
     'В остальных фразах черновика исправляй ошибки по смыслу, а не косметически. '
-    'Например, облачные файлы могут быть доступны без интернета, если локальная копия заранее '
-    'загружена и сервис поддерживает нужный офлайн-режим. Локальное хранение само по себе '
-    'не устраняет сетевые угрозы, а облако не устраняет все физические риски. '
-    'Не переносись к этим примерам, если тема документа иная. '
     'Не добавляй выдуманные источники или результаты исследований. Если факт нельзя уверенно '
     'подтвердить, убери неподтверждённую конкретику или обозначь пределы применимости. '
     'Не добавляй в документ отчёт о своей проверке. Верни только JSON с sections (title, content), '
@@ -285,6 +282,68 @@ def apply_word_section_patch(content, patch, targets):
             return content
         result['sections'][spec['index']]['content'] = row['content']
     return merge_word_expansion(content, result)
+
+
+def word_growth_targets(content, target, *, limit=3):
+    """Budget only new prose. Existing paragraphs do not consume response tokens."""
+    current = sum(len((s.get('content') or '').split()) for s in content.get('sections', []))
+    if target <= current:
+        return []
+    targets = focused_word_sections(content, target, limit=limit)
+    return [{'index': t['index'], 'title': t['title'],
+             'add_words': t['target_words'] - len((content['sections'][t['index']].get('content') or '').split()),
+             'paragraphs': [p for p in (content['sections'][t['index']].get('content') or '').splitlines() if p.strip()]}
+            for t in targets if t['target_words'] > len((content['sections'][t['index']].get('content') or '').split())]
+
+
+def apply_word_additions(content, patch, targets):
+    """Insert prose at explicit anchors; never let growth rewrite existing data."""
+    if not isinstance(patch, dict) or not isinstance(patch.get('additions'), list):
+        return content
+    specs = {t['index']: t for t in targets}
+    additions = {}
+    seen = []
+    def sentences(text):
+        return [set(re.findall(r'\w+', s.casefold())) for s in re.split(r'(?<=[.!?])\s+', text)
+                if len(s.split()) >= 8]
+    for section in content.get('sections', []):
+        seen.extend(sentences(section.get('content') or ''))
+    added_words = 0
+    for row in patch['additions']:
+        if not isinstance(row, dict):
+            return content
+        index, anchor, paragraphs = row.get('section_index'), row.get('after_paragraph'), row.get('paragraphs')
+        if (type(index) is not int or index not in specs or type(anchor) is not int
+                or not 0 <= anchor < len(specs[index]['paragraphs'])
+                or not isinstance(paragraphs, list) or not paragraphs):
+            return content
+        for para in paragraphs:
+            if not isinstance(para, str) or not para.strip() or '\n' in para or '|' in para:
+                return content
+            for words in sentences(para):
+                # A conservative lexical guard, not a semantic/plagiarism verdict.
+                if any(len(words & old) / max(1, len(words | old)) >= .85 for old in seen):
+                    print('Word growth_rejected=repeated_sentence', flush=True)
+                    return content
+                seen.append(words)
+            added_words += len(para.split())
+        additions.setdefault((index, anchor), []).extend(p.strip() for p in paragraphs)
+    budget = sum(t['add_words'] for t in targets)
+    if not added_words or added_words > max(budget * 1.35, budget + 60):
+        return content
+    result = copy.deepcopy(content)
+    for index, spec in specs.items():
+        # Preserve every original line, including empty ones, and insert after
+        # the numbered nonempty paragraph. Tables and metadata remain untouched.
+        lines, paragraph_index = [], -1
+        for line in (content['sections'][index].get('content') or '').splitlines():
+            lines.append(line)
+            if line.strip():
+                paragraph_index += 1
+                lines.extend(additions.get((index, paragraph_index), []))
+        result['sections'][index]['content'] = '\n'.join(lines)
+    print(f'Word growth requested_words={budget} added_words={added_words}', flush=True)
+    return result
 
 
 def word_revision_notice(lang):
