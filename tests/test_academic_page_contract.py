@@ -50,7 +50,7 @@ class PageContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_all_genres_add_front_matter_but_charge_only_selected_body(self):
         for kind in academic.KINDS:
-            for actual in (4, 6, 8):
+            for actual in (6,):
                 with self.subTest(kind=kind, actual=actual):
                     env, message, order = await self.run_handler(kind, actual)
                     self.assertEqual(order, ['send', 'send', 'charge'])

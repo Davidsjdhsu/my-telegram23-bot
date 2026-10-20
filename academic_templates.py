@@ -121,7 +121,7 @@ def guidance(kind):
         'coursework':'Разделы: Введение (проблема, цель, задачи, объект и предмет), теоретическая глава, практическая/аналитическая глава, Заключение, источники при наличии. Главы 1, 2; подразделы 1.1, 1.2. Никаких вымышленных результатов исследования; если данных нет, опиши методику предполагаемого исследования.',
         'report':'Доклад: введение с вопросом, основная часть с объяснением и примерами, выводы, источники при наличии. Не превращай его в курсовую.',
         'essay':'Эссе: постановка проблемы и тезис, аргументы и примеры, рассмотрение возражения, собственный вывод. Титульный лист с надписью ЭССЕ добавляет программа. Без оглавления; основной текст связный, с абзацами, без видимых заголовков разделов. sections служит только для внутреннего плана. Не приписывай автору личный опыт, которого нет в запросе. Не начинай с фразы «Этот текст — учебное эссе»: сразу переходи к вопросу темы.',
-        'notes':'Конспект: тематические пункты, определения, связи и краткие выводы. Сохрани содержание исходного материала. Титульный лист с надписью КОНСПЕКТ добавляет программа. Без оглавления и обязательного введения.',
+        'notes':'Конспект: начни сразу с ключевых понятий, без разделов «Введение» и «Заключение», если пользователь их не просил. Сделай 5–8 тематических разделов, каждый раскрывает отдельный вопрос. Внутри — определения, короткие тезисы с пояснениями, причинные связи, конкретные примеры и условия применения. Используй маркированные пункты там, где перечисляются самостоятельные положения; обычный пункт — 25–60 слов, одна мысль. Не повторяй одни и те же определения в разных разделах. Заверши 3–5 вопросами для самопроверки с краткими ответами. Сохрани содержание исходного материала. Титульный лист с надписью КОНСПЕКТ добавляет программа. Без оглавления. В title верни только название темы без «Конспект по теме».',
     }[kind]
 
 
@@ -342,13 +342,15 @@ def delivery_notice(kind, requested, actual, total, credits):
 def page_guidance(kind, pages):
     front = front_matter_pages(kind)
     body = max(1, pages)
-    words_per_page = 250 if kind == 'essay' else 200
+    words_per_page = 250 if kind == 'essay' else 220 if kind == 'notes' else 200
     compact = kind == 'referat' and pages <= 10
     return (
         f'\nВыбранный объём — {body} страниц основного текста. Дополнительно программа создаст '
         f'{front} служебных стр. (титульный лист и оглавление по жанру); они НЕ входят в выбранный объём. '
         f'Ожидаемый общий объём — {body + front} стр. На основной текст — {body} страниц, '
         f'ориентир {body * words_per_page} слов, включая таблицы, без реквизитов и оглавления. '
+        'До ответа посчитай слова по разделам. Распредели объём между содержательными вопросами; '
+        'не заменяй полноценное раскрытие темы короткой аннотацией. '
         'Введение и выводы краткие; около 80% текста отведи объяснениям, условиям и примерам. '
         'Не наращивай объём повторениями, общими фразами и описанием границ задания. '
         + ('Это короткий реферат: разделы размещаются последовательно, без обязательного '
@@ -365,6 +367,12 @@ def render(path, title, sections, kind, meta=None, add_table=None, requested_pag
     if kind not in KINDS: raise ValueError('unknown_academic_kind')
     meta={k:str(v) for k,v in (meta or {}).items() if isinstance(v,(str,int)) and v}
     covered=kind in KINDS
+    # The genre is already printed by the cover. Strip only the redundant
+    # generated prefix, preserving the substantive topic and all user fields.
+    title = re.sub(r'^\s*(?:Конспект|Реферат|Эссе|Доклад|Курсовая работа)\s+(?:по теме|на тему)\s*[:—-]?\s*',
+                   '', title, flags=re.I).strip()
+    if title.startswith('«') and title.endswith('»'):
+        title = title[1:-1]
     d=_cover(kind,title,meta) if covered else Document()
     _styles(d,covered)
     blocks=[dict(b) for b in sections or [] if str(b.get('title','')).strip().casefold() not in
@@ -409,13 +417,30 @@ def render(path, title, sections, kind, meta=None, add_table=None, requested_pag
                 p.paragraph_format.first_line_indent=Cm(0)
         table=b.get('table')
         if table and add_table:
+            first_table = len(d.tables)
             add_table(d,table)
-            for t in d.tables:
-                for row in t.rows:
+            for t in d.tables[first_table:]:
+                keep_small_table = len(t.rows) <= 6 and sum(len(c.text) for row in t.rows for c in row.cells) <= 800
+                for row_index, row in enumerate(t.rows):
+                    if keep_small_table:
+                        trpr = row._tr.get_or_add_trPr()
+                        if trpr.find(qn('w:cantSplit')) is None:
+                            trpr.append(OxmlElement('w:cantSplit'))
                     for cell in row.cells:
+                        tcpr=cell._tc.get_or_add_tcPr()
+                        margins=tcpr.find(qn('w:tcMar'))
+                        if margins is None:
+                            margins=OxmlElement('w:tcMar');tcpr.append(margins)
+                        for edge in ('top','left','bottom','right'):
+                            node=margins.find(qn('w:'+edge))
+                            if node is None:
+                                node=OxmlElement('w:'+edge);margins.append(node)
+                            node.set(qn('w:w'),'80');node.set(qn('w:type'),'dxa')
                         for p in cell.paragraphs:
                             p.paragraph_format.line_spacing=1
                             p.paragraph_format.first_line_indent=Cm(0)
+                            if keep_small_table:
+                                p.paragraph_format.keep_with_next = row_index < len(t.rows) - 1
                             for r in p.runs:r.font.name='Times New Roman';r.font.size=Pt(12);r.font.color.rgb=RGBColor(0,0,0)
     if covered and not toc and len(d.paragraphs) > body_start_index:
         d.paragraphs[body_start_index].paragraph_format.page_break_before = True

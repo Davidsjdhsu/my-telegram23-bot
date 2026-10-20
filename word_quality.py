@@ -13,8 +13,34 @@ from presentation_pdf import _convert_office_pdf, PresentationPDFError
 
 
 INFORMATIONAL_WORD_KINDS = frozenset({'doc', 'notes', 'report', 'essay', 'referat', 'coursework'})
+WORD_REFINE = 'Доработать объём'
+WORD_ACCEPT = 'Получить текущий вариант'
+
+
+def word_quality_keyboard(button, markup, main_label):
+    return markup(keyboard=[[button(text=WORD_REFINE)], [button(text=WORD_ACCEPT)],
+                            [button(text=main_label)]], resize_keyboard=True)
+
+
+def word_quality_choice_notice(requested, actual, credits, sparse):
+    return (f'После доработки получилось {actual} стр. текста вместо выбранных {requested}. '
+            if actual != requested else f'Получилось {actual} стр. текста. ') + (
+            'Есть слабо заполненные страницы. ' if sparse else '') + (
+            f'Можно доработать сохранённый текст или получить текущий вариант за {credits} кредитов. '
+            'Титульный и оглавление бесплатно. Пока файлы не выданы, кредиты не списаны. '
+            'Повторная доработка не оплачивается отдельно.')
+WORD_ORIGINALITY_GUIDANCE = (
+    'Строй самостоятельное объяснение вокруг задачи пользователя: тезис, обоснование, '
+    'конкретный пример, границы применимости. Не копируй готовые работы и не пересказывай '
+    'один источник заменой слов на синонимы. Заимствованные идеи атрибутируй, дословные цитаты '
+    'оформляй кавычками и ссылкой на реально предоставленный или проверенный источник. '
+    'Если источника нет, не выдумывай ссылку или цитату. Не приписывай автору личный опыт. '
+    'Не добавляй ошибки, невидимые символы, подмену букв или искусственные обороты. '
+    'Не обещай процент оригинальности или результат детектора ИИ без фактической проверки. '
+)
 WORD_EDITORIAL_GUIDANCE = (
-    'Пиши ясно для указанной аудитории. Введение кратко объясняет цель и границы темы; '
+    'Пиши ясно для указанной аудитории. Если жанру нужно введение, сразу обозначь вопрос; '
+    'не начинай с «Данный документ предназначен» и описания границ самого документа. '
     'основное сравнение, объяснения и примеры вынеси в основную часть. '
     'Вывод отвечает на поставленный вопрос и помогает сделать выбор, а не повторяет введение. '
     'Не пересказывай таблицу по строкам: поясни существенные различия и условия применения. '
@@ -30,7 +56,8 @@ WORD_EDITORIAL_GUIDANCE = (
     'безопасности и невозможности действия. Различай свойства объекта, настройки и условия работы. '
     'Указывай конкретное условие или исключение рядом с утверждением; не добавляй оговорки механически '
     'к достоверным определениям. Требование связи для обмена изменениями не означает, что нельзя '
-    'работать с уже сохранённой локальной копией. Не выдавай синхронизацию за независимую резервную копию.'
+    'работать с уже сохранённой локальной копией. Не выдавай синхронизацию за независимую резервную копию. '
+    + WORD_ORIGINALITY_GUIDANCE
 )
 
 # Word must not inherit the presentation art-director persona or its Russian-only
@@ -38,7 +65,7 @@ WORD_EDITORIAL_GUIDANCE = (
 WORD_SYSTEM = (
     'Ты редактор полноразмерных Word-документов. Выполняй задачу в указанном жанре, '
     'на запрошенном языке и в запрошенном формате ответа. Документ должен раскрывать тему, '
-    'а не быть тезисами для слайда или кратким пересказом. '
+    'сохраняя жанр: конспект содержит тематические тезисы и пояснения, эссе — связное рассуждение. '
     'Если задан объём в словах, распределяй его по разделам и соблюдай ориентир с отклонением '
     'не более 10%, если есть достаточно материала. Приоритеты: точность смысла, сохранность '
     'пользовательских данных, полнота объяснения, затем стиль. Не сокращай содержание ради '
@@ -191,6 +218,9 @@ def word_review_findings(content, actual, requested, layout=None):
     claims = sum(bool(absolute.search(sentence)) and not conditional.search(sentence)
                  for p in paragraphs for sentence in re.split(r'(?<=[.!?])\s+', p))
     fill = (layout or {}).get('last_page_fill')
+    sentences = [' '.join(s.casefold().split()) for p in paragraphs
+                 for s in re.split(r'(?<=[.!?])\s+', p) if len(s.split()) >= 8 and '«' not in s]
+    repeats = sum(n - 1 for n in Counter(sentences).values() if n > 1)
     return {
         'short_pages': actual < requested,
         'sparse_last_page': requested > 1 and fill is not None and fill < .5,
@@ -200,6 +230,7 @@ def word_review_findings(content, actual, requested, layout=None):
         'excess_pages': actual > requested,
         'long_paragraphs': sum(len(p.split()) > 100 and not p.lstrip().startswith('|') for p in paragraphs),
         'categorical_claims': claims,
+        'duplicate_sentences': repeats,
         'last_page_fill': fill,
         'body_page_fills': (layout or {}).get('body_page_fills', []),
     }
@@ -207,7 +238,53 @@ def word_review_findings(content, actual, requested, layout=None):
 
 def needs_word_revision(findings):
     return any(findings[k] for k in ('short_pages', 'sparse_last_page', 'sparse_body_pages',
-                                     'excess_pages', 'long_paragraphs', 'categorical_claims'))
+                                     'excess_pages', 'long_paragraphs', 'categorical_claims')) or bool(
+                                         findings.get('duplicate_sentences'))
+
+
+def word_volume_needs_choice(actual, requested, layout=None):
+    """Do not silently treat an unresolved academic volume mismatch as complete."""
+    fills = (layout or {}).get('body_page_fills', [])
+    return actual != requested or any(fill < .5 for fill in fills)
+
+
+def focused_word_sections(content, target, *, limit=3, allow_shorten=False):
+    """Spend the last bounded model call on the largest substantive deficits."""
+    budgets = word_section_budgets(content, target, allow_shorten=allow_shorten)
+    sections = content.get('sections', [])
+    eligible = [i for i, s in enumerate(sections) if not re.search(
+        r'введени|вывод|заключени|содержани|литератур|источник|библиограф|introduction|conclusion|references',
+        s.get('title', ''), re.I)]
+    if not eligible:
+        return []
+    delta = lambda i: budgets[i]['target_words'] - len((sections[i].get('content') or '').split())
+    chosen = sorted(eligible, key=lambda i: -abs(delta(i)))[:limit]
+    # Allocate the requested net change to selected sections only. The other
+    # sections remain byte-for-byte unchanged in the patch merge.
+    current = sum(len((s.get('content') or '').split()) for s in sections)
+    change = target - current
+    each = int(change / len(chosen))
+    return [{'index': i, 'title': sections[i].get('title', ''),
+             'target_words': max(int(len((sections[i].get('content') or '').split()) * .8 + .999),
+                                 len((sections[i].get('content') or '').split()) + each +
+                                 (change - each * len(chosen) if pos == 0 else 0))}
+            for pos, i in enumerate(sorted(chosen))]
+
+
+def apply_word_section_patch(content, patch, targets):
+    """Keep unselected prose, user metadata and all tables outside model output."""
+    if not isinstance(patch, dict) or not isinstance(patch.get('sections'), list):
+        return content
+    rows = patch['sections']
+    if len(rows) != len(targets):
+        return content
+    result = copy.deepcopy(content)
+    for row, spec in zip(rows, targets):
+        if (not isinstance(row, dict) or row.get('index') != spec['index'] or
+                row.get('title') != spec['title'] or not isinstance(row.get('content'), str)):
+            return content
+        result['sections'][spec['index']]['content'] = row['content']
+    return merge_word_expansion(content, result)
 
 
 def word_revision_notice(lang):
@@ -237,8 +314,9 @@ def expansion_word_target(content, actual_pages, requested_pages, *, front_matte
 
 
 async def prepare_word_files(content, requested_pages, docx_path, pdf_path, *, build,
-                             convert=None, expand=None, measure=word_pdf_page_count, inspect=None):
-    """Measure actual pages; try one revision without risking the valid original pair.
+                             convert=None, expand=None, measure=word_pdf_page_count, inspect=None,
+                             max_revisions=1):
+    """Measure actual pages; bound revisions without risking the valid original pair.
 
     All expensive work is bounded. Editorial/expansion failures are non-blocking;
     initial build or integrity failures still propagate before delivery and billing.
@@ -259,11 +337,12 @@ async def prepare_word_files(content, requested_pages, docx_path, pdf_path, *, b
     findings = word_review_findings(content, actual, requested_pages, layout)
     attempts = 0
     accepted = False
-    if needs_word_revision(findings) and expand is not None:
-        attempts = 1
+    while needs_word_revision(findings) and expand is not None and attempts < min(2, max_revisions):
+        attempts += 1
         promoting = False
         try:
-            expanded = await expand(copy.deepcopy(content), actual, requested_pages, dict(findings))
+            expanded = await expand(copy.deepcopy(content), actual, requested_pages,
+                                    dict(findings, revision_attempt=attempts))
             candidate = merge_word_expansion(content, expanded)
             if candidate != content:
                 with tempfile.TemporaryDirectory(prefix='word-revision-', dir=Path(docx_path).parent) as td:
@@ -284,6 +363,7 @@ async def prepare_word_files(content, requested_pages, docx_path, pdf_path, *, b
                         (old_fill is not None and new_fill is not None and new_fill > old_fill + .05)
                         or revised_findings['long_paragraphs'] < findings['long_paragraphs']
                         or revised_findings['categorical_claims'] < findings['categorical_claims']
+                        or revised_findings['duplicate_sentences'] < findings['duplicate_sentences']
                         or len(revised_findings['sparse_body_pages']) < len(findings['sparse_body_pages'])
                     )
                     if closer or (same_pages and fill_ok and improved):
@@ -298,6 +378,9 @@ async def prepare_word_files(content, requested_pages, docx_path, pdf_path, *, b
             if promoting:
                 raise  # Never deliver a possibly mismatched DOCX/PDF pair.
             print('Word optional_revision_failure=' + type(exc).__name__, flush=True)
+            break  # Provider/conversion failures are not an excuse for more paid calls.
+        if not word_volume_needs_choice(actual, requested_pages, findings):
+            break  # The second call is reserved for unresolved physical page volume.
     print(f'Word pagination requested={requested_pages} actual={actual} revisions={attempts} accepted={accepted}', flush=True)
     print('Word quality ' + ' '.join(f'{k}={v}' for k, v in findings.items()), flush=True)
     return content, actual

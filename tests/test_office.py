@@ -7,7 +7,7 @@ import word_quality
 ROOT=Path(__file__).resolve().parents[1]
 COLORS={'bg':(255,255,255),'ink':(30,40,50),'mute':(110,120,130),'line':(45,90,130)}
 def office_env():
-    tree=ast.parse((ROOT/'main.py').read_text());ns=dict(datetime=datetime,re=re,os=os,json=json,random=random,convert_word_pdf=word_quality.convert_word_pdf,merge_word_expansion=word_quality.merge_word_expansion)
+    tree=ast.parse((ROOT/'main.py').read_text());ns=dict(asyncio=__import__("asyncio"),datetime=datetime,re=re,os=os,json=json,random=random,convert_word_pdf=word_quality.convert_word_pdf,merge_word_expansion=word_quality.merge_word_expansion)
     nodes=[ast.ImportFrom(module='__future__',names=[ast.alias(name='annotations')],level=0)]
     for n in tree.body:
         if isinstance(n,ast.ImportFrom) and (n.module or '').split('.')[0] in ('docx','openpyxl','word_quality'):nodes.append(n)
@@ -48,7 +48,7 @@ class WordWorkflowTests(unittest.IsolatedAsyncioTestCase):
         e['prepare_word_files'] = prepare
         e.update(ReplyKeyboardRemove=lambda:None, ReplyKeyboardMarkup=lambda **kw:SimpleNamespace(**kw),
                  KeyboardButton=lambda **kw:SimpleNamespace(**kw),
-                 Form=SimpleNamespace(waiting_academic_meta='Form:waiting_academic_meta',
+                 Form=SimpleNamespace(waiting_word_quality='Form:waiting_word_quality', waiting_academic_meta='Form:waiting_academic_meta',
                                       waiting_word_confirm='Form:waiting_word_confirm'))
         m=SimpleNamespace(from_user=SimpleNamespace(id=-9901),answer=AsyncMock(),answer_document=AsyncMock());s=SimpleNamespace(get_data=AsyncMock(return_value={'word_kind':'doc','word_pages':2,'topic':'Test'}),clear=AsyncMock(),update_data=AsyncMock(),set_state=AsyncMock());return e,m,s
     async def test_model_failure_unlocks(self):

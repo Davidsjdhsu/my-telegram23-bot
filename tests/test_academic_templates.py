@@ -89,7 +89,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
             e,m,state=test_office.WordWorkflowTests().env()
             from word_quality import prepare_word_files
             async def prepare(*args, **kwargs):
-                return await prepare_word_files(*args, **kwargs, measure=lambda _: academic.front_matter_pages(kind) + 2)
+                return await prepare_word_files(*args, **kwargs, measure=lambda _: academic.front_matter_pages(kind) + 5)
             e['prepare_word_files'] = prepare
             data={'word_kind':kind,'word_pages':5,'topic':'Тема: Файлы\nВуз: Мой вуз\nФИО: Анна Петрова\nГруппа: ИС-21\nКурс: 1\nГод: 2028\nДисциплина: Информатика\nПреподаватель: Ирина Петрова\nГород: Москва'}
             state.get_data.return_value=data

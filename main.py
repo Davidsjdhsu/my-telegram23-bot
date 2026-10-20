@@ -3,6 +3,8 @@ from word_quality import (
     word_generation_schema, WORD_EDITORIAL_GUIDANCE, INFORMATIONAL_WORD_KINDS,
     expansion_word_target, word_page_notice, word_pdf_layout,
     readable_word_paragraphs, word_revision_notice, WORD_SYSTEM, WORD_REVIEW_SYSTEM, word_section_budgets,
+    focused_word_sections, apply_word_section_patch, word_volume_needs_choice,
+    WORD_REFINE, WORD_ACCEPT, word_quality_keyboard, word_quality_choice_notice,
 )
 import os
 import asyncio
@@ -1044,6 +1046,7 @@ class Form(StatesGroup):
     waiting_word_confirm = State()
     waiting_word_extra = State()
     waiting_academic_meta = State()
+    waiting_word_quality = State()
     waiting_excel_category = State()
     waiting_excel_kind = State()
     waiting_excel_mode = State()
@@ -8706,8 +8709,19 @@ async def academic_title_details(m: Message, state: FSMContext):
     await word_build(m, state)
 
 
+@dp.message(Form.waiting_word_quality)
+async def word_quality_choice(m: Message, state: FSMContext):
+    text = (m.text or "").strip()
+    if text not in (WORD_REFINE, WORD_ACCEPT):
+        await m.answer("Выбери доработку или получение текущего варианта.",
+                       reply_markup=word_quality_keyboard(KeyboardButton, ReplyKeyboardMarkup,
+                                                          tr("btn_main_menu", user_lang(m.from_user.id))))
+        return
+    await word_build(m, state, quality_action="accept" if text == WORD_ACCEPT else "refine")
+
+
 @dp.message(Form.waiting_word_confirm, F.text.in_(ALL_BTN_BUILD_DOC_LABELS))
-async def word_build(m: Message, state: FSMContext):
+async def word_build(m: Message, state: FSMContext, quality_action=None):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
     from fixed_word_templates import applies as fixed_template_applies
@@ -8728,6 +8742,12 @@ async def word_build(m: Message, state: FSMContext):
             [KeyboardButton(text=LEAVE_TITLE_BLANKS)],
             [KeyboardButton(text=tr("btn_main_menu", lang))],
         ], resize_keyboard=True))
+        return
+    pending = data.get("word_quality_pending")
+    if not isinstance(pending, dict) or pending.get("request_key") != title_request_key(data):
+        pending = None
+    if quality_action and not pending:
+        await m.answer("Этот вариант уже выдан или запрос изменился. Создай новый документ через меню.")
         return
     uid = m.from_user.id
     u = get_user(uid)
@@ -8840,33 +8860,38 @@ async def word_build(m: Message, state: FSMContext):
                 '{"title":"...","meta":' + meta_schema + ',"sections":[{"title":"Введение","content":"абзац1\\n\\nабзац2"},'
                 '{"title":"...","content":"...","table":{"headers":["...","..."],"rows":[["...","..."]]}}]}'
             )
-        raw = await ask_grok(f"""Собери Word: {kind_name}.
-    Данные: {data.get('topic')}
-    Текст пользователя: {data.get('user_text')}
-    Доп: {data.get('extra')}
-    Объём: {size_map[size]}{length_hint}{structure_hint}
-    {style_rule}
-    Если в данных пользователя есть даты, ФИО, паспортные данные, суммы, названия сторон - подставь их в meta и в текст
-    точно как есть, ничего не меняя и не придумывая.
-    Никогда не выдумывай паспортные данные, суммы, даты или ФИО, которых нет в данных пользователя -
-    для обязательных реквизитов юридического документа ставь [указать ...]; необязательные сведения обычного документа пропусти.
-    Для полей meta используй только сведения пользователя. Если поле в схеме пустое и данных нет,
-    оставь пустую строку; не вставляй [учебное заведение], название министерства или текущий год от себя.
-    В шаблонах юридических документов сохрани предусмотренные схемой незаполненные реквизиты.
-    Для содержательных документов (реферат, коммерческое предложение, заявление) разделы должны раскрывать
-    тему конкретно и по существу, без воды и общих фраз.
-    Не создавай в sections отдельный раздел «Титульный лист» - обложка (организация, учебное заведение, ФИО
-    автора и руководителя, город, год) формируется отдельно из title и meta и так уже попадёт в документ;
-    {"Это резюме - не создавай раздел «Введение». Раздел «Навыки»/«Языки» тоже НЕ создавай в sections - они уходят в отдельные поля skills/languages (см. схему JSON ниже) и рендерятся в боковую колонку резюме отдельно от основного текста. Первым разделом в sections должен идти «О себе» (короткий профессиональный профиль на 2-3 предложения), дальше «Опыт работы» (в обратном хронологическом порядке, с измеримыми достижениями) и «Образование»." if kind == "resume" else "первым разделом в sections должно идти «Введение» (или «Содержание», если оно есть в структуре документа)."}
-    Если в разделе уместна таблица (перечень товаров/имущества с ценой и количеством в договоре/акте, статистика
-    или практические данные в курсовой/реферате) - добавь в объект этого раздела ключ "table":
-    {{"headers":["...","..."],"rows":[["...","..."],["...","..."]]}}. Не выдумывай реальные официальные цифры
-    (даты, номера, суммы) для юридических документов - только то, что дал пользователь; для курсовых/рефератов
-    условные данные помечай «Условный пример, не результаты исследования». Не выдумывай статистику и источники. Таблицы уместны не в каждом
-    разделе - добавляй только там, где это реально яснее текста, не в каждый раздел подряд.
-    {'Дополнительно верни на верхнем уровне JSON поле "skills" - список из 6-10 коротких формулировок навыков (каждая отдельной строкой, без вводных слов), и, если в данных пользователя упомянуты языки, поле "languages" - список строк вида "Английский — B2". Если языки не упомянуты, верни пустой список.' if kind == "resume" else ""}
-    Только JSON:
-    {json_example}{lang_instr}""", max_tokens=gen_max_tokens, system_prompt=WORD_SYSTEM, temperature=0.25)
+            if kind == "notes":
+                json_example = json_example.replace('"Введение"', '"Ключевые понятия"')
+        if quality_action and pending:
+            raw = json.dumps(pending["content"], ensure_ascii=False)
+        else:
+            raw = await ask_grok(f"""Собери Word: {kind_name}.
+        Данные: {data.get('topic')}
+        Текст пользователя: {data.get('user_text')}
+        Доп: {data.get('extra')}
+        Объём: {size_map[size]}{length_hint}{structure_hint}
+        {style_rule}
+        Если в данных пользователя есть даты, ФИО, паспортные данные, суммы, названия сторон - подставь их в meta и в текст
+        точно как есть, ничего не меняя и не придумывая.
+        Никогда не выдумывай паспортные данные, суммы, даты или ФИО, которых нет в данных пользователя -
+        для обязательных реквизитов юридического документа ставь [указать ...]; необязательные сведения обычного документа пропусти.
+        Для полей meta используй только сведения пользователя. Если поле в схеме пустое и данных нет,
+        оставь пустую строку; не вставляй [учебное заведение], название министерства или текущий год от себя.
+        В шаблонах юридических документов сохрани предусмотренные схемой незаполненные реквизиты.
+        Для содержательных документов (реферат, коммерческое предложение, заявление) разделы должны раскрывать
+        тему конкретно и по существу, без воды и общих фраз.
+        Не создавай в sections отдельный раздел «Титульный лист» - обложка (организация, учебное заведение, ФИО
+        автора и руководителя, город, год) формируется отдельно из title и meta и так уже попадёт в документ;
+        {"Это резюме - не создавай раздел «Введение». Раздел «Навыки»/«Языки» тоже НЕ создавай в sections - они уходят в отдельные поля skills/languages (см. схему JSON ниже) и рендерятся в боковую колонку резюме отдельно от основного текста. Первым разделом в sections должен идти «О себе» (короткий профессиональный профиль на 2-3 предложения), дальше «Опыт работы» (в обратном хронологическом порядке, с измеримыми достижениями) и «Образование»." if kind == "resume" else "Для конспекта начни с тематического раздела, без введения. Для эссе начни с постановки вопроса. Следуй структуре выбранного жанра." if kind in ("notes", "essay") else "первым разделом в sections должно идти «Введение» (или «Содержание», если оно есть в структуре документа)."}
+        Если в разделе уместна таблица (перечень товаров/имущества с ценой и количеством в договоре/акте, статистика
+        или практические данные в курсовой/реферате) - добавь в объект этого раздела ключ "table":
+        {{"headers":["...","..."],"rows":[["...","..."],["...","..."]]}}. Не выдумывай реальные официальные цифры
+        (даты, номера, суммы) для юридических документов - только то, что дал пользователь; для курсовых/рефератов
+        условные данные помечай «Условный пример, не результаты исследования». Не выдумывай статистику и источники. Таблицы уместны не в каждом
+        разделе - добавляй только там, где это реально яснее текста, не в каждый раздел подряд.
+        {'Дополнительно верни на верхнем уровне JSON поле "skills" - список из 6-10 коротких формулировок навыков (каждая отдельной строкой, без вводных слов), и, если в данных пользователя упомянуты языки, поле "languages" - список строк вида "Английский — B2". Если языки не упомянуты, верни пустой список.' if kind == "resume" else ""}
+        Только JSON:
+        {json_example}{lang_instr}""", max_tokens=gen_max_tokens, system_prompt=WORD_SYSTEM, temperature=0.25)
         try:
             content = extract_json(raw)
             content["meta"] = clean_word_meta(content.get("meta"), kind)
@@ -8900,7 +8925,33 @@ async def word_build(m: Message, state: FSMContext):
                 target = expansion_word_target(value, actual, requested, front_matter_pages=front,
                                                layout=findings) if needs_depth or findings['excess_pages'] else sum(
                     len((s.get('content') or '').split()) for s in value.get('sections', []))
+                if academic and findings.get("revision_attempt", 1) >= 2:
+                    targets = focused_word_sections(value, target, allow_shorten=findings['excess_pages'])
+                    if not targets:
+                        return value
+                    selected = [{**value['sections'][t['index']], 'index': t['index'],
+                                 'target_words': t['target_words']} for t in targets]
+                    focused_prompt = f"""Доработай только указанные разделы сохранённого документа.
+    Жанр: {kind_name}. {academic_guidance(kind)}
+    Задача пользователя: {data.get('topic') or ''}
+    Дополнительные данные: {data.get('user_text') or ''}\n{data.get('extra') or ''}
+    После предыдущей правки в документе {actual - front} страниц текста, требуется {pages}.
+    Соблюди target_words для каждого раздела (отклонение до 10%). Дай новые полезные объяснения,
+    разбор причин и примеры, не повторяя соседние разделы и не добавляя вымышленные факты.
+    При сокращении убери только повторы. Сохрани числа, имена, цитаты и таблицы пользователя.
+    Не растягивай страницы пустыми строками. Перед ответом проверь объём каждого content.
+    План остальных разделов: {json.dumps([s.get('title', '') for s in value['sections']], ensure_ascii=False)}
+    Разделы для доработки: {json.dumps(selected, ensure_ascii=False)}
+    Верни JSON с sections в том же порядке: index, title (без изменений), content.
+    {WORD_EDITORIAL_GUIDANCE} {lang_instr}"""
+                    patch = extract_json(await ask_grok(focused_prompt,
+                        max_tokens=min(gen_max_tokens, max(2500, sum(t['target_words'] for t in targets) * 4)),
+                        system_prompt=WORD_REVIEW_SYSTEM +
+                            " Для частичной правки обязательно верни index каждого выбранного раздела.",
+                        temperature=0.2))
+                    return apply_word_section_patch(value, patch, targets)
                 prompt = f"""Отредактируй документ за один проход, объединив все замечания.
+    Жанр: {kind_name}. {academic_guidance(kind) if academic else ""}
     Сейчас {actual} стр., выбрано {requested}; диагностические признаки: {json.dumps(findings, ensure_ascii=False)}.
     {'Нужно раскрыть тему глубже: содержательные страницы недозаполнены или страниц недостаточно. Дополни основную часть пояснениями условий, отличий и практическим примером с объяснением выбора.' if needs_depth else 'Не увеличивай объём. Убери повторы и общие фразы, сохрани существенные объяснения. Исправь длинные абзацы и проверь категоричные утверждения.'}
     Выбрано {pages} страниц основного текста. Титульный лист и оглавление добавляются сверх этого объёма; служебных страниц: {front}.
@@ -8933,12 +8984,32 @@ async def word_build(m: Message, state: FSMContext):
             inspect_pages = (lambda path: academic_inspect_layout(path, kind)) if academic else word_pdf_layout
             content, actual_pages = await prepare_word_files(content, requested_total, docx_path, pdf_path,
                 build=render_content, convert=convert_word_pdf,
-                expand=expand_content if kind in INFORMATIONAL_WORD_KINDS else None,
-                inspect=inspect_pages if kind in INFORMATIONAL_WORD_KINDS else None)
+                expand=expand_content if kind in INFORMATIONAL_WORD_KINDS and quality_action != "accept" else None,
+                inspect=inspect_pages if kind in INFORMATIONAL_WORD_KINDS else None,
+                max_revisions=2 if academic else 1)
             actual_body_pages = max(0, actual_pages - front_pages)
             if academic and actual_body_pages < 1:
                 raise ValueError("academic_document_has_no_body_pages")
             charged_pages = min(pages, actual_body_pages)
+            layout = None
+            if academic and quality_action != "accept":
+                try:
+                    layout = await asyncio.to_thread(inspect_pages, pdf_path)
+                except Exception:
+                    pass  # Page count still prevents silent delivery of a short draft.
+                if word_volume_needs_choice(actual_pages, requested_total, layout):
+                    await state.update_data(word_quality_pending={
+                        "request_key": title_request_key(data), "content": content,
+                        "actual_body_pages": actual_body_pages, "actual_pages": actual_pages})
+                    await state.set_state(Form.waiting_word_quality)
+                    await m.answer(word_quality_choice_notice(pages, actual_body_pages,
+                        word_cost(charged_pages), any(x < .5 for x in (layout or {}).get('body_page_fills', []))),
+                        reply_markup=word_quality_keyboard(KeyboardButton, ReplyKeyboardMarkup,
+                                                           tr("btn_main_menu", lang)))
+                    return
+            if not can_afford(uid, word_cost(charged_pages)):
+                await m.answer("Недостаточно кредитов для выдачи документа. Пополни баланс и повтори получение.")
+                return
             if academic:
                 await m.answer(delivery_notice(kind, pages, actual_body_pages, actual_pages, word_cost(charged_pages)))
             elif actual_pages != pages:
@@ -8969,7 +9040,9 @@ async def word_build(m: Message, state: FSMContext):
 
     except Exception as exc:
         print("Word build failure=" + type(exc).__name__, flush=True)
-        await m.answer(tr("msg_grok_error", lang), reply_markup=word_confirm_kb(lang))
+        await m.answer(tr("msg_grok_error", lang), reply_markup=(
+            word_quality_keyboard(KeyboardButton, ReplyKeyboardMarkup, tr("btn_main_menu", lang))
+            if quality_action and pending else word_confirm_kb(lang)))
     finally:
         finish_job(uid)
 
