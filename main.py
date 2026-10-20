@@ -8841,6 +8841,8 @@ async def word_build(m: Message, state: FSMContext, quality_action=None):
             )
         from academic_templates import KINDS as ACADEMIC_KINDS, guidance as academic_guidance, META_LABELS
         academic = kind in ACADEMIC_KINDS and (content_gen_lang(data, lang) or "ru") == "ru"
+        from academic_reference import reference_guidance
+        topic_reference_hint = reference_guidance(data) if academic else ""
         if academic:
             structure_hint = academic_guidance(kind)
             from academic_templates import page_guidance
@@ -8874,6 +8876,7 @@ async def word_build(m: Message, state: FSMContext, quality_action=None):
         Доп: {data.get('extra')}
         Объём: {size_map[size]}{length_hint}{structure_hint}
         {style_rule}
+        {topic_reference_hint}
         Если в данных пользователя есть даты, ФИО, паспортные данные, суммы, названия сторон - подставь их в meta и в текст
         точно как есть, ничего не меняя и не придумывая.
         Никогда не выдумывай паспортные данные, суммы, даты или ФИО, которых нет в данных пользователя -
@@ -8938,12 +8941,13 @@ async def word_build(m: Message, state: FSMContext, quality_action=None):
                         return value
                     growth_prompt = f"""Дополни сохранённую учебную работу после редакторской проверки.
 Жанр: {kind_name}. {academic_guidance(kind)}
+{topic_reference_hint}
 Задача: {data.get('topic') or ''}
 Текст и требования пользователя: {data.get('user_text') or ''}\n{data.get('extra') or ''}
 Сейчас {actual - front} страниц основного текста, нужно {pages}. Уже написанные абзацы сохраняются программой.
 Верни ТОЛЬКО новые абзацы для вставки внутрь указанных разделов. Не переписывай старый текст.
 Для каждого раздела напиши add_words НОВЫХ слов (допуск 10%). Это объём добавления, не всего раздела.
-Раздели добавление на абзацы по 60–100 слов. Каждый раскрывает новый аспект: механизм,
+Раздели добавление на {'пункты «• Тезис: пояснение» по 20–55 слов' if kind == 'notes' else 'абзацы по 60–100 слов'}. Каждый раскрывает новый аспект: механизм,
 причину, ограничение, возражение или подробный условный пример с разбором результата.
 Сначала прочитай всю работу ниже. Не повторяй уже изложенные мысли, даже другими словами.
 Не добавляй второй пример, который отличается от существующего только профессией, именем или числами.
@@ -8973,6 +8977,7 @@ section_index — index из задания, after_paragraph — номер су
                                  'target_words': t['target_words']} for t in targets]
                     focused_prompt = f"""Доработай только указанные разделы сохранённого документа.
     Жанр: {kind_name}. {academic_guidance(kind)}
+    {topic_reference_hint}
     Задача пользователя: {data.get('topic') or ''}
     Дополнительные данные: {data.get('user_text') or ''}\n{data.get('extra') or ''}
     После предыдущей правки в документе {actual - front} страниц текста, требуется {pages}.
@@ -8992,6 +8997,7 @@ section_index — index из задания, after_paragraph — номер су
                     return apply_word_section_patch(value, patch, targets)
                 prompt = f"""Отредактируй документ за один проход, объединив все замечания.
     Жанр: {kind_name}. {academic_guidance(kind) if academic else ""}
+    {topic_reference_hint}
     Сейчас {actual} стр., выбрано {requested}; диагностические признаки: {json.dumps(findings, ensure_ascii=False)}.
     {'Нужно раскрыть тему глубже: содержательные страницы недозаполнены или страниц недостаточно. Дополни основную часть пояснениями условий, отличий и практическим примером с объяснением выбора.' if needs_depth else 'Не увеличивай объём. Убери повторы и общие фразы, сохрани существенные объяснения. Исправь длинные абзацы и проверь категоричные утверждения.'}
     Выбрано {pages} страниц основного текста. Титульный лист и оглавление добавляются сверх этого объёма; служебных страниц: {front}.
@@ -9000,7 +9006,7 @@ section_index — index из задания, after_paragraph — номер су
     Ориентиры по каждому разделу (слова, не символы): {json.dumps(word_section_budgets(value, target, allow_shorten=findings['excess_pages']), ensure_ascii=False)}.
     До ответа проверь фактический объём каждого раздела.
     {'Добавь недостающие пояснения к основной части, а не обещание раскрыть тему; не возвращай прежний короткий текст с несколькими добавленными фразами.' if needs_depth else 'Сокращай только повторы и общие фразы; не теряй важные условия, примеры и выводы.'}
-    Разделяй разные мысли на абзацы по 40–90 слов с помощью \\n\\n. Не наращивай страницы только переносами строк.
+    Разделяй разные мысли на {'пункты «• Тезис: пояснение» по 20–55 слов' if kind == 'notes' else 'абзацы по 40–90 слов'} с помощью \\n\\n. Не наращивай страницы только переносами строк.
     Для каждого утверждения о невозможности, доступности, надёжности или гарантии проверь,
     от каких условий оно зависит и есть ли исключения. Исправляй смысл, а не просто вставляй слово «обычно».
     Диагностический признак не доказывает ошибку: верные определения оставляй точными.
