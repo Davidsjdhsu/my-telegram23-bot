@@ -3368,14 +3368,16 @@ async def _handle_vision_upload_impl(m: Message, state: FSMContext, local_path: 
         finish_job(uid)
 
 
-async def ask_grok(prompt: str, max_tokens: int = 4000, *, system_prompt=None, temperature=0.95) -> str:
+async def ask_grok(prompt: str, max_tokens: int = 4000, *, system_prompt=None, temperature=0.95,
+                   document_json=False) -> str:
     """Запрос к Grok с коротким повтором при сетевом сбое — одна ошибка API
     больше не роняет всю сборку документа с первой попытки."""
     last_err = None
-    structured = system_prompt in (PRESENTATION_SYSTEM, REVIEW_SYSTEM, WORD_REVIEW_SYSTEM)
-    log_prefix = 'word_text' if system_prompt == WORD_REVIEW_SYSTEM else 'presentation_text'
+    word_review = isinstance(system_prompt, str) and system_prompt.startswith(WORD_REVIEW_SYSTEM)
+    structured = document_json or word_review or system_prompt in (PRESENTATION_SYSTEM, REVIEW_SYSTEM)
+    log_prefix = 'word_text' if document_json or word_review else 'presentation_text'
     attempts = 2 if structured else 3
-    api = client.with_options(timeout=60.0, max_retries=0) if structured else client
+    api = client.with_options(timeout=90.0 if document_json else 60.0, max_retries=0) if structured else client
     options = {"response_format": {"type": "json_object"}, "extra_body": {"reasoning_effort": "low"}} if structured else {}
     for attempt in range(attempts):
         try:
@@ -8892,7 +8894,8 @@ async def word_build(m: Message, state: FSMContext, quality_action=None):
         разделе - добавляй только там, где это реально яснее текста, не в каждый раздел подряд.
         {'Дополнительно верни на верхнем уровне JSON поле "skills" - список из 6-10 коротких формулировок навыков (каждая отдельной строкой, без вводных слов), и, если в данных пользователя упомянуты языки, поле "languages" - список строк вида "Английский — B2". Если языки не упомянуты, верни пустой список.' if kind == "resume" else ""}
         Только JSON:
-        {json_example}{lang_instr}""", max_tokens=gen_max_tokens, system_prompt=WORD_SYSTEM, temperature=0.25)
+        {json_example}{lang_instr}""", max_tokens=gen_max_tokens, system_prompt=WORD_SYSTEM,
+                temperature=0.25, document_json=academic)
         try:
             content = extract_json(raw)
             content["meta"] = clean_word_meta(content.get("meta"), kind)
@@ -8943,6 +8946,8 @@ async def word_build(m: Message, state: FSMContext, quality_action=None):
 Раздели добавление на абзацы по 60–100 слов. Каждый раскрывает новый аспект: механизм,
 причину, ограничение, возражение или подробный условный пример с разбором результата.
 Сначала прочитай всю работу ниже. Не повторяй уже изложенные мысли, даже другими словами.
+Не добавляй второй пример, который отличается от существующего только профессией, именем или числами.
+Раскрой ещё не рассмотренное условие, конфликт целей, последовательность решения или проверку результата.
 Сохрани логику переходов, вставляй пояснение рядом с соответствующим аргументом, до итогового вывода.
 Для эссе — связная проза без заголовков и списков; для конспекта — короткие тематические пояснения.
 Не добавляй таблицы, источники, цитаты, статистику или исследования, которых нет в исходных данных.
@@ -8958,7 +8963,7 @@ section_index — index из задания, after_paragraph — номер су
                     patch = extract_json(await ask_grok(growth_prompt,
                         max_tokens=min(12000, max(2500, sum(t['add_words'] for t in targets) * 4 + 800)),
                         system_prompt=WORD_SYSTEM + " В этом ответе верни только JSON additions по схеме запроса.",
-                        temperature=0.2))
+                        temperature=0.2, document_json=True))
                     return apply_word_additions(value, patch, targets)
                 if academic and findings.get("revision_attempt", 1) >= 2:
                     targets = focused_word_sections(value, target, allow_shorten=findings['excess_pages'])

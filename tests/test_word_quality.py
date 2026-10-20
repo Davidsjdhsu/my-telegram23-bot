@@ -292,6 +292,18 @@ class WordReviewRequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.startswith('ERROR:'))
         self.assertEqual(create.await_count, 2)
 
+    async def test_full_academic_author_and_growth_use_bounded_json_but_drafts_keep_existing_model(self):
+        ns, client, create = self.request_env()
+        for system in (WORD_SYSTEM, WORD_SYSTEM + ' Верни additions.'):
+            await ns['ask_grok']('Full academic text', system_prompt=system, document_json=True)
+            client.with_options.assert_called_with(timeout=90., max_retries=0)
+            self.assertEqual(create.await_args.kwargs['model'], 'grok-4.6')
+            self.assertEqual(create.await_args.kwargs['response_format'], {'type': 'json_object'})
+        await ns['ask_grok']('Outline', system_prompt=WORD_SYSTEM)
+        self.assertEqual(create.await_args.kwargs['model'], 'grok-4.3')
+        await ns['ask_grok']('Focused review', system_prompt=WORD_REVIEW_SYSTEM + ' Return index.')
+        self.assertEqual(create.await_args.kwargs['model'], 'grok-4.6')
+
 
 class WordDeliveryPageTests(unittest.IsolatedAsyncioTestCase):
     def setup_env(self, actual):

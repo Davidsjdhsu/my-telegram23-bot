@@ -28,6 +28,12 @@ class GrowthTests(unittest.TestCase):
         self.assertEqual([t['index'] for t in self.targets], [1])
         self.assertEqual(word_growth_targets(self.value, words), [])
 
+    def test_essay_problem_statement_is_not_padded_but_notes_theses_remain_eligible(self):
+        self.value['sections'][0]['title'] = 'Постановка проблемы и тезис'
+        self.assertEqual([t['index'] for t in word_growth_targets(self.value, 200)], [1])
+        self.value['sections'][1]['title'] = 'Основные тезисы о памяти'
+        self.assertEqual([t['index'] for t in word_growth_targets(self.value, 200)], [1])
+
     def test_insertions_preserve_original_data_and_anchors_without_mutation(self):
         before = copy.deepcopy(self.value)
         actual = apply_word_additions(self.value, self.patch, self.targets)
@@ -86,6 +92,7 @@ class GrowthWorkflowTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(academic, 'inspect_layout', return_value=layout):
             await env['word_build'](message, state)
         self.assertEqual(env['ask_grok'].await_count, 2)
+        self.assertTrue(all(call.kwargs['document_json'] for call in env['ask_grok'].await_args_list))
         self.assertIn('add_words', env['ask_grok'].await_args.args[0])
         message.answer_document.assert_not_awaited()
         env['spend_credits'].assert_not_called()

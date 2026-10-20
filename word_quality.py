@@ -53,7 +53,7 @@ WORD_EDITORIAL_GUIDANCE = (
     'Не выдумывай статистику, исследования, источники, цитаты, личный опыт или реквизиты. '
     'Не заменяй отсутствующий источник словами «по разным оценкам». '
     'Условные примеры явно обозначай как условные. Данные и таблицы пользователя сохраняй точно. '
-    'Отдельное требование пользователя об учебном характере документа явно укажи в тексте. '
+    'Учебную аудиторию учитывай в глубине объяснения, а не в служебных фразах о назначении работы. '
     'Перед возвратом JSON проверь причинные связи и категоричные утверждения о доступности, '
     'безопасности и невозможности действия. Различай свойства объекта, настройки и условия работы. '
     'Указывай конкретное условие или исключение рядом с утверждением; не добавляй оговорки механически '
@@ -94,7 +94,7 @@ WORD_REVIEW_SYSTEM = (
 def word_section_budgets(content, target, *, allow_shorten=False):
     """Give the optional editor concrete prose budgets rather than one vague total."""
     sections = content.get('sections', [])
-    short = re.compile(r'введени|вывод|заключени|introduction|conclusion|summary', re.I)
+    short = re.compile(r'введени|вступлени|постановк|^тезис$|вывод|заключени|introduction|conclusion|summary', re.I)
     nonbody = re.compile(r'содержани|литератур|источник|библиограф|references|bibliograph|contents', re.I)
     weights = [0 if nonbody.search(s.get('title', '')) else .3 if short.search(s.get('title', '')) else 1
                for s in sections]
@@ -250,7 +250,7 @@ def focused_word_sections(content, target, *, limit=3, allow_shorten=False):
     budgets = word_section_budgets(content, target, allow_shorten=allow_shorten)
     sections = content.get('sections', [])
     eligible = [i for i, s in enumerate(sections) if not re.search(
-        r'введени|вывод|заключени|содержани|литератур|источник|библиограф|introduction|conclusion|references',
+        r'введени|вступлени|постановк|^тезис$|вывод|заключени|содержани|литератур|источник|библиограф|introduction|conclusion|references',
         s.get('title', ''), re.I)]
     if not eligible:
         return []
