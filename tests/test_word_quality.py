@@ -14,7 +14,7 @@ import test_office
 from word_quality import (clean_word_meta, merge_word_expansion, prepare_word_files,
                           word_generation_schema, WORD_EDITORIAL_GUIDANCE,
                           readable_word_paragraphs, word_review_findings, WORD_SYSTEM, WORD_REVIEW_SYSTEM,
-                          word_section_budgets)
+                          word_section_budgets, expansion_word_target, needs_word_revision)
 
 
 class WordMetadataTests(unittest.TestCase):
@@ -161,7 +161,30 @@ class WordContentReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(found['sparse_last_page'])
         self.assertFalse(found['short_pages'])
         self.assertFalse(word_review_findings(value, 1, 1, {'last_page_fill': .2})['sparse_last_page'])
-        self.assertFalse(word_review_findings(value, 3, 2, {'last_page_fill': .2})['sparse_last_page'])
+        self.assertTrue(word_review_findings(value, 3, 2, {'last_page_fill': .2})['sparse_last_page'])
+
+    def test_sparse_middle_page_and_oversized_order_are_reviewed_without_cover_padding(self):
+        findings = word_review_findings({'sections': []}, 7, 6,
+            {'body_page_fills': [.8, .3, .9, .8, .8], 'last_page_fill': .8, 'front_matter_pages': 2})
+        self.assertEqual(findings['sparse_body_pages'], [4])
+        self.assertTrue(findings['excess_pages'])
+        self.assertTrue(needs_word_revision(findings))
+        clean = word_review_findings({'sections': []}, 6, 6,
+            {'body_page_fills': [.9, .9, .9, .7], 'last_page_fill': .7, 'front_matter_pages': 2})
+        self.assertFalse(needs_word_revision(clean))
+
+    def test_measured_density_bounds_expansion_instead_of_doubling_live_example(self):
+        value = {'sections': [{'title': 'Тема', 'content': ' '.join(['слово'] * 577)}]}
+        target = expansion_word_target(value, 6, 6, front_matter_pages=2,
+            layout={'body_page_fills': [.994, .977, .956, .221]})
+        self.assertGreater(target, 577)
+        self.assertLess(target, 750)
+        oversized = expansion_word_target(value, 8, 6, front_matter_pages=2,
+            layout={'body_page_fills': [.9] * 6})
+        budgets = word_section_budgets(value, oversized, allow_shorten=True)
+        candidate = {'sections': [{'title': 'Тема', 'content': ' '.join(['слово'] * budgets[0]['target_words'])}]}
+        self.assertLess(budgets[0]['target_words'], 577)
+        self.assertIsNot(merge_word_expansion(value, candidate), value)
 
     def test_revision_cannot_erase_section_shorten_dramatically_or_lose_numbers(self):
         old = {'sections': [{'title': 'А', 'content': 'Храним 3.14 МБ данных и 42 учебных документа отдельно.'}]}
@@ -209,6 +232,24 @@ class WordContentReviewTests(unittest.IsolatedAsyncioTestCase):
             value, pages, _ = await self.sparse_case(.75, failure)
             self.assertTrue(value['sections'][0]['content'].startswith('Исходное'))
             self.assertEqual(pages, 2)
+
+    async def test_middle_page_improvement_can_replace_same_length_document(self):
+        original = {'sections': [{'title': 'Тема', 'content': 'Исходное пояснение условий.'}]}
+        updated = {'sections': [{'title': 'Тема', 'content': 'Уточнённое пояснение условий и пример.'}]}
+        with tempfile.TemporaryDirectory() as td:
+            docx, pdf = Path(td)/'a.docx', Path(td)/'a.pdf'
+            async def build(value, path): Path(path).write_text(value['sections'][0]['content'])
+            async def convert(source, target): Path(target).write_text(Path(source).read_text())
+            def inspect(path):
+                return {'last_page_fill': .8, 'body_page_fills': [.8 if 'revised' in str(path) else .2, .8],
+                        'front_matter_pages': 2}
+            revision = AsyncMock(return_value=updated)
+            value, pages = await prepare_word_files(original, 4, str(docx), str(pdf), build=build, convert=convert,
+                measure=lambda _:4, inspect=inspect, expand=revision)
+            self.assertEqual(value, updated)
+            self.assertEqual(pages, 4)
+            self.assertEqual(docx.read_text(), pdf.read_text())
+            self.assertEqual(revision.await_count, 1)
 
 
 class WordReviewRequestTests(unittest.IsolatedAsyncioTestCase):
@@ -272,7 +313,7 @@ class WordDeliveryPageTests(unittest.IsolatedAsyncioTestCase):
         e,m,s=self.setup_env(3)
         await e['word_build'](m,s)
         e['spend_credits'].assert_called_once_with(-9901,'word',amount=20)
-        self.assertEqual(e['ask_grok'].await_count,1)
+        self.assertEqual(e['ask_grok'].await_count,2)
 
     async def test_plain_document_prompt_has_editorial_structure_without_legal_language(self):
         e,m,s=self.setup_env(2)

@@ -67,7 +67,7 @@ WORD_REVIEW_SYSTEM = (
 )
 
 
-def word_section_budgets(content, target):
+def word_section_budgets(content, target, *, allow_shorten=False):
     """Give the optional editor concrete prose budgets rather than one vague total."""
     sections = content.get('sections', [])
     short = re.compile(r'введени|вывод|заключени|introduction|conclusion|summary', re.I)
@@ -78,6 +78,9 @@ def word_section_budgets(content, target):
     # Keep existing prose budgets, then redistribute the remaining total among
     # sections that can grow. References are retained but are not padded.
     floors = [len((s.get('content') or '').split()) for s in sections]
+    if allow_shorten:
+        import math
+        floors = [math.ceil(count * .8) if weights[i] else count for i, count in enumerate(floors)]
     budgets = list(floors)
     remaining = max(int(target), sum(floors))
     active = {i for i, weight in enumerate(weights) if weight > 0}
@@ -131,23 +134,27 @@ def word_pdf_page_count(pdf_path):
     return len(PdfReader(pdf_path).pages)
 
 
-def word_pdf_layout(pdf_path):
-    """Approximate body extent on the last page, excluding the footer area.
+def word_pdf_layout(pdf_path, *, front_matter_pages=0):
+    """Measure text extent on every body page, excluding covers and footers.
 
     A cheap signal for text documents, not a visual or semantic quality score.
     The builder uses 2 cm top/bottom margins. Tables count toward the extent.
     """
-    page = PdfReader(pdf_path).pages[-1]
-    height = float(page.mediabox.height)
-    top, bottom = height - 56.7, 56.7
-    baselines = []
-    def visit(text, cm, tm, font, size):
-        y = tm[4] * cm[1] + tm[5] * cm[3] + cm[5]
-        if text.strip() and bottom <= y <= top:
-            baselines.append(y - min(float(size), 18) * .25)
-    page.extract_text(visitor_text=visit)
-    fill = min(1., max(0., (top - min(baselines)) / (top - bottom))) if baselines else 0.
-    return {'last_page_fill': round(fill, 3)}
+    fills = []
+    for page in PdfReader(pdf_path).pages:
+        height = float(page.mediabox.height)
+        top, bottom = height - 56.7, 56.7
+        baselines = []
+        def visit(text, cm, tm, font, size):
+            y = tm[4] * cm[1] + tm[5] * cm[3] + cm[5]
+            if text.strip() and bottom <= y <= top:
+                baselines.append(y - min(float(size), 18) * .25)
+        page.extract_text(visitor_text=visit)
+        fill = min(1., max(0., (top - min(baselines)) / (top - bottom))) if baselines else 0.
+        fills.append(round(fill, 3))
+    body = fills[front_matter_pages:]
+    return {'last_page_fill': body[-1] if body else None,
+            'body_page_fills': body, 'front_matter_pages': front_matter_pages}
 
 
 def readable_word_paragraphs(text):
@@ -186,15 +193,21 @@ def word_review_findings(content, actual, requested, layout=None):
     fill = (layout or {}).get('last_page_fill')
     return {
         'short_pages': actual < requested,
-        'sparse_last_page': actual == requested and requested > 1 and fill is not None and fill < .5,
+        'sparse_last_page': requested > 1 and fill is not None and fill < .5,
+        'sparse_body_pages': [i + 1 + (layout or {}).get('front_matter_pages', 0)
+                              for i, value in enumerate((layout or {}).get('body_page_fills', []))
+                              if value < .5],
+        'excess_pages': actual > requested,
         'long_paragraphs': sum(len(p.split()) > 100 and not p.lstrip().startswith('|') for p in paragraphs),
         'categorical_claims': claims,
         'last_page_fill': fill,
+        'body_page_fills': (layout or {}).get('body_page_fills', []),
     }
 
 
 def needs_word_revision(findings):
-    return any(findings[k] for k in ('short_pages', 'sparse_last_page', 'long_paragraphs', 'categorical_claims'))
+    return any(findings[k] for k in ('short_pages', 'sparse_last_page', 'sparse_body_pages',
+                                     'excess_pages', 'long_paragraphs', 'categorical_claims'))
 
 
 def word_revision_notice(lang):
@@ -209,9 +222,18 @@ def word_revision_notice(lang):
     }.get(lang, 'Refining the text and checking page coverage.')
 
 
-def expansion_word_target(content, actual_pages, requested_pages):
+def expansion_word_target(content, actual_pages, requested_pages, *, front_matter_pages=0, layout=None):
     words = sum(len((s.get('content') or '').split()) for s in content.get('sections', []))
-    return min(16000, max(requested_pages * 280, round(words * requested_pages / max(1, actual_pages) * 1.1)))
+    actual_body = max(1, actual_pages - front_matter_pages)
+    requested_body = max(1, requested_pages - front_matter_pages)
+    fills = (layout or {}).get('body_page_fills', [])
+    if words and fills and sum(fills) > .1:
+        # Use the observed typography/table footprint, aiming for a 75%-full ending.
+        # Compression remains limited by the lossless metadata/table and prose gates.
+        target = round(words * max(.75, requested_body - .25) / sum(fills))
+        floor = (words * .8 + .999) if actual_pages > requested_pages else words
+        return min(16000, max(int(floor), target))
+    return min(16000, max(requested_body * 280, round(words * requested_body / actual_body * 1.1)))
 
 
 async def prepare_word_files(content, requested_pages, docx_path, pdf_path, *, build,
@@ -262,6 +284,7 @@ async def prepare_word_files(content, requested_pages, docx_path, pdf_path, *, b
                         (old_fill is not None and new_fill is not None and new_fill > old_fill + .05)
                         or revised_findings['long_paragraphs'] < findings['long_paragraphs']
                         or revised_findings['categorical_claims'] < findings['categorical_claims']
+                        or len(revised_findings['sparse_body_pages']) < len(findings['sparse_body_pages'])
                     )
                     if closer or (same_pages and fill_ok and improved):
                         promoting = True

@@ -181,7 +181,31 @@ def _level(title):
     return 2 if re.match(r'^\d+\.\d+',title) else 1
 
 
-def render(path, title, sections, kind, meta=None, add_table=None):
+def front_matter_pages(kind):
+    return 2 if kind in ('referat', 'coursework') else 1 if kind == 'report' else 0
+
+
+def page_guidance(kind, pages):
+    front = front_matter_pages(kind)
+    body = max(1, pages - front)
+    compact = kind == 'referat' and pages <= 10
+    return (
+        f'\nОбщий объём — около {pages} страниц, включая {front} служебных '
+        f'(титульный лист и оглавление по жанру). На основной текст — около {body} страниц, '
+        f'ориентир {body * 200} слов, включая таблицы, без реквизитов и оглавления. '
+        'Введение и выводы краткие; около 80% текста отведи объяснениям, условиям и примерам. '
+        'Не наращивай объём повторениями, общими фразами и описанием границ задания. '
+        + ('Это короткий реферат: разделы размещаются последовательно, без обязательного '
+           'нового листа для каждого. Сохрани все заданные пользователем темы. ' if compact else '')
+    )
+
+
+def inspect_layout(path, kind):
+    from word_quality import word_pdf_layout
+    return word_pdf_layout(path, front_matter_pages=front_matter_pages(kind))
+
+
+def render(path, title, sections, kind, meta=None, add_table=None, requested_pages=None):
     if kind not in KINDS: raise ValueError('unknown_academic_kind')
     meta={k:str(v) for k,v in (meta or {}).items() if isinstance(v,(str,int)) and v}
     covered=kind in ('referat','coursework','report')
@@ -198,6 +222,7 @@ def render(path, title, sections, kind, meta=None, add_table=None):
             if meta.get(k):
                 p=d.add_paragraph(meta[k]);p.paragraph_format.first_line_indent=Cm(0)
     toc=kind in ('referat','coursework') and bool(blocks)
+    compact = kind == 'referat' and requested_pages is not None and requested_pages <= 10
     if toc:
         p=d.add_paragraph('ОГЛАВЛЕНИЕ');p.alignment=WD_ALIGN_PARAGRAPH.CENTER
         p.paragraph_format.first_line_indent=Cm(0);p.paragraph_format.space_after=Pt(14)
@@ -214,7 +239,9 @@ def render(path, title, sections, kind, meta=None, add_table=None):
         if head:
             level=_level(head)
             p=d.add_paragraph(head,style='Heading '+str(level))
-            p.paragraph_format.page_break_before=(toc and level==1) or (toc and i==0)
+            p.paragraph_format.page_break_before=(toc and level==1 and not compact) or (toc and i==0)
+            if compact and i:
+                p.paragraph_format.space_before=Pt(12)
             p.alignment=WD_ALIGN_PARAGRAPH.JUSTIFY
             start=OxmlElement('w:bookmarkStart');start.set(qn('w:id'),str(1000+i));start.set(qn('w:name'),'study_'+str(i))
             end=OxmlElement('w:bookmarkEnd');end.set(qn('w:id'),str(1000+i))

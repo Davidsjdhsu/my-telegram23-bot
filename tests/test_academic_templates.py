@@ -61,6 +61,25 @@ class LayoutTests(unittest.TestCase):
         fields=academic.explicit_meta({'school':'Вымышленный вуз','year':'2026'},'Вуз: Мой вуз\nГод: 2028\nФИО: Иван\nГод: ')
         self.assertEqual(fields,{'school':'Мой вуз','year':'','author':'Иван'})
 
+    def test_short_referat_keeps_cover_toc_and_flows_sections_without_erasing_content(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'short.docx'
+            office_env()['build_word'](path,'Тема',SECTIONS,'referat',{'author':'Автор'},
+                                      extra_data={'academic':True,'requested_pages':6})
+            d=Document(path)
+            headings=[p for p in d.paragraphs if p.style and p.style.name.startswith('Heading')]
+            self.assertTrue(headings[0].paragraph_format.page_break_before)
+            self.assertFalse(any(p.paragraph_format.page_break_before for p in headings[1:]))
+            self.assertEqual(len(d.tables),1)
+            self.assertEqual(d.tables[0].cell(1,1).text,'Файл')
+            self.assertIn('ОГЛАВЛЕНИЕ','\n'.join(p.text for p in d.paragraphs))
+            self.assertIn('4 страниц',academic.page_guidance('referat',6))
+            self.assertIn('800 слов',academic.page_guidance('referat',6))
+            office_env()['build_word'](path,'Тема',SECTIONS,'coursework',{},
+                                      extra_data={'academic':True,'requested_pages':6})
+            d=Document(path)
+            self.assertTrue(next(p for p in d.paragraphs if p.text=='Заключение').paragraph_format.page_break_before)
+
 class HandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_actual_word_handler_preserves_metadata_and_delivers_before_charge(self):
         for kind in academic.KINDS:

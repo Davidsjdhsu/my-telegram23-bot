@@ -6401,7 +6401,8 @@ def build_word(path, title, sections, kind="doc", meta=None, extra_data=None):
     extra_data = extra_data or {}
     from academic_templates import KINDS as ACADEMIC_KINDS, render as render_academic
     if kind in ACADEMIC_KINDS and extra_data.get("academic", True) and not extra_data.get("template"):
-        return render_academic(path, title or "Документ", sections, kind, clean_word_meta(meta, kind), add_table=_add_table)
+        return render_academic(path, title or "Документ", sections, kind, clean_word_meta(meta, kind),
+                               add_table=_add_table, requested_pages=extra_data.get("requested_pages"))
     meta = dict(meta or {}) if extra_data.get("template") else clean_word_meta(meta, kind)
     if extra_data.get("template"):
         meta["_template"] = True
@@ -8778,6 +8779,8 @@ async def word_build(m: Message, state: FSMContext):
         academic = kind in ACADEMIC_KINDS and (content_gen_lang(data, lang) or "ru") == "ru"
         if academic:
             structure_hint = academic_guidance(kind)
+            from academic_templates import page_guidance
+            length_hint = page_guidance(kind, pages)
             meta_schema = json.dumps({key: "" for key in META_LABELS}, ensure_ascii=False)
             kind_name = WORD_KIND_LABELS[kind]["ru"]
         # Схема примера JSON в конце промпта - для резюме отдельная (с skills/languages
@@ -8843,20 +8846,26 @@ async def word_build(m: Message, state: FSMContext):
             async def render_content(value, path):
                 await run_heavy(build_word, path, value.get("title", "Документ"),
                     value.get("sections", []), kind, value.get("meta") or {},
-                    extra_data={"skills": value.get("skills"), "languages": value.get("languages"), "academic": academic})
+                    extra_data={"skills": value.get("skills"), "languages": value.get("languages"),
+                                "academic": academic, "requested_pages": pages})
 
             async def expand_content(value, actual, requested, findings):
                 await m.answer(word_revision_notice(lang))
-                needs_depth = findings['short_pages'] or findings['sparse_last_page']
-                target = expansion_word_target(value, actual, requested) if needs_depth else sum(
+                needs_depth = actual <= requested and (findings['short_pages'] or findings['sparse_last_page']
+                                                       or findings['sparse_body_pages'])
+                from academic_templates import front_matter_pages
+                front = front_matter_pages(kind) if academic else 0
+                target = expansion_word_target(value, actual, requested, front_matter_pages=front,
+                                               layout=findings) if needs_depth or findings['excess_pages'] else sum(
                     len((s.get('content') or '').split()) for s in value.get('sections', []))
                 prompt = f"""Отредактируй документ за один проход, объединив все замечания.
     Сейчас {actual} стр., выбрано {requested}; диагностические признаки: {json.dumps(findings, ensure_ascii=False)}.
-    {'Нужно раскрыть тему глубже: последняя страница почти пуста или страниц недостаточно. Дополни основную часть пояснениями условий, отличий и практическим примером с объяснением выбора.' if needs_depth else 'Сохрани объём: исправь длинные абзацы и проверь категоричные утверждения.'}
+    {'Нужно раскрыть тему глубже: содержательные страницы недозаполнены или страниц недостаточно. Дополни основную часть пояснениями условий, отличий и практическим примером с объяснением выбора.' if needs_depth else 'Не увеличивай объём. Убери повторы и общие фразы, сохрани существенные объяснения. Исправь длинные абзацы и проверь категоричные утверждения.'}
+    Титульный лист и оглавление уже учтены в выбранном объёме; служебных страниц: {front}.
     Ориентир — {target} слов в content суммарно. Основная часть — примерно 75–85% текста.
-    Ориентиры по каждому разделу (слова, не символы): {json.dumps(word_section_budgets(value, target), ensure_ascii=False)}.
-    До ответа проверь фактический объём каждого раздела. Добавь недостающие пояснения к основной части,
-    а не обещание раскрыть тему; не возвращай прежний короткий текст с несколькими добавленными фразами.
+    Ориентиры по каждому разделу (слова, не символы): {json.dumps(word_section_budgets(value, target, allow_shorten=findings['excess_pages']), ensure_ascii=False)}.
+    До ответа проверь фактический объём каждого раздела.
+    {'Добавь недостающие пояснения к основной части, а не обещание раскрыть тему; не возвращай прежний короткий текст с несколькими добавленными фразами.' if needs_depth else 'Сокращай только повторы и общие фразы; не теряй важные условия, примеры и выводы.'}
     Разделяй разные мысли на абзацы по 40–90 слов с помощью \\n\\n. Не наращивай страницы только переносами строк.
     Для каждого утверждения о невозможности, доступности, надёжности или гарантии проверь,
     от каких условий оно зависит и есть ли исключения. Исправляй смысл, а не просто вставляй слово «обычно».
@@ -8875,10 +8884,12 @@ async def word_build(m: Message, state: FSMContext):
                 return extract_json(await ask_grok(prompt, max_tokens=gen_max_tokens,
                     system_prompt=WORD_REVIEW_SYSTEM, temperature=0.15))
 
+            from academic_templates import inspect_layout as academic_inspect_layout
+            inspect_pages = (lambda path: academic_inspect_layout(path, kind)) if academic else word_pdf_layout
             content, actual_pages = await prepare_word_files(content, pages, docx_path, pdf_path,
                 build=render_content, convert=convert_word_pdf,
                 expand=expand_content if kind in INFORMATIONAL_WORD_KINDS else None,
-                inspect=word_pdf_layout if kind in INFORMATIONAL_WORD_KINDS else None)
+                inspect=inspect_pages if kind in INFORMATIONAL_WORD_KINDS else None)
             charged_pages = min(pages, actual_pages)
             if actual_pages != pages:
                 await m.answer(word_page_notice(lang, pages, actual_pages, word_cost(charged_pages)))
