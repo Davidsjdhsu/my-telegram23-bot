@@ -48,14 +48,17 @@ class LayoutTests(unittest.TestCase):
             self.assertEqual(d.styles['Heading 2'].paragraph_format.left_indent.cm,0)
             self.assertTrue(any(p.paragraph_format.page_break_before for p in d.paragraphs if p.text=='Заключение'))
 
-    def test_compact_genres_do_not_gain_cover_or_toc(self):
+    def test_essay_and_notes_have_correct_cover_without_toc(self):
         for kind in ('essay','notes'):
             with tempfile.TemporaryDirectory()as td:
                 p=Path(td)/'d.docx';office_env()['build_word'](p,'Тема',SECTIONS,kind,{'author':'Автор'})
                 d=Document(p);text='\n'.join(p.text for p in d.paragraphs)
                 self.assertNotIn('ОГЛАВЛЕНИЕ',text);self.assertNotIn('ТЕМА РАБОТЫ',text)
                 self.assertIn('Автор',text)
-                self.assertFalse(d.sections[0].different_first_page_header_footer)
+                self.assertTrue(d.sections[0].different_first_page_header_footer)
+                self.assertIn(academic.COVER_LABELS[kind],text)
+                if kind == 'essay':
+                    self.assertFalse(any(p.style and p.style.name.startswith('Heading') for p in d.paragraphs))
 
     def test_explicit_corrections_and_empty_values_override_model(self):
         fields=academic.explicit_meta({'school':'Вымышленный вуз','year':'2026'},'Вуз: Мой вуз\nГод: 2028\nФИО: Иван\nГод: ')
@@ -73,8 +76,8 @@ class LayoutTests(unittest.TestCase):
             self.assertEqual(len(d.tables),1)
             self.assertEqual(d.tables[0].cell(1,1).text,'Файл')
             self.assertIn('ОГЛАВЛЕНИЕ','\n'.join(p.text for p in d.paragraphs))
-            self.assertIn('4 страниц',academic.page_guidance('referat',6))
-            self.assertIn('800 слов',academic.page_guidance('referat',6))
+            self.assertIn('6 страниц основного текста',academic.page_guidance('referat',6))
+            self.assertIn('1200 слов',academic.page_guidance('referat',6))
             office_env()['build_word'](path,'Тема',SECTIONS,'coursework',{},
                                       extra_data={'academic':True,'requested_pages':6})
             d=Document(path)
@@ -84,6 +87,10 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_actual_word_handler_preserves_metadata_and_delivers_before_charge(self):
         for kind in academic.KINDS:
             e,m,state=test_office.WordWorkflowTests().env()
+            from word_quality import prepare_word_files
+            async def prepare(*args, **kwargs):
+                return await prepare_word_files(*args, **kwargs, measure=lambda _: academic.front_matter_pages(kind) + 2)
+            e['prepare_word_files'] = prepare
             data={'word_kind':kind,'word_pages':5,'topic':'Тема: Файлы\nВуз: Мой вуз\nФИО: Анна Петрова\nГруппа: ИС-21\nГод: 2028'}
             state.get_data.return_value=data
             e.update(WORD_KIND_LABELS={k:{'ru':k}for k in academic.KINDS})

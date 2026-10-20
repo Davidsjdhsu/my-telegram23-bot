@@ -4829,19 +4829,17 @@ def word_kind_kb(category, more=False, lang="ru"):
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def word_size_kb(lang="ru"):
-    # Кнопки - только подсказка для типичных объёмов, не единственный вариант: обработчик
-    # Form.waiting_word_size (см. word_size()) парсит ЛЮБОЕ число, введённое текстом, так что
-    # пользователь всегда может написать своё значение в пределах WORD_MIN_PAGES..WORD_MAX_PAGES
-    # (например "30 страниц" для курсовой) - не только выбрать из готовых кнопок.
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="2 стр. · 10 кр."), KeyboardButton(text="4 стр. · 20 кр.")],
-        [KeyboardButton(text="6 стр. · 30 кр."), KeyboardButton(text="8 стр. · 40 кр.")],
-        [KeyboardButton(text="10 стр. · 50 кр."), KeyboardButton(text="15 стр. · 75 кр.")],
-        [KeyboardButton(text="20 стр. · 100 кр."), KeyboardButton(text="30 стр. · 150 кр.")],
-        [KeyboardButton(text=tr("btn_back", lang))],
-        [KeyboardButton(text=tr("btn_main_menu", lang))]
-    ], resize_keyboard=True)
+def word_size_kb(lang="ru", kind="doc", academic=False):
+    def label(pages):
+        text = f"Титульный + {pages} стр." if academic else f"{pages} стр."
+        return f"{text} · {word_cost(pages)} кр."
+    rows = [[KeyboardButton(text=label(a)), KeyboardButton(text=label(b))]
+            for a, b in ((2, 4), (6, 8), (10, 15), (20, 30))]
+    if academic:
+        rows = [[button] for row in rows for button in row]
+    rows += [[KeyboardButton(text=tr("btn_back", lang))],
+             [KeyboardButton(text=tr("btn_main_menu", lang))]]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def word_confirm_kb(lang="ru"):
@@ -8476,7 +8474,10 @@ async def word_after_input(m: Message, state: FSMContext):
         data = await state.get_data()
         await word_build_draft(m, state, data, "short")
         return
-    await m.answer(tr("msg_which_size", lang), reply_markup=word_size_kb(lang))
+    from academic_templates import KINDS as ACADEMIC_KINDS, volume_hint
+    academic = kind in ACADEMIC_KINDS and (content_gen_lang(data, lang) or "ru") == "ru"
+    await m.answer(volume_hint(kind) if academic else tr("msg_which_size", lang),
+                   reply_markup=word_size_kb(lang, kind, academic))
     await state.set_state(Form.waiting_word_size)
 
 
@@ -8530,8 +8531,12 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
     kind = data.get("word_kind", "doc")
     kind_name = WORD_KIND_DESC.get(kind, "документ")
     from academic_templates import KINDS as ACADEMIC_KINDS, guidance as academic_guidance
-    if kind in ACADEMIC_KINDS and (content_gen_lang(data, lang) or "ru") == "ru":
+    academic = kind in ACADEMIC_KINDS and (content_gen_lang(data, lang) or "ru") == "ru"
+    if academic:
+        from academic_templates import page_guidance, volume_label
         kind_name = WORD_KIND_LABELS[kind]["ru"] + academic_guidance(kind)
+        size_map[size] = page_guidance(kind, pages)
+        await m.answer(volume_label(kind, pages) + f". Стоимость — {word_cost(pages)} кредитов; титульный и оглавление без доплаты.")
     lang_instr = grok_lang_instruction(content_gen_lang(data, lang) or "ru")
     prompt = f"""Собери черновик-план (не полный текст): {kind_name}.
 Тема/данные: {data.get('topic')}
@@ -8549,7 +8554,7 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
     if grok_failed(sample):
         await m.answer(
             tr("msg_grok_error", lang),
-            reply_markup=word_size_kb(lang) if kind in WORD_SIZE_KINDS else word_confirm_kb(lang)
+            reply_markup=word_size_kb(lang, kind, academic) if kind in WORD_PAGE_CHOICE_KINDS else word_confirm_kb(lang)
         )
         return
     await state.update_data(sample=sample)
@@ -8781,6 +8786,7 @@ async def word_build(m: Message, state: FSMContext):
             structure_hint = academic_guidance(kind)
             from academic_templates import page_guidance
             length_hint = page_guidance(kind, pages)
+            size_map[size] = f"{pages} страниц основного текста, титульный и оглавление отдельно"
             meta_schema = json.dumps({key: "" for key in META_LABELS}, ensure_ascii=False)
             kind_name = WORD_KIND_LABELS[kind]["ru"]
         # Схема примера JSON в конце промпта - для резюме отдельная (с skills/languages
@@ -8861,7 +8867,8 @@ async def word_build(m: Message, state: FSMContext):
                 prompt = f"""Отредактируй документ за один проход, объединив все замечания.
     Сейчас {actual} стр., выбрано {requested}; диагностические признаки: {json.dumps(findings, ensure_ascii=False)}.
     {'Нужно раскрыть тему глубже: содержательные страницы недозаполнены или страниц недостаточно. Дополни основную часть пояснениями условий, отличий и практическим примером с объяснением выбора.' if needs_depth else 'Не увеличивай объём. Убери повторы и общие фразы, сохрани существенные объяснения. Исправь длинные абзацы и проверь категоричные утверждения.'}
-    Титульный лист и оглавление уже учтены в выбранном объёме; служебных страниц: {front}.
+    Выбрано {pages} страниц основного текста. Титульный лист и оглавление добавляются сверх этого объёма; служебных страниц: {front}.
+    Требуемый итог с ними: {requested} стр. Не заполняй служебными страницами объём основного текста.
     Ориентир — {target} слов в content суммарно. Основная часть — примерно 75–85% текста.
     Ориентиры по каждому разделу (слова, не символы): {json.dumps(word_section_budgets(value, target, allow_shorten=findings['excess_pages']), ensure_ascii=False)}.
     До ответа проверь фактический объём каждого раздела.
@@ -8884,14 +8891,21 @@ async def word_build(m: Message, state: FSMContext):
                 return extract_json(await ask_grok(prompt, max_tokens=gen_max_tokens,
                     system_prompt=WORD_REVIEW_SYSTEM, temperature=0.15))
 
-            from academic_templates import inspect_layout as academic_inspect_layout
+            from academic_templates import inspect_layout as academic_inspect_layout, front_matter_pages, delivery_notice
+            front_pages = front_matter_pages(kind) if academic else 0
+            requested_total = pages + front_pages
             inspect_pages = (lambda path: academic_inspect_layout(path, kind)) if academic else word_pdf_layout
-            content, actual_pages = await prepare_word_files(content, pages, docx_path, pdf_path,
+            content, actual_pages = await prepare_word_files(content, requested_total, docx_path, pdf_path,
                 build=render_content, convert=convert_word_pdf,
                 expand=expand_content if kind in INFORMATIONAL_WORD_KINDS else None,
                 inspect=inspect_pages if kind in INFORMATIONAL_WORD_KINDS else None)
-            charged_pages = min(pages, actual_pages)
-            if actual_pages != pages:
+            actual_body_pages = max(0, actual_pages - front_pages)
+            if academic and actual_body_pages < 1:
+                raise ValueError("academic_document_has_no_body_pages")
+            charged_pages = min(pages, actual_body_pages)
+            if academic:
+                await m.answer(delivery_notice(kind, pages, actual_body_pages, actual_pages, word_cost(charged_pages)))
+            elif actual_pages != pages:
                 await m.answer(word_page_notice(lang, pages, actual_pages, word_cost(charged_pages)))
 
             fname = safe_filename(content.get("title"), fallback=WORD_KIND_DESC.get(kind, "Документ"), author=(content.get("meta") or {}).get("author"))
@@ -9511,7 +9525,7 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
         kind_name = WORD_KIND_DESC.get(kind, "документ")
         meta_schema = META_SCHEMAS.get(kind, META_SCHEMAS["doc"])
         meta_schema = word_generation_schema(kind, meta_schema)
-        from academic_templates import guidance as academic_guidance, KINDS as ACADEMIC_KINDS, META_LABELS
+        from academic_templates import guidance as academic_guidance, KINDS as ACADEMIC_KINDS, META_LABELS, page_guidance
         academic = kind in ACADEMIC_KINDS and lang == "ru"
         if academic:
             meta_schema = json.dumps({key: "" for key in META_LABELS}, ensure_ascii=False)
@@ -9526,7 +9540,7 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
     Не выдумывай факты, которых нет в материале и не следуют из него логично.
     Неизвестные необязательные поля meta оставь пустыми, без заглушек.
     {WORD_EDITORIAL_GUIDANCE}
-    {academic_guidance(kind) if academic else ""}
+    {academic_guidance(kind) + page_guidance(kind, pages) if academic else ""}
     Только JSON:
     {{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\\n\\nабзац2"}},{{"title":"...","content":"..."}}]}}{lang_instr}""",
             max_tokens=8000, system_prompt=WORD_SYSTEM, temperature=0.25)
@@ -9547,7 +9561,7 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
         u = get_user(uid)
         docx_path = f"/tmp/upload_result_{uid}_{random.randint(1000, 9999)}.docx"
         try:
-            (await run_heavy(build_word, docx_path, content.get("title") or kind_name, content["sections"], kind, content.get("meta") or {}, extra_data={"academic": academic}))
+            (await run_heavy(build_word, docx_path, content.get("title") or kind_name, content["sections"], kind, content.get("meta") or {}, extra_data={"academic": academic, "requested_pages": pages}))
             fname = safe_filename(content.get("title"), fallback=kind_name)
             await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
             u["generations"] += 1

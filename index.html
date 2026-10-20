@@ -1020,13 +1020,17 @@
       </div>
 
       <div class="field-block" id="wordPagesBlock">
-        <p class="field-label" data-i18n="sizeLabel">Страниц</p>
+        <p class="field-label" id="wordPagesLabel" data-i18n="sizeLabel">Страниц</p>
         <div class="stepper">
           <button class="stepper-btn" id="wordPagesMinus">−</button>
+          <span id="wordCoverPrefix" hidden>Титульный +</span>
           <span class="stepper-value" id="wordPagesValue">2</span>
+          <span id="wordBodySuffix" hidden>стр.</span>
           <button class="stepper-btn" id="wordPagesPlus">+</button>
         </div>
       </div>
+
+      <p class="field-hint" id="wordVolumeHint" hidden></p>
 
       <button class="form-submit" id="wordSubmit" data-i18n="createDocBtn">Создать документ</button>
       <p class="form-cost" id="wordCostLabel">Стоимость: 10 кредитов</p>
@@ -1922,17 +1926,27 @@
   function refreshWordPagesUI() {
     const block = document.getElementById('wordPagesBlock');
     if (block) block.style.display = wordPagesChoosable() ? '' : 'none';
+    const kind = document.getElementById('wordKind').value;
+    const academic = uiLang === 'ru' && ['referat', 'coursework', 'report', 'essay', 'notes'].includes(kind);
+    document.getElementById('wordCoverPrefix').hidden = !academic;
+    document.getElementById('wordBodySuffix').hidden = !academic;
+    document.getElementById('wordPagesLabel').textContent = academic ? 'Страниц основного текста' : t('sizeLabel');
+    const hint = document.getElementById('wordVolumeHint');
+    hint.hidden = !academic;
+    const toc = ['referat', 'coursework'].includes(kind);
+    hint.textContent = academic ? `Титульный лист${toc ? ' и оглавление' : ''} добавляются отдельно, без доплаты. ` +
+      `Всего: ${wordPages + (toc ? 2 : 1)} стр. Данные для титульного укажи в требованиях: учебное заведение, ФИО, группа, преподаватель, город и год.` : '';
     updateWordCostLabel();
   }
   document.getElementById('wordPagesMinus').addEventListener('click', () => {
     wordPages = Math.max(WORD_PAGES_MIN, wordPages - 1);
     wordPagesValueEl.textContent = wordPages;
-    updateWordCostLabel();
+    refreshWordPagesUI();
   });
   document.getElementById('wordPagesPlus').addEventListener('click', () => {
     wordPages = Math.min(WORD_PAGES_MAX, wordPages + 1);
     wordPagesValueEl.textContent = wordPages;
-    updateWordCostLabel();
+    refreshWordPagesUI();
   });
   refreshWordPagesUI();
   const wordKindSelect = document.getElementById('wordKind');

@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from docx import Document
 from pypdf import PdfReader
-from academic_templates import BLANKS, blank_path, render, inspect_layout
+from academic_templates import BLANKS, COVER_LABELS, blank_path, render, inspect_layout
 from word_quality import convert_word_pdf, word_review_findings
 
 async def main():
@@ -30,6 +30,11 @@ async def main():
             render(src,'Хранение данных',sections,kind,{'school':'Учебный вуз','author':'Анна Петрова','group':'ИС-21','city':'Москва','year':'2028'})
             await convert_word_pdf(src,dest)
             reader=PdfReader(dest);text='\n'.join(p.extract_text()for p in reader.pages)
+            assert COVER_LABELS[kind] in reader.pages[0].extract_text(), kind
+            assert 'Цель работы' not in reader.pages[0].extract_text(), kind
+            if kind in ('essay', 'notes', 'report'):
+                assert len(reader.pages) == 2, (kind, len(reader.pages))
+                assert len(inspect_layout(dest, kind)['body_page_fills']) == 1
             for value in ('Учебный вуз','Анна Петрова','ИС-21'):assert value in text,(kind,value)
             if kind in ('referat','coursework'):
                 assert len(reader.pages)==5,(kind,len(reader.pages))
@@ -55,5 +60,5 @@ async def main():
         findings=word_review_findings({'sections':short},7,6,
             {'last_page_fill':.25,'body_page_fills':[.3,.8,.8,.9,.25],'front_matter_pages':2})
         assert findings['sparse_body_pages']==[3,7] and findings['excess_pages']
-        print('academic runtime_check=passed blanks=9 genres=5 toc=verified short_referat=flowing density=all_body_pages credits=unchanged paid_api_calls=0',flush=True)
+        print('academic runtime_check=passed blanks=9 genres=5 covers=all5 body_pages=separate toc=verified short_referat=flowing density=all_body_pages credits=unchanged paid_api_calls=0',flush=True)
 if __name__=='__main__':asyncio.run(main())

@@ -14,6 +14,8 @@ from docx.oxml.ns import qn
 
 ASSETS = Path(__file__).resolve().parent / 'assets' / 'academic'
 KINDS = frozenset(('referat', 'coursework', 'report', 'essay', 'notes'))
+COVER_LABELS = {'referat': 'РЕФЕРАТ', 'coursework': 'КУРСОВАЯ РАБОТА',
+                'report': 'ДОКЛАД', 'essay': 'ЭССЕ', 'notes': 'КОНСПЕКТ'}
 BLANKS = {
     'referat': 'Реферат — титульный лист',
     'coursework': 'Курсовая — титульный лист',
@@ -68,8 +70,8 @@ def guidance(kind):
         'referat':'Разделы: Введение (цель и задачи), 2–3 тематических раздела, Заключение, источники при наличии. Главы обозначай 1, 2, подразделы 1.1, 1.2. Введение и заключение не нумеруй.',
         'coursework':'Разделы: Введение (проблема, цель, задачи, объект и предмет), теоретическая глава, практическая/аналитическая глава, Заключение, источники при наличии. Главы 1, 2; подразделы 1.1, 1.2. Никаких вымышленных результатов исследования; если данных нет, опиши методику предполагаемого исследования.',
         'report':'Доклад: введение с вопросом, основная часть с объяснением и примерами, выводы, источники при наличии. Не превращай его в курсовую.',
-        'essay':'Эссе: постановка проблемы и тезис, аргументы и примеры, рассмотрение возражения, собственный вывод. Без оглавления и отдельной обложки. Не приписывай автору личный опыт, которого нет в запросе.',
-        'notes':'Конспект: тематические пункты, определения, связи и краткие выводы. Сохрани содержание исходного материала. Без титульного листа, оглавления и обязательного введения.',
+        'essay':'Эссе: постановка проблемы и тезис, аргументы и примеры, рассмотрение возражения, собственный вывод. Титульный лист с надписью ЭССЕ добавляет программа. Без оглавления; основной текст связный, с абзацами, без видимых заголовков разделов. sections служит только для внутреннего плана. Не приписывай автору личный опыт, которого нет в запросе. Не начинай с фразы «Этот текст — учебное эссе»: сразу переходи к вопросу темы.',
+        'notes':'Конспект: тематические пункты, определения, связи и краткие выводы. Сохрани содержание исходного материала. Титульный лист с надписью КОНСПЕКТ добавляет программа. Без оглавления и обязательного введения.',
     }[kind]
 
 
@@ -95,7 +97,7 @@ def _cover(kind, title, meta):
         elif i == 2: v = meta.get('school','')
         elif i == 3: v = meta.get('department','')
         elif t in ('ТЕМА РАБОТЫ','ТЕМА РЕФЕРАТА'): v = title
-        elif t == 'РЕФЕРАТ' and kind == 'report': v = 'ДОКЛАД'
+        elif t == 'РЕФЕРАТ': v = COVER_LABELS[kind]
         elif t.startswith('по дисциплине'): v = ('по дисциплине «'+meta['discipline']+'»') if meta.get('discipline') else ''
         elif t == 'Фамилия Имя Отчество обучающегося': v = meta.get('author','')
         elif t.startswith('Направление подготовки'): v = ('Направление подготовки: '+meta['specialty']) if meta.get('specialty') else ''
@@ -182,17 +184,40 @@ def _level(title):
 
 
 def front_matter_pages(kind):
-    return 2 if kind in ('referat', 'coursework') else 1 if kind == 'report' else 0
+    return 2 if kind in ('referat', 'coursework') else 1 if kind in KINDS else 0
+
+
+def volume_label(kind, pages):
+    """Selected pages always mean body pages; front matter is additional and free."""
+    prefix = 'Титульный + оглавление + ' if kind in ('referat', 'coursework') else 'Титульный + '
+    return prefix + f'{pages} стр. текста'
+
+
+def volume_hint(kind):
+    extra = ' и оглавление' if kind in ('referat', 'coursework') else ''
+    return (f'Выбери число страниц основного текста. Титульный лист{extra} добавляются отдельно, '
+            'без доплаты. Данные для титульного можно указать вместе с темой: '
+            'учебное заведение, дисциплина, ФИО, группа, преподаватель, город и год.')
+
+
+def delivery_notice(kind, requested, actual, total, credits):
+    return (f'В документе: {volume_label(kind, actual)}. Всего в файле {total} стр.\n'
+            + (f'Было выбрано {requested} стр. текста; фактически получилось {actual}.\n'
+               if actual != requested else '')
+            + f'Стоимость — {credits} кредитов. Титульный лист и оглавление без доплаты; '
+              'дополнительные страницы текста не увеличивают цену.')
 
 
 def page_guidance(kind, pages):
     front = front_matter_pages(kind)
-    body = max(1, pages - front)
+    body = max(1, pages)
+    words_per_page = 250 if kind == 'essay' else 200
     compact = kind == 'referat' and pages <= 10
     return (
-        f'\nОбщий объём — около {pages} страниц, включая {front} служебных '
-        f'(титульный лист и оглавление по жанру). На основной текст — около {body} страниц, '
-        f'ориентир {body * 200} слов, включая таблицы, без реквизитов и оглавления. '
+        f'\nВыбранный объём — {body} страниц основного текста. Дополнительно программа создаст '
+        f'{front} служебных стр. (титульный лист и оглавление по жанру); они НЕ входят в выбранный объём. '
+        f'Ожидаемый общий объём — {body + front} стр. На основной текст — {body} страниц, '
+        f'ориентир {body * words_per_page} слов, включая таблицы, без реквизитов и оглавления. '
         'Введение и выводы краткие; около 80% текста отведи объяснениям, условиям и примерам. '
         'Не наращивай объём повторениями, общими фразами и описанием границ задания. '
         + ('Это короткий реферат: разделы размещаются последовательно, без обязательного '
@@ -208,7 +233,7 @@ def inspect_layout(path, kind):
 def render(path, title, sections, kind, meta=None, add_table=None, requested_pages=None):
     if kind not in KINDS: raise ValueError('unknown_academic_kind')
     meta={k:str(v) for k,v in (meta or {}).items() if isinstance(v,(str,int)) and v}
-    covered=kind in ('referat','coursework','report')
+    covered=kind in KINDS
     d=_cover(kind,title,meta) if covered else Document()
     _styles(d,covered)
     blocks=[dict(b) for b in sections or [] if str(b.get('title','')).strip().casefold() not in
@@ -236,7 +261,7 @@ def render(path, title, sections, kind, meta=None, add_table=None, requested_pag
             _field(p,' PAGEREF study_'+str(i)+' \\h ')
     for i,b in enumerate(blocks):
         head=str(b.get('title') or '').strip()
-        if head:
+        if head and kind != 'essay':
             level=_level(head)
             p=d.add_paragraph(head,style='Heading '+str(level))
             p.paragraph_format.page_break_before=(toc and level==1 and not compact) or (toc and i==0)
