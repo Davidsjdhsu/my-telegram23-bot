@@ -1074,6 +1074,23 @@
         </div>
       </div>
 
+      <div class="field-block" id="excelAppearanceBlock" hidden>
+        <label class="field-label" for="excelStyle" data-i18n="styleLabel">Стиль</label>
+        <select class="field-select" id="excelStyle">
+          <option value="standard">Стандартный — зелёный</option>
+          <option value="designer">Дизайнерский</option>
+        </select>
+        <div id="excelPaletteBlock" hidden style="margin-top:16px">
+          <label class="field-label" for="excelPalette">Цвет</label>
+          <select class="field-select" id="excelPalette">
+            <option value="green">Классический зелёный</option>
+            <option value="copper">Графит и медь</option>
+            <option value="emerald">Изумруд и песочный</option>
+            <option value="lilac">Чернильный и сирень</option>
+            <option value="burgundy">Бордовый и кремовый</option>
+          </select>
+        </div>
+      </div>
       <button class="form-submit" id="excelSubmit" data-i18n="createTableBtn">Создать таблицу</button>
       <p class="form-cost" data-cost="5">Стоимость: 5 кредитов</p>
     </div>
@@ -1683,6 +1700,7 @@
     pres: { screen: 'form-pres', fill: () => { document.getElementById('presTopic').value = t('qsPresFill'); } },
     smeta: { screen: 'form-excel', fill: () => {
       document.getElementById('excelKind').value = 'expense_estimate';
+      updateExcelAppearance();
       document.getElementById('excelContent').value = t('qsSmetaFill');
     } },
     resume: { screen: 'form-resume', fill: () => { document.getElementById('resumeContent').value = t('qsResumeFill'); } },
@@ -1978,6 +1996,15 @@
   });
 
   // --- Отправка формы Excel ---
+  function updateExcelAppearance() {
+    const estimate = document.getElementById('excelKind').value === 'expense_estimate';
+    const designer = document.getElementById('excelStyle').value === 'designer';
+    document.getElementById('excelAppearanceBlock').hidden = !estimate;
+    document.getElementById('excelPaletteBlock').hidden = !estimate || !designer;
+  }
+  document.getElementById('excelKind').addEventListener('change', updateExcelAppearance);
+  document.getElementById('excelStyle').addEventListener('change', updateExcelAppearance);
+  updateExcelAppearance();
   document.getElementById('excelSubmit').addEventListener('click', () => {
     const content = document.getElementById('excelContent').value.trim();
     if (!content) { document.getElementById('excelContent').focus(); return; }
@@ -1986,6 +2013,8 @@
       content,
       extra: document.getElementById('excelExtra').value.trim(),
       mode: activeChipValue('excelMode', 'ai'),
+      excel_style: document.getElementById('excelKind').value === 'expense_estimate' ? document.getElementById('excelStyle').value : 'standard',
+      excel_palette: document.getElementById('excelKind').value === 'expense_estimate' && document.getElementById('excelStyle').value === 'designer' ? document.getElementById('excelPalette').value : 'green',
     });
   });
 

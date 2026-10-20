@@ -7,6 +7,7 @@ from word_quality import (
     word_growth_targets, apply_word_additions,
     WORD_REFINE, WORD_ACCEPT, word_quality_keyboard, word_quality_choice_notice,
 )
+from excel_styles import normalize_excel_appearance, STYLE_LABELS as EXCEL_STYLES, PALETTE_LABELS as EXCEL_PALETTES
 import os
 import asyncio
 import tempfile
@@ -1050,6 +1051,8 @@ class Form(StatesGroup):
     waiting_word_quality = State()
     waiting_excel_category = State()
     waiting_excel_kind = State()
+    waiting_excel_style = State()
+    waiting_excel_palette = State()
     waiting_excel_mode = State()
     waiting_excel_topic = State()
     waiting_excel_data = State()
@@ -7057,7 +7060,7 @@ def _xl_inject_cached_values(path, cache):
 # только содержимое строк (rows), формулы и оформление всегда собираются кодом, а не ИИ,
 # чтобы суммы/проценты/итоги были настоящими формулами Excel, а не текстом.
 EXCEL_ROW_SCHEMA = {
-    "expense_estimate": {"fields": ["name", "qty", "price", "category"], "example": '{"name":"...", "qty": 1, "price": 1000, "category": "..."}'},
+    "expense_estimate": {"fields": ["name", "unit", "qty", "price", "category"], "example": '{"name":"...", "unit":"шт.", "qty": 1, "price": 1000, "category": "..."}'},
     "family_budget": {"fields": ["name", "type", "amount", "category"], "example": '{"name":"...", "type": "доход"|"расход", "amount": 1000, "category": "..."}'},
     "project_budget": {"fields": ["name", "type", "amount", "category"], "example": '{"name":"...", "type": "доход"|"расход", "amount": 1000, "category": "..."}'},
     "price_list": {"fields": ["name", "unit", "qty", "price", "discount", "category"], "example": '{"name":"...", "unit":"шт", "qty": 1, "price": 1000, "discount": 0, "category": "..."}'},
@@ -7077,11 +7080,17 @@ EXCEL_MIN_ROWS_AI = {
 }
 
 
-def build_excel_items(path, title, kind, colors, rows, subtitle=None):
+def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_style='standard', excel_palette='green'):
     """Собирает смету/бюджет/прайс/расчётную таблицу с реальными формулами Excel.
     rows - список dict по схеме EXCEL_ROW_SCHEMA[kind]. Если хотя бы у одной строки заполнено
     поле category - добавляется колонка "Категория" и блок промежуточных итогов по ней (реальные
     формулы SUMIF, не текст). В конце - диаграмма по данным таблицы и мягкая защита формул."""
+    if kind == 'expense_estimate':
+        from excel_styles import build_estimate
+        cache = build_estimate(path, title, rows, style=excel_style, palette=excel_palette,
+                               subtitle=subtitle, number=_xl_num)
+        _xl_inject_cached_values(path, cache)
+        return
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Таблица"
@@ -7426,6 +7435,7 @@ async def start_excel(m: Message, state: FSMContext):
     if not can_afford(m.from_user.id, CREDIT_COSTS["excel"]):
         await send_no_credits_notice(m, state, lang)
         return
+    await state.update_data(excel_style='standard', excel_palette='green')
     await m.answer(tr("msg_for_whom_table", lang), reply_markup=excel_category_kb(lang))
     await state.set_state(Form.waiting_excel_category)
 
@@ -7458,7 +7468,12 @@ async def excel_kind(m: Message, state: FSMContext):
         cat = data.get("excel_category", "physical")
         await m.answer(tr("msg_pick_table", lang), reply_markup=excel_kind_kb(cat, lang))
         return
-    await state.update_data(excel_kind=kind, extra="")
+    await state.update_data(excel_kind=kind, extra="", excel_style='standard', excel_palette='green')
+    if kind == 'expense_estimate':
+        await m.answer('Выбери оформление сметы:' if lang == 'ru' else 'Choose estimate layout:',
+                       reply_markup=excel_appearance_kb('style', lang))
+        await state.set_state(Form.waiting_excel_style)
+        return
     if kind == "startup_model":
         # Финмодель - данные всегда реальные от пользователя, режим "сгенерировать" тут не предлагаем.
         await m.answer(
@@ -7471,6 +7486,41 @@ async def excel_kind(m: Message, state: FSMContext):
         tr("msg_how_build_table", lang),
         reply_markup=excel_mode_kb(lang)
     )
+    await state.set_state(Form.waiting_excel_mode)
+
+
+def excel_appearance_kb(kind, lang='ru'):
+    labels = EXCEL_STYLES if kind == 'style' else EXCEL_PALETTES
+    rows = [[KeyboardButton(text=label)] for label in labels.values()]
+    rows.append([KeyboardButton(text=tr('btn_main_menu', lang))])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+@dp.message(Form.waiting_excel_style)
+async def excel_style_choice(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    style = next((key for key, label in EXCEL_STYLES.items() if label == m.text), None)
+    if not style:
+        await m.answer('Выбери стиль кнопкой:', reply_markup=excel_appearance_kb('style', lang))
+        return
+    await state.update_data(excel_style=style, excel_palette='green')
+    if style == 'designer':
+        await m.answer('Выбери цвет сметы:', reply_markup=excel_appearance_kb('palette', lang))
+        await state.set_state(Form.waiting_excel_palette)
+    else:
+        await m.answer(tr('msg_how_build_table', lang), reply_markup=excel_mode_kb(lang))
+        await state.set_state(Form.waiting_excel_mode)
+
+
+@dp.message(Form.waiting_excel_palette)
+async def excel_palette_choice(m: Message, state: FSMContext):
+    lang = user_lang(m.from_user.id)
+    palette = next((key for key, label in EXCEL_PALETTES.items() if label == m.text), None)
+    if not palette:
+        await m.answer('Выбери цвет кнопкой:', reply_markup=excel_appearance_kb('palette', lang))
+        return
+    await state.update_data(excel_style='designer', excel_palette=palette)
+    await m.answer(tr('msg_how_build_table', lang), reply_markup=excel_mode_kb(lang))
     await state.set_state(Form.waiting_excel_mode)
 
 
@@ -7729,7 +7779,8 @@ async def excel_build(m: Message, state: FSMContext):
             if topic and data.get("excel_mode") != "user":
                 topic_short = topic if len(topic) <= 60 else topic[:57] + "..."
                 xl_subtitle += f" · Тема: {topic_short}"
-            (await run_heavy(build_excel_items, xlsx_path, parsed.get("title") or EXCEL_KIND_DESC.get(kind, "Таблица"), kind, colors, rows, subtitle=xl_subtitle))
+            (await run_heavy(build_excel_items, xlsx_path, parsed.get("title") or EXCEL_KIND_DESC.get(kind, "Таблица"), kind, colors, rows, subtitle=xl_subtitle,
+                             excel_style=data.get('excel_style', 'standard'), excel_palette=data.get('excel_palette', 'green')))
             title_for_name = parsed.get("title") or EXCEL_KIND_DESC.get(kind)
 
         fname = safe_filename(title_for_name, fallback=EXCEL_KIND_DESC.get(kind, "Таблица"))
@@ -9304,7 +9355,7 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
                 await send_no_credits_notice(m, state, lang)
                 return
             kind = guess_excel_kind(text)
-            await state.update_data(excel_kind=kind, excel_topic=text, extra="", excel_mode="ai")
+            await state.update_data(excel_kind=kind, excel_topic=text, extra="", excel_mode="ai", excel_style='standard', excel_palette='green')
             await bot.send_message(m.from_user.id, tr("msg_request_accepted", lang))
             await excel_build(m, state)
             return
@@ -9519,9 +9570,11 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         content = _clip_text(payload.get("content"), 4000)
         if not content:
             return
+        excel_style, excel_palette = normalize_excel_appearance(payload.get('excel_style'), payload.get('excel_palette'))
         await state.update_data(
             excel_kind=payload.get("kind") or "calc_table", excel_topic=content,
             extra=_clip_text(payload.get("extra"), 800), excel_mode=payload.get("mode") or "ai",
+            excel_style=excel_style, excel_palette=excel_palette,
         )
         await excel_build(m, state)
         return
@@ -9817,7 +9870,7 @@ async def build_excel_from_upload(m: Message, state: FSMContext, source_text: st
         kind = "calc_table"
     # Переиспользуем существующий сборщик Excel (режим "свои данные") тем же способом -
     # через заполнение состояния, а не копию логики.
-    await state.update_data(excel_kind=kind, excel_mode="user", excel_topic=source_text, extra=instruction)
+    await state.update_data(excel_kind=kind, excel_mode="user", excel_topic=source_text, extra=instruction, excel_style='standard', excel_palette='green')
     await excel_build(m, state)
 
 
