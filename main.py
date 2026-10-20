@@ -9027,12 +9027,17 @@ async def word_build(m: Message, state: FSMContext, quality_action=None):
                     os.remove(p)
                 except Exception:
                     pass
-            final_msg = tr("msg_doc_ready", lang)
-            if kind not in STUDY_KINDS:
-                final_msg += tr("msg_check_gaps", lang)
-            final_msg += "\n\n" + await signature_line(lang)
-            await m.answer(final_msg, reply_markup=main_kb(lang, uid=m.from_user.id))
             await state.clear()
+            try:
+                final_msg = tr("msg_doc_ready", lang)
+                if kind not in STUDY_KINDS:
+                    final_msg += tr("msg_check_gaps", lang)
+                final_msg += "\n\n" + await signature_line(lang)
+                await m.answer(final_msg, reply_markup=main_kb(lang, uid=m.from_user.id))
+            except Exception as exc:
+                # Both files are already delivered and charged; a failed courtesy
+                # message must not offer a retry of the completed order.
+                print("Word completion_notice failure=" + type(exc).__name__, flush=True)
         finally:
             for path in (docx_path, pdf_path):
                 if path and os.path.exists(path):

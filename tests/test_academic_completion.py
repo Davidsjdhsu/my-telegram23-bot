@@ -81,6 +81,22 @@ class CompletionTests(unittest.IsolatedAsyncioTestCase):
         env['spend_credits'].assert_not_called()
         m.answer_document.assert_not_awaited()
 
+    async def test_failed_completion_notice_cannot_repeat_completed_order(self):
+        env, m, state, data, layout = self.setup_flow()
+        with patch.object(academic, 'inspect_layout', return_value=layout):
+            await env['word_build'](m, state)
+        async def answer(text, **kwargs):
+            if text.startswith('msg_doc_ready'):
+                raise RuntimeError('fixture_final_notice')
+        m.answer.side_effect = answer
+        await env['word_build'](m, state, quality_action='accept')
+        self.assertEqual(data, {})
+        self.assertEqual(m.answer_document.await_count, 2)
+        env['spend_credits'].assert_called_once()
+        await env['word_build'](m, state, quality_action='accept')
+        self.assertEqual(m.answer_document.await_count, 2)
+        env['spend_credits'].assert_called_once()
+
     async def test_failed_delivery_or_balance_change_retains_pending_without_charge(self):
         for case in ('pdf', 'balance', 'busy'):
             env, m, state, data, layout = self.setup_flow()
