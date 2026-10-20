@@ -63,7 +63,7 @@ class ExcelAppearanceTests(unittest.TestCase):
 class ExcelStyleFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_miniapp_settings_reach_file_and_charge_after_send(self):
         for kind, style, palette, fail_send in [(kind,style,palette,failed)
-                for kind in ['expense_estimate','family_budget','project_budget']
+                for kind in ['expense_estimate','family_budget','project_budget','price_list']
                 for style,palette,failed in [('standard','copper',False), ('designer','burgundy',False), ('designer','copper',True)]]:
             state_data = {}
             async def update(**kwargs): state_data.update(kwargs)
@@ -72,7 +72,7 @@ class ExcelStyleFlowTests(unittest.IsolatedAsyncioTestCase):
             order = []
             async def send(file, **kwargs):
                 ws = load_workbook(file).active
-                header = 8 if style == 'designer' else 4
+                header = (6 if kind == 'price_list' else 8) if style == 'designer' else 4
                 expected = PALETTES[palette if style == 'designer' else 'green'][0]
                 self.assertEqual(ws.cell(header,2).fill.fgColor.rgb[-6:], expected)
                 order.append('send')
@@ -86,7 +86,7 @@ class ExcelStyleFlowTests(unittest.IsolatedAsyncioTestCase):
                 grok_json_lang_instruction=lambda _: '',content_gen_lang=lambda *a,**kw:'ru',
                 EXCEL_ROW_SCHEMA={kind:{'fields':['name','qty','price','category'],'example':'{}'}},
                 EXCEL_MIN_ROWS_AI={'expense_estimate':12},EXCEL_KIND_DESC={'expense_estimate':'Смета'},
-                ask_grok=AsyncMock(return_value=json.dumps({'title':'Проверка','rows':ROWS if kind=='expense_estimate' else
+                ask_grok=AsyncMock(return_value=json.dumps({'title':'Проверка','rows':ROWS if kind in ('expense_estimate','price_list') else
                     [{'name':'Доход','type':'income','amount':1000,'category':'Проект'},
                      {'name':'Расход','type':'expense','amount':300,'category':'Проект'}]})),extract_json=json.loads,
                 run_heavy=run,build_excel_items=office_env()['build_excel_items'],datetime=datetime,

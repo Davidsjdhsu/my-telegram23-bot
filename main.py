@@ -4954,13 +4954,13 @@ EXCEL_KIND_HINTS_I18N = {
                "zh": "价目表用于什么？例如：咖啡店价目表、清洁服务。",
                "es": "¿Lista de precios de qué? Ej.: carta de una cafetería, servicios de limpieza.",
                "fr": "Liste de prix pour quoi ? Ex. : carte d'un café, services de nettoyage."},
-        "user": {"ru": "Пришли позиции прайса: наименование, единица, количество, цена, скидка (если есть) - оформлю с формулами сумм.",
-                 "en": "Send price list items: name, unit, quantity, price, discount (if any) - I'll format it with sum formulas.",
-                 "de": "Sende die Positionen: Bezeichnung, Einheit, Menge, Preis, Rabatt (falls vorhanden) - ich erstelle Summenformeln.",
-                 "ar": "أرسل بنود القائمة: الاسم، الوحدة، الكمية، السعر، الخصم (إن وجد) - سأضيف معادلات الإجمالي.",
-                 "zh": "请发送价目表条目：名称、单位、数量、单价、折扣（如有），我会加上求和公式。",
-                 "es": "Envía las partidas: nombre, unidad, cantidad, precio, descuento (si lo hay) - añadiré fórmulas de suma.",
-                 "fr": "Envoie les postes : nom, unité, quantité, prix, remise (le cas échéant) - j'ajouterai les formules de somme."},
+        "user": {"ru": "Пришли названия товаров или услуг и цены за единицу. Можно добавить артикулы, единицы измерения, примечания и скидки в процентах. Цены со скидкой будут пересчитываться формулами.",
+                 "en": "Send product or service names and unit prices. You can add item codes, units, notes and percentage discounts. Discounted prices will use formulas.",
+                 "de": "Sende Produkt- oder Dienstleistungsnamen und Stückpreise. Optional: Artikelnummern, Einheiten, Hinweise und Rabatte in Prozent. Rabattpreise werden mit Formeln berechnet.",
+                 "ar": "أرسل أسماء المنتجات أو الخدمات وأسعار الوحدة. يمكنك إضافة رموز الأصناف والوحدات والملاحظات والخصومات بالنسبة المئوية. تُحسب الأسعار بعد الخصم بالمعادلات.",
+                 "zh": "请发送商品或服务名称和单价。可以添加货号、单位、备注及折扣百分比。折后价格将用公式计算。",
+                 "es": "Envía nombres de productos o servicios y precios unitarios. Puedes añadir códigos, unidades, notas y descuentos porcentuales. Los precios con descuento usarán fórmulas.",
+                 "fr": "Envoie les noms des produits ou services et les prix unitaires. Tu peux ajouter des références, unités, notes et remises en pourcentage. Les prix remisés seront calculés par des formules."},
     },
     "calc_table": {
         "ai": {"ru": "По какой теме нужна расчётная таблица для работы? Например: результаты опроса по теме курсовой.",
@@ -7063,7 +7063,7 @@ EXCEL_ROW_SCHEMA = {
     "expense_estimate": {"fields": ["name", "unit", "qty", "price", "category"], "example": '{"name":"...", "unit":"шт.", "qty": 1, "price": 1000, "category": "..."}'},
     "family_budget": {"fields": ["name", "type", "amount", "category"], "example": '{"name":"...", "type": "доход"|"расход", "amount": 1000, "category": "..."}'},
     "project_budget": {"fields": ["name", "type", "amount", "category"], "example": '{"name":"...", "type": "доход"|"расход", "amount": 1000, "category": "..."}'},
-    "price_list": {"fields": ["name", "unit", "qty", "price", "discount", "category"], "example": '{"name":"...", "unit":"шт", "qty": 1, "price": 1000, "discount": 0, "category": "..."}'},
+    "price_list": {"fields": ["sku", "name", "unit", "price", "discount", "category", "note"], "example": '{"sku":"", "name":"...", "unit":"шт", "price": 1000, "discount": null, "category": "", "note":""}'},
     "calc_table": {"fields": ["name", "value"], "example": '{"name":"...", "value": 100}'},
 }
 
@@ -7095,6 +7095,12 @@ def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_styl
         from excel_budgets import build_budget
         cache = build_budget(path, title, kind, rows, style=excel_style, palette=excel_palette,
                              subtitle=subtitle, number=_xl_num)
+        _xl_inject_cached_values(path, cache)
+        return
+    if kind == 'price_list':
+        from excel_prices import build_price_list
+        cache = build_price_list(path, title, rows, style=excel_style, palette=excel_palette,
+                                 subtitle=subtitle, number=_xl_num)
         _xl_inject_cached_values(path, cache)
         return
     wb = openpyxl.Workbook()
@@ -7475,7 +7481,7 @@ async def excel_kind(m: Message, state: FSMContext):
         await m.answer(tr("msg_pick_table", lang), reply_markup=excel_kind_kb(cat, lang))
         return
     await state.update_data(excel_kind=kind, extra="", excel_style='standard', excel_palette='green')
-    if kind in ('expense_estimate', 'family_budget', 'project_budget'):
+    if kind in ('expense_estimate', 'family_budget', 'project_budget', 'price_list'):
         await m.answer('Выбери оформление таблицы:' if lang == 'ru' else 'Choose table layout:',
                        reply_markup=excel_appearance_kb('style', lang))
         await state.set_state(Form.waiting_excel_style)
@@ -7750,6 +7756,13 @@ async def excel_build(m: Message, state: FSMContext):
             if kind in ('family_budget', 'project_budget') and not ai_mode:
                 task_line += (' Для бюджета, если сумма не указана, используй amount: null, а не 0. '
                               'Явно указанную нулевую сумму сохраняй как 0.')
+            if kind == 'price_list':
+                task_line += (' Это каталог цен за единицу, а не заказ или смета: не добавляй количество и общую сумму. '
+                              'Артикул sku сохраняй строкой, включая ведущие нули. Сохраняй примечания в note. '
+                              'Не придумывай артикулы, скидки или условия продажи. Если скидка не запрошена, '
+                              'discount: null; если запрошена, укажи процент числом от 0 до 100 (10 означает 10%). '
+                              'Если цена не указана в режиме реальных данных, price: null, а не 0. '
+                              'Явно указанную нулевую цену сохраняй как 0. Не округляй и не заменяй присланные цены.')
             raw = await ask_grok(f"""Собери содержимое для Excel-таблицы: {EXCEL_KIND_DESC.get(kind)}.
 {task_line}
 Тема/данные: {topic}
