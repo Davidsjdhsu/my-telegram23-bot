@@ -29,7 +29,7 @@ class PageContractTests(unittest.IsolatedAsyncioTestCase):
     async def run_handler(self, kind, actual_body, fail_send=False):
         env, message, state = WordWorkflowTests().env()
         state.get_data.return_value = {'word_kind': kind, 'word_pages': 6, 'topic': 'Учебная тема',
-                                      'extra': 'Вуз: Учебный вуз\nДисциплина: Информатика\nФИО: Анна Петрова\nГруппа: ИС-21\nПреподаватель: Ирина Петрова\nГород: Москва\nГод: 2026'}
+                                      'extra': 'Вуз: Учебный вуз\nДисциплина: Информатика\nФИО: Анна Петрова\nГруппа: ИС-21\nПреподаватель: Ирина Петрова\nГород: Москва\nКурс: 1\nГод: 2026'}
         env['WORD_KIND_LABELS'] = {k: {'ru': k} for k in academic.KINDS}
         env['word_cost'] = lambda n: n * 5
         content = {'title': 'Тема', 'sections': [{'title': 'Проблема', 'content': 'Пояснение.'}]}

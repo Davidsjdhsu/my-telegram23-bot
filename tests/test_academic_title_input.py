@@ -73,7 +73,7 @@ class TitleInputTests(unittest.IsolatedAsyncioTestCase):
     def test_cover_preserves_spacer_geometry_and_manual_fields(self):
         from docx import Document
         reference = Document(academic.blank_path('referat'))
-        cover = academic._cover('essay', 'Тема', {})
+        cover = academic._cover('referat', 'Тема', {})
         for i, paragraph in enumerate(reference.paragraphs):
             if not paragraph.text.strip():
                 self.assertEqual(paragraph.paragraph_format.line_spacing,
@@ -85,3 +85,46 @@ class TitleInputTests(unittest.IsolatedAsyncioTestCase):
                       'Автор работы', 'Группа', 'Город', 'Год'):
             self.assertIn(value, text)
         self.assertNotIn('2026', text)
+
+    def test_genres_have_their_own_slots_and_fields(self):
+        expected = {
+            'essay': ('Научный руководитель:', 'Выполнил: студент группы'),
+            'report': ('Проверил:', 'Выполнил студент'),
+            'notes': ('№ зачётной книжки:', 'Оценка:', 'Дата:', 'Подпись:'),
+        }
+        for kind, markers in expected.items():
+            cover = academic._cover(kind, 'Моя тема', {'course': '2', 'record_book': '12345'})
+            text = '\n'.join(p.text for p in cover.paragraphs)
+            for marker in markers:
+                self.assertIn(marker, text)
+            self.assertNotIn('Автор работы', text)
+            self.assertNotIn('[' , text)
+            if kind != 'notes':
+                self.assertNotIn('Подпись:', text)
+                self.assertNotIn('Оценка:', text)
+            if kind == 'report':
+                self.assertIn('«МОЯ ТЕМА»', text)
+            if kind == 'notes':
+                self.assertIn('12345', text)
+
+    def test_questions_follow_selected_cover_and_do_not_ask_unused_discipline(self):
+        for kind in ('essay', 'report', 'coursework'):
+            self.assertNotIn('discipline', academic.missing_title_fields({'word_kind': kind}))
+        for kind in ('notes', 'report'):
+            self.assertIn('course', academic.missing_title_fields({'word_kind': kind}))
+            self.assertNotIn('course', academic.missing_title_fields({'word_kind': kind, 'extra': 'Курс: 2'}))
+        parsed = academic.explicit_meta({}, 'Номер зачетной книжки: 123\nДолжность преподавателя: Доцент\nИнститут: Институт технологий')
+        self.assertEqual(parsed['record_book'], '123')
+        self.assertEqual(parsed['teacher_position'], 'Доцент')
+        self.assertEqual(parsed['institute'], 'Институт технологий')
+
+    def test_assets_have_distinct_provenance_and_unchanged_tsu_sources(self):
+        import hashlib, json
+        sources = json.loads((academic.ASSETS / 'sources.json').read_text())
+        forms = {item['kind']: item for item in sources['forms']}
+        for kind in academic.KINDS:
+            self.assertEqual(hashlib.sha256(academic.blank_path(kind).read_bytes()).hexdigest(),
+                             forms[kind]['sha256'])
+        self.assertEqual(len({forms[k]['source'] for k in ('essay', 'notes', 'report')}), 3)
+        self.assertEqual(forms['referat']['sha256'], 'c79f2e0ef6bbe4d42946c7fa531b34fc43becec8cb75f5614bddfd0543166ff2')
+        self.assertEqual(forms['coursework']['sha256'], '37375b78a25a58517e990d7029393f62fea1b72ef09b6e9f9867759250876e70')

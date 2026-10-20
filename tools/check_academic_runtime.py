@@ -68,17 +68,18 @@ async def main():
               'teacher':'Петрова-Смирнова Александра Константиновна',
               'author':'Иванов-Сидоров Александр Константинович', 'group':'ИС-21',
               'city':'Москва', 'year':'2026'}
-        for case, values in [('long', meta), ('empty', {})]:
-            src=root/(case+'.docx'); dest=src.with_suffix('.pdf')
-            render(src,title,[{'title':'Проверка','content':'Контроль основного текста.'}],'essay',values)
-            await convert_word_pdf(src,dest)
-            reader=PdfReader(dest)
-            assert len(reader.pages)==2,(case,len(reader.pages))
-            first=reader.pages[0].extract_text()
-            assert ('Москва' if values else 'Город') in first
-            assert 'Контроль основного текста' in reader.pages[1].extract_text()
-            for key in ('school','teacher','author'):
-                if values:
-                    assert ' '.join(values[key].split()) in ' '.join(first.split()), (case,key)
-        print('academic runtime_check=passed blanks=9 genres=5 covers=all5 cover_long_and_empty=passed body_pages=separate toc=verified short_referat=flowing density=all_body_pages credits=unchanged paid_api_calls=0',flush=True)
+        for kind in ('referat','coursework','essay','report','notes'):
+            for case, values in [('long', meta), ('empty', {})]:
+                src=root/(kind+'_'+case+'.docx'); dest=src.with_suffix('.pdf')
+                render(src,title,[{'title':'Проверка','content':'Контроль основного текста.'}],kind,values)
+                await convert_word_pdf(src,dest)
+                reader=PdfReader(dest)
+                assert len(reader.pages)==(3 if kind in ('referat','coursework') else 2),(kind,case,len(reader.pages))
+                first=reader.pages[0].extract_text()
+                assert ('Москва' if values else 'Город') in first
+                assert 'Контроль основного текста' in reader.pages[-1].extract_text()
+                for key in ('school','teacher','author'):
+                    if values:
+                        assert ' '.join(values[key].split()) in ' '.join(first.split()), (case,key)
+        print('academic runtime_check=passed blanks=12 genres=5 covers=all5 cover_long_and_empty=all5 body_pages=separate toc=verified short_referat=flowing density=all_body_pages credits=unchanged paid_api_calls=0',flush=True)
 if __name__=='__main__':asyncio.run(main())

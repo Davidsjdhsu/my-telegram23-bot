@@ -21,6 +21,9 @@ COVER_LABELS = {'referat': 'РЕФЕРАТ', 'coursework': 'КУРСОВАЯ Р�
 BLANKS = {
     'referat': 'Реферат — титульный лист',
     'coursework': 'Курсовая — титульный лист',
+    'essay': 'Эссе — титульный лист',
+    'report': 'Доклад — титульный лист',
+    'notes': 'Конспект — титульный лист',
     'course_project': 'Курсовой проект — титульный лист',
     'lab': 'Лабораторная — титульный лист',
     'practice': 'Практика — титульный лист',
@@ -29,17 +32,30 @@ BLANKS = {
     'master': 'Магистерская — титульный лист',
     'assignment': 'Задание на ВКР',
 }
-NOTICE = ('Оформление адаптировано по материалам ТГУ и МПСУ, без чужих логотипов. '
+NOTICE = ('Титульные адаптированы по отдельным образцам ТГУ, Московского международного '
+          'университета, Самарского университета и Международного банковского института, без чужих логотипов. '
           'Это базовый вариант: требования вашей кафедры могут отличаться.')
 META_LABELS = {'org':'Ведомство', 'school':'Учебное заведение', 'department':'Факультет или кафедра',
                'discipline':'Дисциплина', 'author':'ФИО студента', 'group':'Группа',
                'teacher':'Руководитель', 'teacher_position':'Должность руководителя',
-               'specialty':'Направление подготовки', 'profile':'Профиль', 'city':'Город', 'year':'Год'}
+               'specialty':'Направление подготовки', 'profile':'Профиль', 'city':'Город', 'year':'Год',
+               'course':'Курс', 'record_book':'Номер зачётной книжки', 'institute':'Институт'}
 ALIASES = {'вуз':'school','университет':'school','учебное заведение':'school','фио':'author',
            'автор':'author','студент':'author','фио студента':'author','преподаватель':'teacher',
            'фио преподавателя':'teacher','фио научного руководителя':'teacher','научный руководитель':'teacher',
-           'факультет':'department','кафедра':'department','специальность':'specialty'}
+           'факультет':'department','кафедра':'department','специальность':'specialty',
+           'номер зачетной книжки':'record_book','№ зачётной книжки':'record_book',
+           '№ зачетной книжки':'record_book','зачётная книжка':'record_book',
+           'должность преподавателя':'teacher_position','ученая степень, звание':'teacher_position',
+           'учёная степень, звание':'teacher_position'}
 TITLE_FIELDS = ('school', 'discipline', 'author', 'group', 'teacher', 'city', 'year')
+TITLE_FIELDS_BY_KIND = {
+    'referat': TITLE_FIELDS,
+    'coursework': ('school', 'author', 'group', 'teacher', 'city', 'year'),
+    'essay': ('school', 'author', 'group', 'teacher', 'city', 'year'),
+    'report': ('school', 'course', 'author', 'group', 'teacher', 'city', 'year'),
+    'notes': ('school', 'discipline', 'course', 'author', 'group', 'teacher', 'city', 'year'),
+}
 LEAVE_TITLE_BLANKS = 'Оставить пустые поля'
 
 
@@ -56,14 +72,18 @@ def title_request_key(data):
 
 def missing_title_fields(data):
     meta = request_meta(data)
-    return [key for key in TITLE_FIELDS if not meta.get(key)]
+    return [key for key in TITLE_FIELDS_BY_KIND.get(data.get('word_kind'), TITLE_FIELDS)
+            if not meta.get(key)]
 
 
 def title_question(data):
     fields = '\n'.join(META_LABELS[key] + ': ' for key in missing_title_fields(data))
+    optional = (' Для конспекта можно также указать «Номер зачётной книжки: …» '
+                'и «Должность преподавателя: …». Оценка, дата проверки и подписи остаются пустыми.'
+                if data.get('word_kind') == 'notes' else '')
     return ('Для титульного листа по учебному образцу не хватает данных. '
             'Пришли их одним сообщением, сохранив названия полей:\n\n' + fields
-            + '\n\nКафедру можно добавить отдельной строкой «Кафедра: …». '
+            + '\n\nКафедру можно добавить отдельной строкой «Кафедра: …».' + optional + ' '
               'Если часть данных неизвестна, нажми «' + LEAVE_TITLE_BLANKS
             + '»: в документе останутся строки для ручного заполнения. '
               'Генерация ещё не началась, кредиты не списаны.')
@@ -117,7 +137,9 @@ def _text(p, text):
 
 
 def _cover(kind, title, meta):
-    d = Document(blank_path('coursework' if kind == 'coursework' else 'referat'))
+    if kind in ('essay', 'report', 'notes'):
+        return _independent_cover(kind, title, meta)
+    d = Document(blank_path(kind))
     _ensure_styles(d)
     # Body Normal uses a first-line indent and 14 pt; the source cover uses
     # 12 pt without that indent. Keep its own style so body styling cannot leak in.
@@ -183,6 +205,58 @@ def _cover(kind, title, meta):
                 p = group.pop()
                 p._p.getparent().remove(p._p)
                 extra_lines -= 1
+    return d
+
+
+def _independent_cover(kind, title, meta):
+    """Fill each source-derived asset by stable slots, never by a shared cover."""
+    d = Document(blank_path(kind))
+    _ensure_styles(d)
+    value = lambda key, label: meta.get(key) or label + ' __________'
+    fields = {
+        'school': value('school', 'Учебное заведение:'),
+        'department': meta.get('department', ''),
+        'org': meta.get('org', ''), 'institute': meta.get('institute', ''),
+        'title': '«' + title.upper() + '»' if kind == 'report' else title,
+        'author': ('Выполнил: ' if kind == 'notes' else '') + value('author', 'ФИО студента:'),
+        'group': ('Выполнил: студент группы ' if kind == 'essay' else 'Группа ') + value('group', ''),
+        'course': ('Выполнил студент ' if kind == 'report' else 'Студент ') + value('course', '') + ' курса',
+        'teacher': ('Преподаватель: ' if kind == 'notes' else '') + value('teacher', 'ФИО руководителя:'),
+        'teacher_position': ('Должность: ' if kind == 'notes' else '') + value('teacher_position', 'Степень, звание:'),
+        'discipline': 'по дисциплине «' + value('discipline', '') + '»',
+        'record_book': '№ зачётной книжки: ' + value('record_book', ''),
+        'city': value('city', 'Город'),
+        'year': value('year', 'Год'),
+        'city_year': value('city', 'Город') + (' — ' if kind == 'essay' else ' ') + value('year', 'Год'),
+    }
+    extra_height = 0
+    gaps = []
+    for p in d.paragraphs:
+        if p.style.name == 'Academic Gap':
+            gaps.append(p)
+            continue
+        slots = [e.get(qn('w:name'), '').removeprefix('academic_slot_')
+                 for e in p._p.findall(qn('w:bookmarkStart'))
+                 if e.get(qn('w:name'), '').startswith('academic_slot_')]
+        if slots:
+            _text(p, fields[slots[0]])
+        # Conservative line capacity at 14 pt; use spare spacing for long fields.
+        width = 29 if p.paragraph_format.left_indent else 62
+        lines = sum(max(1, len(textwrap.wrap(line, width=width)))
+                    for line in p.text.split('\n'))
+        extra_height += max(0, lines - 1) * 18
+    remaining = extra_height
+    # Spread reduction across the existing gaps so the visual hierarchy survives.
+    while remaining > 0.5 and gaps:
+        active = [p for p in gaps if (p.paragraph_format.space_after or Pt(0)).pt > 0]
+        if not active:
+            break
+        share = remaining / len(active)
+        for p in active:
+            before = p.paragraph_format.space_after.pt
+            reduction = min(before, share)
+            p.paragraph_format.space_after = Pt(before - reduction)
+            remaining -= reduction
     return d
 
 

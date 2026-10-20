@@ -21,7 +21,7 @@ SECTIONS=[{'title':'Содержание','content':'НЕВЕРНОЕ ОГЛАВ
 
 class LayoutTests(unittest.TestCase):
     def test_all_blanks_are_neutral_editable_and_keep_source_geometry(self):
-        self.assertEqual(len(academic.BLANKS),9)
+        self.assertEqual(len(academic.BLANKS),12)
         for key in academic.BLANKS:
             p=academic.blank_path(key);d=Document(p)
             text=' '.join(n.text or '' for n in d.element.iter(qn('w:t')))
@@ -91,7 +91,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
             async def prepare(*args, **kwargs):
                 return await prepare_word_files(*args, **kwargs, measure=lambda _: academic.front_matter_pages(kind) + 2)
             e['prepare_word_files'] = prepare
-            data={'word_kind':kind,'word_pages':5,'topic':'Тема: Файлы\nВуз: Мой вуз\nФИО: Анна Петрова\nГруппа: ИС-21\nГод: 2028\nДисциплина: Информатика\nПреподаватель: Ирина Петрова\nГород: Москва'}
+            data={'word_kind':kind,'word_pages':5,'topic':'Тема: Файлы\nВуз: Мой вуз\nФИО: Анна Петрова\nГруппа: ИС-21\nКурс: 1\nГод: 2028\nДисциплина: Информатика\nПреподаватель: Ирина Петрова\nГород: Москва'}
             state.get_data.return_value=data
             e.update(WORD_KIND_LABELS={k:{'ru':k}for k in academic.KINDS})
             e['ask_grok'].return_value=json.dumps({'title':'Файлы','meta':{'school':'Ошибочный вуз'},'sections':SECTIONS},ensure_ascii=False)
@@ -117,9 +117,9 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
             c=SimpleNamespace(data='study_blank:'+key,from_user=SimpleNamespace(id=123),answer=AsyncMock(),message=SimpleNamespace(answer_document=AsyncMock()))
             await fn(c)
             self.assertTrue(c.message.answer_document.call_args.args[0].is_file())
-        self.assertEqual(env['finish_job'].call_count,9)
+        self.assertEqual(env['finish_job'].call_count,12)
         c.message.answer_document.side_effect=RuntimeError('offline')
         with self.assertRaises(RuntimeError):await fn(c)
-        self.assertEqual(env['finish_job'].call_count,10)
+        self.assertEqual(env['finish_job'].call_count,13)
         c.data='study_blank:../../main.py';c.message.answer_document.reset_mock()
         await fn(c);c.message.answer_document.assert_not_awaited()

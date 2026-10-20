@@ -81,6 +81,36 @@
       "sha256": "c79f2e0ef6bbe4d42946c7fa531b34fc43becec8cb75f5614bddfd0543166ff2",
       "source": "https://www.lib.tsu.ru/ru/oformlenie-rabot-i-spiskov-literatury",
       "adaptation": "Institution, department and city/year replaced with neutral editable labels; original structure preserved."
+    },
+    {
+      "kind": "essay",
+      "file": "essay.docx",
+      "sha256": "9e74290724302cca0f036191a7a1940a42081110699e421551bb97b36aa5a4bd",
+      "source": "https://mi.university/sveden/files/Metod_SRS_38.03.02-MSK_2018.pdf",
+      "institution": "Московский международный университет",
+      "location": "Приложение 3, страница 30",
+      "verification": "Source field structure verified from indexed institutional PDF text on 2026-10-20. Full PDF retrieval and visual comparison unavailable.",
+      "adaptation": "Independent editable reconstruction of this genre field structure. Neutral identities, black type, adaptive spacing; not a pixel-identical original or universally approved form. Notes adds topic, splits assessment/date and group/record-book into separate lines for safe filling."
+    },
+    {
+      "kind": "report",
+      "file": "report.docx",
+      "sha256": "d774aab90c331ceed6d8bf5cbd86e417b1f36fa65133d64ad17bc94358b2751c",
+      "source": "https://repo.ssau.ru/bitstream/Uchebnye-izdaniya/Istoriya-mirovoi-literatury-Antichnost-%E2%80%93-Srednevekove-114114/1/978-5-7883-2140-0_2024.pdf",
+      "institution": "Самарский университет",
+      "location": "Страница 59",
+      "verification": "Source field structure verified from indexed institutional PDF text on 2026-10-20. Full PDF retrieval and visual comparison unavailable.",
+      "adaptation": "Independent editable reconstruction of this genre field structure. Neutral identities, black type, adaptive spacing; not a pixel-identical original or universally approved form. Notes adds topic, splits assessment/date and group/record-book into separate lines for safe filling."
+    },
+    {
+      "kind": "notes",
+      "file": "notes.docx",
+      "sha256": "087207faf94b1df1d6d164efd03f6bab674da560267b166180f82263ac04051e",
+      "source": "https://www.ibispb.ru/docs/sveden/education/methodical-recommendation/bachelor-recommendation/bb/%D0%9B%D0%BE%D0%B3%D0%B8%D0%BA%D0%B0.pdf",
+      "institution": "Международный банковский институт",
+      "location": "Приложение 2, Логика",
+      "verification": "Source field structure verified from indexed institutional PDF text on 2026-10-20. Full PDF retrieval and visual comparison unavailable.",
+      "adaptation": "Independent editable reconstruction of this genre field structure. Neutral identities, black type, adaptive spacing; not a pixel-identical original or universally approved form. Notes adds topic, splits assessment/date and group/record-book into separate lines for safe filling."
     }
   ],
   "body_rules": {
