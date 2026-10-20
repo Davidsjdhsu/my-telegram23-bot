@@ -1934,7 +1934,7 @@
     const hint = document.getElementById('wordVolumeHint');
     hint.hidden = !academic;
     const toc = ['referat', 'coursework'].includes(kind);
-    hint.textContent = academic ? `Титульный лист${toc ? ' и оглавление' : ''} добавляются отдельно, без доплаты. ` +
+    hint.textContent = academic ? `Титульный лист${toc ? ' и оглавление' : ''} — отдельно, без доплаты. ` +
       `Всего: ${wordPages + (toc ? 2 : 1)} стр. Данные для титульного укажи в требованиях: учебное заведение, ФИО, группа, преподаватель, город и год.` : '';
     updateWordCostLabel();
   }
