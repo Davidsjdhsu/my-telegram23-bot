@@ -32,6 +32,7 @@ async def main():
             reader=PdfReader(dest);text='\n'.join(p.extract_text()for p in reader.pages)
             assert COVER_LABELS[kind] in reader.pages[0].extract_text(), kind
             assert 'Цель работы' not in reader.pages[0].extract_text(), kind
+            assert 'Москва' in reader.pages[0].extract_text(), (kind, 'cover_overflow')
             if kind in ('essay', 'notes', 'report'):
                 assert len(reader.pages) == 2, (kind, len(reader.pages))
                 assert len(inspect_layout(dest, kind)['body_page_fills']) == 1

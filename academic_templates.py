@@ -295,9 +295,7 @@ def render(path, title, sections, kind, meta=None, add_table=None, requested_pag
     _styles(d,covered)
     blocks=[dict(b) for b in sections or [] if str(b.get('title','')).strip().casefold() not in
             ('содержание','оглавление','титульный лист','contents','table of contents')]
-    if covered:
-        d.add_page_break()
-    else:
+    if not covered:
         p=d.add_paragraph(title,style='Title');p.alignment=WD_ALIGN_PARAGRAPH.CENTER
         p.paragraph_format.first_line_indent=Cm(0);p.paragraph_format.space_after=Pt(12)
         for k in ('school','discipline','author','group'):
@@ -307,6 +305,7 @@ def render(path, title, sections, kind, meta=None, add_table=None, requested_pag
     compact = kind == 'referat' and requested_pages is not None and requested_pages <= 10
     if toc:
         p=d.add_paragraph('ОГЛАВЛЕНИЕ');p.alignment=WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.page_break_before = True
         p.paragraph_format.first_line_indent=Cm(0);p.paragraph_format.space_after=Pt(14)
         p.runs[0].bold=True
         for i,b in enumerate(blocks):
@@ -316,6 +315,7 @@ def render(path, title, sections, kind, meta=None, add_table=None, requested_pag
             p.paragraph_format.left_indent=Cm(.6 if _level(head)==2 else 0)
             p.paragraph_format.tab_stops.add_tab_stop(Cm(16.2),WD_TAB_ALIGNMENT.RIGHT,WD_TAB_LEADER.DOTS)
             _field(p,' PAGEREF study_'+str(i)+' \\h ')
+    body_start_index = len(d.paragraphs)
     for i,b in enumerate(blocks):
         head=str(b.get('title') or '').strip()
         if head and kind != 'essay':
@@ -343,6 +343,8 @@ def render(path, title, sections, kind, meta=None, add_table=None, requested_pag
                             p.paragraph_format.line_spacing=1
                             p.paragraph_format.first_line_indent=Cm(0)
                             for r in p.runs:r.font.name='Times New Roman';r.font.size=Pt(12);r.font.color.rgb=RGBColor(0,0,0)
+    if covered and not toc and len(d.paragraphs) > body_start_index:
+        d.paragraphs[body_start_index].paragraph_format.page_break_before = True
     d.core_properties.author='';d.core_properties.last_modified_by=''
     d.save(path)
 
