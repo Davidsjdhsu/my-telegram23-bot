@@ -62,7 +62,9 @@ class ExcelAppearanceTests(unittest.TestCase):
 
 class ExcelStyleFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_miniapp_settings_reach_file_and_charge_after_send(self):
-        for style, palette, fail_send in [('standard','copper',False), ('designer','burgundy',False), ('designer','copper',True)]:
+        for kind, style, palette, fail_send in [(kind,style,palette,failed)
+                for kind in ['expense_estimate','family_budget','project_budget']
+                for style,palette,failed in [('standard','copper',False), ('designer','burgundy',False), ('designer','copper',True)]]:
             state_data = {}
             async def update(**kwargs): state_data.update(kwargs)
             state = SimpleNamespace(update_data=update, get_data=AsyncMock(side_effect=lambda: state_data), clear=AsyncMock())
@@ -82,15 +84,17 @@ class ExcelStyleFlowTests(unittest.IsolatedAsyncioTestCase):
                 normalize_excel_appearance=normalize_excel_appearance,start_job=lambda _: (True,''),
                 finish_job=Mock(),tr=lambda key,*a,**kw:key,pick_theme=lambda _:('default',COLORS),
                 grok_json_lang_instruction=lambda _: '',content_gen_lang=lambda *a,**kw:'ru',
-                EXCEL_ROW_SCHEMA={'expense_estimate':{'fields':['name','qty','price','category'],'example':'{}'}},
+                EXCEL_ROW_SCHEMA={kind:{'fields':['name','qty','price','category'],'example':'{}'}},
                 EXCEL_MIN_ROWS_AI={'expense_estimate':12},EXCEL_KIND_DESC={'expense_estimate':'Смета'},
-                ask_grok=AsyncMock(return_value=json.dumps({'title':'Проверка','rows':ROWS})),extract_json=json.loads,
+                ask_grok=AsyncMock(return_value=json.dumps({'title':'Проверка','rows':ROWS if kind=='expense_estimate' else
+                    [{'name':'Доход','type':'income','amount':1000,'category':'Проект'},
+                     {'name':'Расход','type':'expense','amount':300,'category':'Проект'}]})),extract_json=json.loads,
                 run_heavy=run,build_excel_items=office_env()['build_excel_items'],datetime=datetime,
                 safe_filename=lambda *a,**k:'estimate',FSInputFile=lambda path,**kw:path,
                 spend_credits=lambda *a:order.append('charge'),note_success=Mock(),os=os,
                 signature_line=AsyncMock(return_value=''),main_kb=lambda *a,**kw:None)
             env=load_functions(['excel_build','_handle_miniapp_payload'],e)
-            await env['_handle_miniapp_payload'](msg,state,{'kind':'expense_estimate','content':'Данные',
+            await env['_handle_miniapp_payload'](msg,state,{'kind':kind,'content':'Данные',
                 'mode':'user','excel_style':style,'excel_palette':palette},'gen_excel')
             self.assertEqual(order,['send'] if fail_send else ['send','charge'])
             self.assertEqual(user['generations'],0 if fail_send else 1)

@@ -7091,6 +7091,12 @@ def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_styl
                                subtitle=subtitle, number=_xl_num)
         _xl_inject_cached_values(path, cache)
         return
+    if kind in ('family_budget', 'project_budget'):
+        from excel_budgets import build_budget
+        cache = build_budget(path, title, kind, rows, style=excel_style, palette=excel_palette,
+                             subtitle=subtitle, number=_xl_num)
+        _xl_inject_cached_values(path, cache)
+        return
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Таблица"
@@ -7469,8 +7475,8 @@ async def excel_kind(m: Message, state: FSMContext):
         await m.answer(tr("msg_pick_table", lang), reply_markup=excel_kind_kb(cat, lang))
         return
     await state.update_data(excel_kind=kind, extra="", excel_style='standard', excel_palette='green')
-    if kind == 'expense_estimate':
-        await m.answer('Выбери оформление сметы:' if lang == 'ru' else 'Choose estimate layout:',
+    if kind in ('expense_estimate', 'family_budget', 'project_budget'):
+        await m.answer('Выбери оформление таблицы:' if lang == 'ru' else 'Choose table layout:',
                        reply_markup=excel_appearance_kb('style', lang))
         await state.set_state(Form.waiting_excel_style)
         return
@@ -7505,7 +7511,7 @@ async def excel_style_choice(m: Message, state: FSMContext):
         return
     await state.update_data(excel_style=style, excel_palette='green')
     if style == 'designer':
-        await m.answer('Выбери цвет сметы:', reply_markup=excel_appearance_kb('palette', lang))
+        await m.answer('Выбери цвет таблицы:', reply_markup=excel_appearance_kb('palette', lang))
         await state.set_state(Form.waiting_excel_palette)
     else:
         await m.answer(tr('msg_how_build_table', lang), reply_markup=excel_mode_kb(lang))
@@ -7741,6 +7747,9 @@ async def excel_build(m: Message, state: FSMContext):
                     f"\"Позиция 1\" - каждая строка должна называть конкретную, отличную от других статью."
                     + category_line
                 )
+            if kind in ('family_budget', 'project_budget') and not ai_mode:
+                task_line += (' Для бюджета, если сумма не указана, используй amount: null, а не 0. '
+                              'Явно указанную нулевую сумму сохраняй как 0.')
             raw = await ask_grok(f"""Собери содержимое для Excel-таблицы: {EXCEL_KIND_DESC.get(kind)}.
 {task_line}
 Тема/данные: {topic}

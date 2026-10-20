@@ -16,7 +16,14 @@ assert.equal(el('excelPaletteBlock').hidden,false);el('excelSubmit').click();
 assert.equal(sent.at(-1).payload.excel_palette,'copper');
 el('excelStyle').value='standard';el('excelStyle').click();el('excelSubmit').click();
 assert.equal(sent.at(-1).payload.excel_palette,'green');
-el('excelKind').value='family_budget';el('excelKind').click();el('excelSubmit').click();
+for (const kind of ['family_budget','project_budget']) {
+ el('excelKind').value=kind;el('excelKind').click();
+ assert.equal(el('excelAppearanceBlock').hidden,false);
+ el('excelStyle').value='designer';el('excelStyle').click();el('excelSubmit').click();
+ assert.equal(sent.at(-1).payload.excel_style,'designer');
+ assert.equal(sent.at(-1).payload.excel_palette,'copper');
+}
+el('excelKind').value='price_list';el('excelKind').click();el('excelSubmit').click();
 assert.equal(el('excelAppearanceBlock').hidden,true);assert.equal(sent.at(-1).payload.excel_style,'standard');
 assert.match(html,/data-cost="5"/);
 console.log('PASS: estimate layout selection, palette visibility, standard fixed green, outgoing payload.');

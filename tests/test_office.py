@@ -37,7 +37,7 @@ class OfficeTests(unittest.TestCase):
     def test_budget_type_and_labels(self):
         e=office_env()
         with tempfile.TemporaryDirectory() as td:
-            p=str(Path(td)/'budget.xlsx');e['build_excel_items'](p,'Бюджет','family_budget',COLORS,[{'name':'Аренда','type':'expense','amount':200}]);w=e['openpyxl'].load_workbook(p).active;self.assertEqual(w['C4'].value,'Расход');self.assertIn('A6:C6',str(w.merged_cells))
+            p=str(Path(td)/'budget.xlsx');e['build_excel_items'](p,'Бюджет','family_budget',COLORS,[{'name':'Аренда','type':'expense','amount':200}]);w=e['openpyxl'].load_workbook(p).active;self.assertEqual(w['C5'].value,'Расход');self.assertIn('A6:C6',str(w.merged_cells))
             with self.assertRaises(ValueError):e['build_excel_items'](p,'Бюджет','family_budget',COLORS,[{'name':'Аренда','type':'unknown','amount':200}])
 class WordWorkflowTests(unittest.IsolatedAsyncioTestCase):
     def env(self):

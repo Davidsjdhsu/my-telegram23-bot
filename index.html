@@ -1996,8 +1996,11 @@
   });
 
   // --- Отправка формы Excel ---
+  function supportsExcelAppearance() {
+    return ['expense_estimate', 'family_budget', 'project_budget'].includes(document.getElementById('excelKind').value);
+  }
   function updateExcelAppearance() {
-    const estimate = document.getElementById('excelKind').value === 'expense_estimate';
+    const estimate = supportsExcelAppearance();
     const designer = document.getElementById('excelStyle').value === 'designer';
     document.getElementById('excelAppearanceBlock').hidden = !estimate;
     document.getElementById('excelPaletteBlock').hidden = !estimate || !designer;
@@ -2013,8 +2016,8 @@
       content,
       extra: document.getElementById('excelExtra').value.trim(),
       mode: activeChipValue('excelMode', 'ai'),
-      excel_style: document.getElementById('excelKind').value === 'expense_estimate' ? document.getElementById('excelStyle').value : 'standard',
-      excel_palette: document.getElementById('excelKind').value === 'expense_estimate' && document.getElementById('excelStyle').value === 'designer' ? document.getElementById('excelPalette').value : 'green',
+      excel_style: supportsExcelAppearance() ? document.getElementById('excelStyle').value : 'standard',
+      excel_palette: supportsExcelAppearance() && document.getElementById('excelStyle').value === 'designer' ? document.getElementById('excelPalette').value : 'green',
     });
   });
 
