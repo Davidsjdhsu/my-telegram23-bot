@@ -91,7 +91,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
             async def prepare(*args, **kwargs):
                 return await prepare_word_files(*args, **kwargs, measure=lambda _: academic.front_matter_pages(kind) + 2)
             e['prepare_word_files'] = prepare
-            data={'word_kind':kind,'word_pages':5,'topic':'Тема: Файлы\nВуз: Мой вуз\nФИО: Анна Петрова\nГруппа: ИС-21\nГод: 2028'}
+            data={'word_kind':kind,'word_pages':5,'topic':'Тема: Файлы\nВуз: Мой вуз\nФИО: Анна Петрова\nГруппа: ИС-21\nГод: 2028\nДисциплина: Информатика\nПреподаватель: Ирина Петрова\nГород: Москва'}
             state.get_data.return_value=data
             e.update(WORD_KIND_LABELS={k:{'ru':k}for k in academic.KINDS})
             e['ask_grok'].return_value=json.dumps({'title':'Файлы','meta':{'school':'Ошибочный вуз'},'sections':SECTIONS},ensure_ascii=False)

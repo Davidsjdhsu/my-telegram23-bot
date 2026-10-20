@@ -46,7 +46,11 @@ class WordWorkflowTests(unittest.IsolatedAsyncioTestCase):
             # Only page measurement is stubbed; run the real orchestration and failure handling.
             return await word_quality.prepare_word_files(*args, **kwargs, measure=lambda _: 2)
         e['prepare_word_files'] = prepare
-        m=SimpleNamespace(from_user=SimpleNamespace(id=-9901),answer=AsyncMock(),answer_document=AsyncMock());s=SimpleNamespace(get_data=AsyncMock(return_value={'word_kind':'doc','word_pages':2,'topic':'Test'}),clear=AsyncMock(),update_data=AsyncMock());return e,m,s
+        e.update(ReplyKeyboardRemove=lambda:None, ReplyKeyboardMarkup=lambda **kw:SimpleNamespace(**kw),
+                 KeyboardButton=lambda **kw:SimpleNamespace(**kw),
+                 Form=SimpleNamespace(waiting_academic_meta='Form:waiting_academic_meta',
+                                      waiting_word_confirm='Form:waiting_word_confirm'))
+        m=SimpleNamespace(from_user=SimpleNamespace(id=-9901),answer=AsyncMock(),answer_document=AsyncMock());s=SimpleNamespace(get_data=AsyncMock(return_value={'word_kind':'doc','word_pages':2,'topic':'Test'}),clear=AsyncMock(),update_data=AsyncMock(),set_state=AsyncMock());return e,m,s
     async def test_model_failure_unlocks(self):
         e,m,s=self.env();e['ask_grok'].side_effect=RuntimeError('fixture');await e['word_build'](m,s);e['finish_job'].assert_called_once();e['spend_credits'].assert_not_called();m.answer_document.assert_not_awaited();s.clear.assert_not_awaited()
     async def test_upload_failure_unlocks(self):

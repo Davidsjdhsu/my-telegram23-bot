@@ -4,6 +4,8 @@ Provenance and adaptation boundaries are recorded in assets/academic/sources.jso
 The profiles are not a claim of approval by every university.
 """
 from pathlib import Path
+import hashlib
+import textwrap
 import re
 from docx import Document
 from docx.shared import Cm, Pt, RGBColor
@@ -37,6 +39,34 @@ ALIASES = {'вуз':'school','университет':'school','учебное �
            'автор':'author','студент':'author','фио студента':'author','преподаватель':'teacher',
            'фио преподавателя':'teacher','фио научного руководителя':'teacher','научный руководитель':'teacher',
            'факультет':'department','кафедра':'department','специальность':'specialty'}
+TITLE_FIELDS = ('school', 'discipline', 'author', 'group', 'teacher', 'city', 'year')
+LEAVE_TITLE_BLANKS = 'Оставить пустые поля'
+
+
+def request_meta(data):
+    return explicit_meta({}, '\n'.join(str(data.get(k) or '') for k in ('topic', 'user_text', 'extra')))
+
+
+def title_request_key(data):
+    # A choice to leave gaps belongs only to this request, never to the next one.
+    value = '\0'.join(str(data.get(k) or '') for k in
+                      ('word_kind', 'topic', 'user_text', 'extra', 'word_pages'))
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def missing_title_fields(data):
+    meta = request_meta(data)
+    return [key for key in TITLE_FIELDS if not meta.get(key)]
+
+
+def title_question(data):
+    fields = '\n'.join(META_LABELS[key] + ': ' for key in missing_title_fields(data))
+    return ('Для титульного листа по учебному образцу не хватает данных. '
+            'Пришли их одним сообщением, сохранив названия полей:\n\n' + fields
+            + '\n\nКафедру можно добавить отдельной строкой «Кафедра: …». '
+              'Если часть данных неизвестна, нажми «' + LEAVE_TITLE_BLANKS
+            + '»: в документе останутся строки для ручного заполнения. '
+              'Генерация ещё не началась, кредиты не списаны.')
 
 def blank_path(kind):
     if kind not in BLANKS:
@@ -89,43 +119,70 @@ def _text(p, text):
 def _cover(kind, title, meta):
     d = Document(blank_path('coursework' if kind == 'coursework' else 'referat'))
     _ensure_styles(d)
+    # Body Normal uses a first-line indent and 14 pt; the source cover uses
+    # 12 pt without that indent. Keep its own style so body styling cannot leak in.
+    cover_style = d.styles.add_style('Academic Cover', WD_STYLE_TYPE.PARAGRAPH)
+    cover_style.font.name = 'Times New Roman'
+    cover_style.font.size = Pt(12)
+    cover_style.font.color.rgb = RGBColor(0, 0, 0)
+    cover_style.paragraph_format.first_line_indent = Cm(0)
+    cover_style.paragraph_format.line_spacing = 1
+    cover_style.paragraph_format.space_before = Pt(0)
+    cover_style.paragraph_format.space_after = Pt(0)
+    spare_lines = []
+    extra_lines = 0
     teacher_seen = False
     for i,p in enumerate(d.paragraphs):
+        p.style = cover_style
         t = p.text.strip()
+        # Only original spacer paragraphs may absorb longer user values.
+        if not t and (4 <= i <= 13 or 23 <= i <= 27 or 41 <= i <= 46):
+            spare_lines.append(p)
         v = None
         if i == 0: v = meta.get('org','')
-        elif i == 2: v = meta.get('school','')
+        elif i == 2: v = meta.get('school') or 'Учебное заведение: ____________________'
         elif i == 3: v = meta.get('department','')
         elif t in ('ТЕМА РАБОТЫ','ТЕМА РЕФЕРАТА'): v = title
         elif t == 'РЕФЕРАТ': v = COVER_LABELS[kind]
-        elif t.startswith('по дисциплине'): v = ('по дисциплине «'+meta['discipline']+'»') if meta.get('discipline') else ''
-        elif t == 'Фамилия Имя Отчество обучающегося': v = meta.get('author','')
+        elif t.startswith('по дисциплине'): v = 'по дисциплине «'+(meta.get('discipline') or '____________________')+'»'
+        elif t == 'Фамилия Имя Отчество обучающегося': v = meta.get('author') or 'ФИО студента: ____________________'
         elif t.startswith('Направление подготовки'): v = ('Направление подготовки: '+meta['specialty']) if meta.get('specialty') else ''
         elif t.startswith('Направленность'): v = ('Профиль: '+meta['profile']) if meta.get('profile') else ''
         elif t == 'ученая степень, звание': v = meta.get('teacher_position','')
         elif t == 'Руководитель работы':
             teacher_seen = True
-            v = t if meta.get('teacher') or meta.get('teacher_position') else ''
+            v = t
         elif t == 'Автор работы':
             teacher_seen = False
-            v = t if meta.get('author') or meta.get('group') else ''
-        elif 'И.О. Фамилия' in t: v = meta.get('teacher' if teacher_seen else 'author','')
-        elif t.startswith('студент группы'): v = ('Группа '+meta['group']) if meta.get('group') else ''
-        elif 'подпись' in t or '20 ___' in t: v = ''
-        elif t == '[Город] — [Год]': v = ' — '.join(str(meta[k]) for k in ('city','year') if meta.get(k))
+            v = t
+        elif 'И.О. Фамилия' in t: v = meta.get('teacher' if teacher_seen else 'author') or 'ФИО: ____________________'
+        elif t.startswith('студент группы'): v = 'Группа '+(meta.get('group') or '____________')
+        elif 'подпись' in t: v = 'Подпись: ________________'
+        elif t == '[Город] — [Год]': v = (meta.get('city') or 'Город __________')+' — '+(meta.get('year') or 'Год ____')
         if v is not None: _text(p,v)
-        # Reserved white space absorbs multiline names without shrinking user text.
-        if not p.text.strip():
-            p.paragraph_format.line_spacing = Pt(6)
-            p.paragraph_format.space_before = Pt(0)
-            p.paragraph_format.space_after = Pt(0)
-            for r in p.runs: r.font.size = Pt(6)
-        else:
+        if v:
+            # Conservative 12 pt Cyrillic line capacity; keep the reference font,
+            # and spend whitespace for wrapping rather than shrink user text.
+            width = 32 if teacher_seen or 35 <= i <= 40 else 78
+            extra_lines += max(0, len(textwrap.wrap(str(v), width=width)) - 1)
+        # Preserve the template's spacer paragraphs, even for omitted optional fields.
+        # Collapsing all empty lines moves the title and city far above their positions.
+        if p.text.strip():
             p.paragraph_format.keep_together = True
         if v == title:
             p.style = d.styles['Title']
+            p.paragraph_format.first_line_indent = Cm(0)
             for r in p.runs:
-                r.font.name = 'Times New Roman'; r.font.size = Pt(14); r.font.bold = True
+                r.font.name = 'Times New Roman'; r.font.size = Pt(12); r.font.bold = False
+    # Distribute the space reduction between the three original gaps. Short
+    # fields leave the reference untouched. Long names/title keep city on page 1.
+    groups = [spare_lines[:10], spare_lines[10:15], spare_lines[15:]]
+    while extra_lines and any(groups):
+        for group in groups:
+            if group and extra_lines:
+                p = group.pop()
+                p._p.getparent().remove(p._p)
+                extra_lines -= 1
     return d
 
 

@@ -1043,6 +1043,7 @@ class Form(StatesGroup):
     waiting_word_size = State()
     waiting_word_confirm = State()
     waiting_word_extra = State()
+    waiting_academic_meta = State()
     waiting_excel_category = State()
     waiting_excel_kind = State()
     waiting_excel_mode = State()
@@ -7836,7 +7837,7 @@ async def word_kind(m: Message, state: FSMContext):
         cat = data.get("word_category", "physical")
         await m.answer(tr("msg_pick_doc", lang), reply_markup=word_kind_kb(cat, lang=lang))
         return
-    await state.update_data(word_kind=kind, extra="", extra_used=0, car_sale=None, fixed_word=None, topic="", user_text="", content_lang=None)
+    await state.update_data(word_kind=kind, extra="", extra_used=0, car_sale=None, fixed_word=None, topic="", user_text="", content_lang=None, academic_cover_allow_blanks=None)
     show_template = kind not in STUDY_KINDS or (lang == "ru" and kind in ("referat", "coursework"))
     hint = tr("msg_how_build_doc", lang)
     if lang == "ru" and kind in ("referat", "report", "coursework", "essay", "notes"):
@@ -8680,6 +8681,31 @@ async def word_extra(m: Message, state: FSMContext):
     await state.set_state(Form.waiting_word_confirm)
 
 
+@dp.message(Form.waiting_academic_meta)
+async def academic_title_details(m: Message, state: FSMContext):
+    from academic_templates import explicit_meta, META_LABELS, LEAVE_TITLE_BLANKS, title_request_key
+    data = await state.get_data()
+    text = (m.text or "").strip()
+    if text == LEAVE_TITLE_BLANKS:
+        await state.update_data(academic_cover_allow_blanks=title_request_key(data))
+    else:
+        if len(text) > 4000:
+            await m.answer("Пришли данные титульного короче — до 4000 символов.")
+            return
+        fields = explicit_meta({}, text)
+        if not fields:
+            await m.answer("Не удалось разобрать поля. Пришли, например: «Учебное заведение: …», "
+                           "«ФИО студента: …», каждое с новой строки, или нажми «Оставить пустые поля».")
+            return
+        extra = (data.get("extra") or "") + "\n" + "\n".join(META_LABELS[k] + ": " + v for k, v in fields.items())
+        if len(extra) > 12000:
+            await m.answer("Накопилось слишком много данных. Вернись в главное меню и создай новый запрос.")
+            return
+        await state.update_data(extra=extra, academic_cover_allow_blanks=None)
+    await state.set_state(Form.waiting_word_confirm)
+    await word_build(m, state)
+
+
 @dp.message(Form.waiting_word_confirm, F.text.in_(ALL_BTN_BUILD_DOC_LABELS))
 async def word_build(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
@@ -8693,6 +8719,16 @@ async def word_build(m: Message, state: FSMContext):
     if car_sale_applies(data, lang):
         await build_car_sale(m, state, globals())
         return
+    from academic_templates import KINDS as TITLE_KINDS, missing_title_fields, title_request_key, title_question, LEAVE_TITLE_BLANKS
+    if (data.get("word_kind") in TITLE_KINDS and (content_gen_lang(data, lang) or "ru") == "ru"
+            and missing_title_fields(data)
+            and data.get("academic_cover_allow_blanks") != title_request_key(data)):
+        await state.set_state(Form.waiting_academic_meta)
+        await m.answer(title_question(data), reply_markup=ReplyKeyboardMarkup(keyboard=[
+            [KeyboardButton(text=LEAVE_TITLE_BLANKS)],
+            [KeyboardButton(text=tr("btn_main_menu", lang))],
+        ], resize_keyboard=True))
+        return
     uid = m.from_user.id
     u = get_user(uid)
     ok, reason = start_job(uid)
@@ -8702,7 +8738,7 @@ async def word_build(m: Message, state: FSMContext):
     docx_path = pdf_path = None
     try:
         ensure_pdf_converter()
-        await m.answer(tr("msg_building_word", lang))
+        await m.answer(tr("msg_building_word", lang), reply_markup=ReplyKeyboardRemove())
         kind = data.get("word_kind", "doc")
         size = data.get("word_size", "short")
         pages = normalize_word_pages(data.get("word_pages") or (2 if size == "short" else 6))
@@ -8835,8 +8871,8 @@ async def word_build(m: Message, state: FSMContext):
             content = extract_json(raw)
             content["meta"] = clean_word_meta(content.get("meta"), kind)
             if academic:
-                from academic_templates import explicit_meta
-                content["meta"] = explicit_meta(content["meta"], "\n".join(str(data.get(k) or "") for k in ("topic", "user_text", "extra")))
+                from academic_templates import request_meta
+                content["meta"] = request_meta(data)
             if not isinstance(content.get("sections"), list) or not content["sections"]:
                 raise ValueError("В ответе модели нет разделов документа")
         except Exception as e:
@@ -9154,7 +9190,7 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
             await send_no_credits_notice(m, state, lang)
             return
         kind = guess_word_kind(text)
-        await state.update_data(word_kind=kind, word_size="short" if pages <= 3 else "long", word_pages=pages, topic=text, user_text="", extra="", car_sale=None, fixed_word=None, content_lang=lang)
+        await state.update_data(word_kind=kind, word_size="short" if pages <= 3 else "long", word_pages=pages, topic=text, user_text="", extra="", car_sale=None, fixed_word=None, content_lang=lang, academic_cover_allow_blanks=None)
         warning = thin_long_doc_warning(pages, text, lang)
         if warning:
             await bot.send_message(m.from_user.id, warning)
@@ -9344,7 +9380,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
             word_kind=kind,
             word_size="short" if pages <= 3 else "long",
             word_pages=pages,
-            topic=content, user_text="", extra=extra, car_sale=None, fixed_word=None, content_lang=lang, extra_used=0,
+            topic=content, user_text="", extra=extra, car_sale=None, fixed_word=None, content_lang=lang, extra_used=0, academic_cover_allow_blanks=None,
         )
         warning = thin_long_doc_warning(pages, f"{content} {extra}".strip(), lang)
         if warning:

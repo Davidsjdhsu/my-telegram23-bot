@@ -60,5 +60,24 @@ async def main():
         findings=word_review_findings({'sections':short},7,6,
             {'last_page_fill':.25,'body_page_fills':[.3,.8,.8,.9,.25],'front_matter_pages':2})
         assert findings['sparse_body_pages']==[3,7] and findings['excess_pages']
-        print('academic runtime_check=passed blanks=9 genres=5 covers=all5 body_pages=separate toc=verified short_referat=flowing density=all_body_pages credits=unchanged paid_api_calls=0',flush=True)
+        # Regression: expanded title metadata must not turn the cover into two pages.
+        title='Влияние цифровых технологий на самостоятельность человека в обучении, профессиональной деятельности и принятии повседневных решений в условиях информационного общества'
+        meta={'school':'Федеральное государственное бюджетное образовательное учреждение высшего образования «Учебный университет информационных технологий и управления»',
+              'department':'Кафедра информационных технологий', 'discipline':'Информатика',
+              'teacher':'Петрова-Смирнова Александра Константиновна',
+              'author':'Иванов-Сидоров Александр Константинович', 'group':'ИС-21',
+              'city':'Москва', 'year':'2026'}
+        for case, values in [('long', meta), ('empty', {})]:
+            src=root/(case+'.docx'); dest=src.with_suffix('.pdf')
+            render(src,title,[{'title':'Проверка','content':'Контроль основного текста.'}],'essay',values)
+            await convert_word_pdf(src,dest)
+            reader=PdfReader(dest)
+            assert len(reader.pages)==2,(case,len(reader.pages))
+            first=reader.pages[0].extract_text()
+            assert ('Москва' if values else 'Город') in first
+            assert 'Контроль основного текста' in reader.pages[1].extract_text()
+            for key in ('school','teacher','author'):
+                if values:
+                    assert ' '.join(values[key].split()) in ' '.join(first.split()), (case,key)
+        print('academic runtime_check=passed blanks=9 genres=5 covers=all5 cover_long_and_empty=passed body_pages=separate toc=verified short_referat=flowing density=all_body_pages credits=unchanged paid_api_calls=0',flush=True)
 if __name__=='__main__':asyncio.run(main())
