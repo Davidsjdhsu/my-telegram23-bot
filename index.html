@@ -1997,7 +1997,7 @@
 
   // --- Отправка формы Excel ---
   function supportsExcelAppearance() {
-    return ['expense_estimate', 'family_budget', 'project_budget', 'price_list'].includes(document.getElementById('excelKind').value);
+    return ['expense_estimate', 'family_budget', 'project_budget', 'price_list', 'calc_table'].includes(document.getElementById('excelKind').value);
   }
   function updateExcelAppearance() {
     const estimate = supportsExcelAppearance();

@@ -4970,13 +4970,13 @@ EXCEL_KIND_HINTS_I18N = {
                "zh": "计算表用于什么主题？例如：学期论文的问卷调查结果。",
                "es": "¿Para qué tema es la tabla de cálculo? Ej.: resultados de una encuesta para un trabajo de curso.",
                "fr": "Pour quel sujet faut-il le tableau de calcul ? Ex. : résultats d'une enquête pour un dossier de cours."},
-        "user": {"ru": "Пришли показатели и значения - оформлю в таблицу с формулой доли в % и итогом.",
-                 "en": "Send indicators and values - I'll format a table with a % share formula and total.",
-                 "de": "Sende Kennzahlen und Werte - ich erstelle eine Tabelle mit %-Anteilsformel und Summe.",
-                 "ar": "أرسل المؤشرات والقيم - سأنسقها في جدول بمعادلة النسبة المئوية والإجمالي.",
-                 "zh": "请发送指标及数值，我会做成带百分比公式和合计的表格。",
-                 "es": "Envía los indicadores y valores - lo pondré en una tabla con fórmula de porcentaje y total.",
-                 "fr": "Envoie les indicateurs et valeurs - je ferai un tableau avec formule de pourcentage et total."},
+        "user": {"ru": "Пришли условие задачи, исходные числа с единицами измерения и что нужно вычислить. Можно указать формулы. Сделаю таблицу с пересчётом результатов.",
+                 "en": "Send the problem, input values with units and the required results. You can specify formulas. Results will recalculate when inputs change.",
+                 "de": "Sende die Aufgabe, Eingabewerte mit Einheiten und gesuchte Ergebnisse. Formeln sind optional. Ergebnisse werden automatisch neu berechnet.",
+                 "ar": "أرسل المسألة والقيم الأولية ووحداتها والنتائج المطلوبة. يمكنك تحديد المعادلات. تتحدث النتائج عند تغيير القيم.",
+                 "zh": "请发送题目、带单位的已知数值及需要计算的结果，也可提供公式。修改输入后结果会自动重算。",
+                 "es": "Envía el problema, los valores con unidades y los resultados que necesitas. Puedes indicar fórmulas. Los resultados se recalcularán.",
+                 "fr": "Envoie le problème, les valeurs avec leurs unités et les résultats attendus. Tu peux préciser les formules. Les résultats seront recalculés."},
     },
 }
 EXCEL_KIND_HINTS = {k: {"ai": v["ai"]["ru"], "user": v["user"]["ru"]} for k, v in EXCEL_KIND_HINTS_I18N.items()}  # обратная совместимость
@@ -7064,7 +7064,7 @@ EXCEL_ROW_SCHEMA = {
     "family_budget": {"fields": ["name", "type", "amount", "category"], "example": '{"name":"...", "type": "доход"|"расход", "amount": 1000, "category": "..."}'},
     "project_budget": {"fields": ["name", "type", "amount", "category"], "example": '{"name":"...", "type": "доход"|"расход", "amount": 1000, "category": "..."}'},
     "price_list": {"fields": ["sku", "name", "unit", "price", "discount", "category", "note"], "example": '{"sku":"", "name":"...", "unit":"шт", "price": 1000, "discount": null, "category": "", "note":""}'},
-    "calc_table": {"fields": ["name", "value"], "example": '{"name":"...", "value": 100}'},
+    "calc_table": {"fields": ["id", "name", "value", "unit", "formula", "note"], "example": '{"id":"mass","name":"Масса","value":2,"unit":"кг","formula":"","note":""}'},
 }
 
 # Минимум строк для режима "сгенерировать самому" (ai) - раньше промпт просил всего
@@ -7076,7 +7076,7 @@ EXCEL_MIN_ROWS_AI = {
     "family_budget": 12,
     "project_budget": 12,
     "price_list": 14,
-    "calc_table": 10,
+    "calc_table": 0,
 }
 
 
@@ -7101,6 +7101,12 @@ def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_styl
         from excel_prices import build_price_list
         cache = build_price_list(path, title, rows, style=excel_style, palette=excel_palette,
                                  subtitle=subtitle, number=_xl_num)
+        _xl_inject_cached_values(path, cache)
+        return
+    if kind == 'calc_table':
+        from excel_study import build_study
+        cache = build_study(path, title, rows, style=excel_style, palette=excel_palette,
+                            subtitle=subtitle, number=_xl_num)
         _xl_inject_cached_values(path, cache)
         return
     wb = openpyxl.Workbook()
@@ -7263,37 +7269,6 @@ def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_styl
                 ws, colors, r + 2, cats, "G", get_column_letter(n_cols), 4, last_item_row, sums_by_cat, n_cols)
             cache.update(summary_cache)
 
-    elif kind == "calc_table":
-        headers = ["№", "Показатель", "Значение", "Доля, %"]
-        n_cols = len(headers)
-        _xl_style_sheet(ws, colors, n_cols, col_widths=[6, _xl_name_col_width(rows), 13, 12])
-        _xl_title(ws, title, colors, n_cols)
-        if subtitle:
-            _xl_subtitle(ws, subtitle, colors, n_cols)
-        _xl_header_row(ws, 3, headers, colors)
-        r = 4
-        first_r = r
-        values = []
-        for i, row in enumerate(rows, 1):
-            v = _xl_num(row.get("value"))
-            values.append(v)
-            _xl_body_row(ws, r, [i, row.get("name", ""), v, None], colors, number_cols={3}, percent_cols={4}, zebra=(i % 2 == 0))
-            r += 1
-        last_r = r - 1
-        _xl_finalize_table(ws, colors, 3, first_r, last_r, n_cols)
-        _xl_add_pie_chart(ws, n_cols, cat_col_idx=2, val_col_idx=3, header_row=3, first_row=first_r, last_row=last_r)
-        total_value = sum(values)
-        # IFERROR - если все значения окажутся нулевыми (или их сумма равна нулю), формула
-        # деления вернёт #DIV/0! в каждой строке; выводим 0% вместо ошибки на весь лист.
-        for rr, v in zip(range(first_r, r), values):
-            ws.cell(row=rr, column=4, value=f"=IFERROR(C{rr}/SUM($C${first_r}:$C${last_r}),0)")
-            ws.cell(row=rr, column=4).number_format = '0.0%'
-            ws.cell(row=rr, column=4).protection = Protection(locked=True)
-            cache[f"D{rr}"] = (v / total_value) if total_value else 0.0
-        total_pct_formula = f"=IFERROR(SUM(C{first_r}:C{last_r})/SUM(C{first_r}:C{last_r}),0)"
-        _xl_total_row(ws, r, "ИТОГО", [None, f"=SUM(C{first_r}:C{last_r})", total_pct_formula], colors, n_cols, percent_cols={4})
-        cache[f"C{r}"] = total_value
-        cache[f"D{r}"] = 1.0 if total_value else 0.0
 
     _xl_protect_sheet(ws)
     wb.save(path)
@@ -7481,7 +7456,7 @@ async def excel_kind(m: Message, state: FSMContext):
         await m.answer(tr("msg_pick_table", lang), reply_markup=excel_kind_kb(cat, lang))
         return
     await state.update_data(excel_kind=kind, extra="", excel_style='standard', excel_palette='green')
-    if kind in ('expense_estimate', 'family_budget', 'project_budget', 'price_list'):
+    if kind in ('expense_estimate', 'family_budget', 'project_budget', 'price_list', 'calc_table'):
         await m.answer('Выбери оформление таблицы:' if lang == 'ru' else 'Choose table layout:',
                        reply_markup=excel_appearance_kb('style', lang))
         await state.set_state(Form.waiting_excel_style)
@@ -7763,6 +7738,10 @@ async def excel_build(m: Message, state: FSMContext):
                               'discount: null; если запрошена, укажи процент числом от 0 до 100 (10 означает 10%). '
                               'Если цена не указана в режиме реальных данных, price: null, а не 0. '
                               'Явно указанную нулевую цену сохраняй как 0. Не округляй и не заменяй присланные цены.')
+            if kind == 'calc_table':
+                from excel_study import CALC_INSTRUCTIONS
+                task_line = ('Используй только исходные данные пользователя.' if not ai_mode else
+                             'Подготовь небольшой условный учебный пример по теме.') + CALC_INSTRUCTIONS
             raw = await ask_grok(f"""Собери содержимое для Excel-таблицы: {EXCEL_KIND_DESC.get(kind)}.
 {task_line}
 Тема/данные: {topic}
@@ -7772,6 +7751,9 @@ async def excel_build(m: Message, state: FSMContext):
 {{"title":"короткое название таблицы по теме","rows":[{schema['example']}]}}{lang_instr}""")
             parsed = extract_json(raw)
             rows = parsed.get("rows") or []
+            if kind == 'calc_table' and (parsed.get('unsupported') or not rows):
+                from excel_study import StudyValidationError
+                raise StudyValidationError('Нужен поддерживаемый метод расчёта')
 
             # Если модель всё равно поскупилась на строки в режиме "сгенерировать самому" -
             # переспрашиваем ещё раз с явным указанием, сколько строк получилось и что нужно больше.
@@ -7824,9 +7806,22 @@ async def excel_build(m: Message, state: FSMContext):
         await m.answer(note, reply_markup=main_kb(lang, uid=m.from_user.id))
         await state.clear()
     except Exception as e:
-        print("Excel build error:", e)
-        await m.answer(tr("msg_build_error_table", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
-        await state.clear()
+        from excel_study import StudyValidationError
+        if kind == 'calc_table' and isinstance(e, StudyValidationError):
+            await state.set_state(Form.waiting_excel_confirm)
+            await m.answer(
+                'Не удалось проверить формулы этой задачи. Запрос и настройки сохранены, кредиты не списаны. '
+                'Уточни исходные числа, единицы измерения и что нужно вычислить через «Добавить информацию» '
+                'или измени запрос. Сейчас поддерживаются арифметика, степени, корни, средние, минимум и максимум.'
+                if lang == 'ru' else
+                'Could not validate this calculation. Your request is saved and no credits were charged. '
+                'Add input values, units and the required result, or change the request. '
+                'Supported: arithmetic, powers, square roots, averages, minimum and maximum.',
+                reply_markup=excel_confirm_kb(lang))
+        else:
+            print("Excel build error:", type(e).__name__)
+            await m.answer(tr("msg_build_error_table", lang), reply_markup=main_kb(lang, uid=m.from_user.id))
+            await state.clear()
     finally:
         finish_job(uid)
 
