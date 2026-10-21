@@ -25,20 +25,41 @@ def missing_images(slides, assets):
             if not assets[i] and not s.get('chart') and not s.get('_skip_ai_image')]
 
 
-def recovery_notice(missing, lang, cost):
+def recovery_notice(missing, lang, cost, slides=None):
     numbers = ', '.join(map(str, missing))
+    details = []
+    labels = {
+        'waiting_timeout': ('Не дождались готового изображения', 'Image wait timed out'),
+        'generation_unavailable': ('Не удалось получить изображение от сервиса', 'Image service unavailable'),
+        'generation_failed': ('Сервис сообщил об остановке создания изображения', 'Image generation stopped'),
+        'expired': ('Сохранённый результат сервиса уже недоступен', 'Provider result expired'),
+        'invalid_image': ('Сервис вернул повреждённое изображение', 'Invalid image received'),
+        'review_unavailable': ('Не удалось завершить проверку изображения', 'Image review unavailable'),
+        'requires_verified_source': ('Нужна достоверная иллюстрация; созданное изображение не подходит', 'A verified illustration is required'),
+        'quality_rejected': ('Изображение не прошло проверку качества', 'Image did not pass quality review'),
+    }
+    groups = {}
+    for number in missing:
+        reason = slides[number - 1].get('_image_issue') if slides and number <= len(slides) else None
+        if reason in labels:
+            groups.setdefault(reason, []).append(str(number))
+    for reason, group in groups.items():
+        details.append(labels[reason][0 if lang == 'ru' else 1] + ': ' + ', '.join(group) + '.')
+    detail = ('\n' + '\n'.join(details)) if details else ''
     if lang == 'ru':
-        return (f'Не прошли проверку картинки для слайдов: {numbers}; баллы не списаны. '
+        return (f'Пока не готовы изображения для слайдов: {numbers}. Кредиты не списаны.{detail}\n'
                 'Текст и удачные картинки сохранены на срок до 24 часов. '
-                '«Продолжить с картинками» повторит только недостающие изображения.\n\n'
+                '«Продолжить с картинками» продолжит только недостающие изображения: '
+                'сначала проверит сохранённые задания сервиса.\n\n'
                 'Или выбери «Собрать без этих картинок»: все слайды и текст сохранятся, '
                 'на перечисленных слайдах будет оформление без фото. '
-                f'Стоимость этой версии — {cost} баллов, как в подтверждённом плане. '
+                f'Стоимость этой версии — {cost} кредитов, как в подтверждённом плане. '
                 'Списание — после отправки PPTX и PDF.')
-    return (f'Images for slides {numbers} did not pass review. No credits charged. '
+    return (f'Images for slides {numbers} are not ready. No credits charged.{detail}\n'
             'Text and accepted images are saved for up to 24 hours. Continue with images '
-            'retries only missing pictures. Or choose Build without these images: '
-            'all slides and text remain, with text layouts for the listed slides. '
+            'resumes only missing pictures, checking saved provider jobs first. '
+            'Or choose Build without these images: all slides and text remain, '
+            'with text layouts for the listed slides. '
             f'The price remains {cost} credits, charged after both PPTX and PDF are sent.')
 
 

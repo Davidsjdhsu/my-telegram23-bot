@@ -67,7 +67,7 @@ def require_images(slides, assets, warnings, designer=False):
 
 def image_failure_notice(lang):
     messages = {
-        'ru': 'Не удалось подготовить все нужные изображения. Неполную презентацию не отправляю, баллы не списаны. Тема и настройки сохранены. Нажми «Делать полную версию», чтобы повторить попытку.',
+        'ru': 'Не удалось подготовить все нужные изображения. Неполную презентацию не отправляю, кредиты не списаны. Тема и настройки сохранены. Нажми «Делать полную версию», чтобы повторить попытку.',
         'en': 'Some required images could not be prepared. No incomplete file was sent and no credits were charged. Your topic and settings are saved. Choose the full version button to retry.',
         'de': 'Benötigte Bilder fehlen. Keine unvollständige Datei wurde versendet und keine Credits wurden abgezogen. Thema und Einstellungen bleiben gespeichert. Starte die vollständige Version erneut.',
         'fr': 'Certaines images nécessaires n’ont pas pu être préparées. Aucun fichier incomplet envoyé, aucun crédit débité. Le sujet et les réglages sont conservés. Relance la version complète.',
@@ -338,7 +338,7 @@ async def prepare_own_images(topic, slides, photos, captions, directory, inspect
     return assets, warnings
 
 
-async def prepare_images(topic, slides, photos, captions, directory, generate, inspect, parse_json, owned=None):
+async def prepare_images(topic, slides, photos, captions, directory, generate, inspect, parse_json, owned=None, *, resumable=False):
     """Reuse inspected uploads, then generate and review remaining image slots."""
     for slide in slides:
         if effective_diagram(slide):slide['_skip_ai_image'] = True
@@ -384,17 +384,24 @@ async def prepare_images(topic, slides, photos, captions, directory, generate, i
             candidate = dict(slide)
             if slide.get('_retry_scene'):
                 candidate['image_prompt'] = slide['_retry_scene']
-            for attempt in range(3):
+            start_attempt = min(2, max(0, int(slide.get('_image_attempt', 0))))
+            for attempt in range(start_attempt, 3):
+                slide['_image_attempt'] = attempt
                 src = directory / f'generated-{index}-{attempt}.png'
                 try:
+                    kwargs = {'aspect_ratio': ratio}
+                    if resumable:
+                        kwargs['job'] = slide.setdefault('_image_job', {})
                     ok = await asyncio.wait_for(generate(image_prompt(topic, candidate, bool(attempt)),
-                                              str(src), aspect_ratio=ratio), 110)
+                                              str(src), **kwargs), 190 if resumable else 110)
                     if not ok:
-                        log.warning('image_generation slide=%d reason=unavailable', index+1)
+                        slide['_image_issue'] = slide.get('_image_job', {}).get('reason', 'generation_unavailable')
+                        log.warning('image_generation slide=%d reason=%s', index+1, slide['_image_issue'])
                         break
                     asset = await asyncio.to_thread(normalize_image, src, directory / f'image-{index}-{attempt}.jpg')
                     verdict = await review(asset, index, slide)
                     if verdict is None or verdict.get('requires_verified_source') is True:
+                        slide['_image_issue'] = 'review_unavailable' if verdict is None else 'requires_verified_source'
                         # More random generations cannot verify a technical component.
                         log.warning('image_review slide=%d reason=%s', index+1,
                                     'unavailable' if verdict is None else 'requires_verified_source')
@@ -406,7 +413,12 @@ async def prepare_images(topic, slides, photos, captions, directory, generate, i
                         asset['safe_frames'] = [s for s in allowed if isinstance(s,str) and s in
                             ('square','circle','triangle','hexagon','chamfer')] if isinstance(allowed,list) else []
                         assets[index] = asset
+                        for key in ('_image_issue', '_image_job', '_image_attempt', '_retry_scene'):
+                            slide.pop(key, None)
                         return
+                    slide['_image_issue'] = 'quality_rejected'
+                    slide.pop('_image_job', None)  # Only a real rejection justifies a fresh paid job.
+                    slide['_image_attempt'] = (attempt + 1) % 3
                     replacement = verdict.get('replacement_scene')
                     if isinstance(replacement, str) and 10 <= len(replacement.strip()) <= 700:
                         candidate['image_prompt'] = replacement.strip()
@@ -414,7 +426,11 @@ async def prepare_images(topic, slides, photos, captions, directory, generate, i
                     reason = ('duplicate' if approved(verdict) else
                               ','.join(k for k in ('has_text', 'has_chart', 'defective') if verdict[k]) or 'irrelevant')
                     log.warning('image_review slide=%d reason=%s attempt=%d', index+1, reason, attempt)
+                except asyncio.CancelledError:
+                    slide['_image_issue'] = slide.get('_image_job', {}).get('reason', 'waiting_timeout')
+                    raise
                 except Exception:
+                    slide['_image_issue'] = slide.get('_image_job', {}).get('reason', 'generation_unavailable')
                     log.warning('image_generation slide=%d reason=failed attempt=%d', index+1, attempt)
                     break
             warnings['ai_omitted'] += 1
@@ -424,7 +440,7 @@ async def prepare_images(topic, slides, photos, captions, directory, generate, i
                                max(1, deadline - asyncio.get_running_loop().time()))
     except TimeoutError:
         log.warning('presentation_images reason=deadline')
-        warnings['ai_omitted'] = sum(a is None and not s.get('chart') and not s.get('_skip_ai_image') for a,s in zip(assets,slides))
+    warnings['ai_omitted'] = sum(a is None and not s.get('chart') and not s.get('_skip_ai_image') for a,s in zip(assets,slides))
     log.info('presentation_images total=%d embedded=%d ai_omitted=%d own_unreadable=%d',
              len(slides), sum(bool(a) for a in assets), warnings['ai_omitted'], warnings['own_unreadable'])
     return assets, warnings

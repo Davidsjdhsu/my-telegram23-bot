@@ -55,7 +55,7 @@ class ReviewRecovery(unittest.IsolatedAsyncioTestCase):
             env['finish_job'].assert_called_once()
             self.assertEqual(state.data,before)
             self.assertEqual(state.current,'confirm')
-            self.assertIn('баллы не списаны',env['bot'].send_message.await_args.args[1])
+            self.assertIn('Кредиты не списаны',env['bot'].send_message.await_args.args[1])
 
     async def test_partial_images_also_block_delivery(self):
         env,state,sent=f.BuildTests().build_env(3)

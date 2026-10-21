@@ -3985,55 +3985,18 @@ async def ask_grok_chat(user_text: str, lang: str = "ru", history: list = None,
 
 
 
-async def generate_image(prompt: str, path: str, aspect_ratio: str = "16:9") -> bool:
-    try:
-        headers = {
-            "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        async with httpx.AsyncClient(timeout=120) as http:
-            async def get_existing(url, **kwargs):
-                # GET retries keep the same prediction/image. Never retry an
-                # ambiguous creation POST, which could create another paid job.
-                for retry in range(3):
-                    try:
-                        response = await http.get(url, timeout=20, **kwargs)
-                        if response.status_code == 429 or response.status_code >= 500:
-                            if retry < 2:
-                                await asyncio.sleep(retry + 1)
-                                continue
-                        response.raise_for_status()
-                        return response
-                    except httpx.TransportError:
-                        if retry == 2:
-                            raise
-                        await asyncio.sleep(retry + 1)
-            create = await http.post(
-                "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
-                headers=headers,
-                json={"input": {"prompt": prompt, "aspect_ratio": aspect_ratio, "output_format": "png"}}
-            )
-            print("Replicate create:", create.status_code)
-            create.raise_for_status()
-            get_url = create.json()["urls"]["get"]
-            for _ in range(30):
-                await asyncio.sleep(2)
-                info = (await get_existing(get_url, headers=headers)).json()
-                if info.get("status") == "succeeded":
-                    out = info.get("output")
-                    url = out[0] if isinstance(out, list) else out
-                    raw = await get_existing(str(url))
-                    with open(path, "wb") as f:
-                        f.write(raw.content)
-                    await run_heavy(lambda: Image.open(path).convert("RGB").save(path, "PNG"))
-                    print("Image saved:", path)
-                    return True
-                if info.get("status") in ("failed", "canceled"):
-                    print("Replicate failed:", info.get("status"))
-                    return False
+async def generate_image(prompt: str, path: str, aspect_ratio: str = "16:9", *, job=None) -> bool:
+    from replicate_images import generate_prediction
+    if not await generate_prediction(prompt, path, aspect_ratio, REPLICATE_API_TOKEN, job):
         return False
-    except Exception as e:
-        print("Image generation error:", type(e).__name__)
+    try:
+        await run_heavy(lambda: Image.open(path).convert("RGB").save(path, "PNG"))
+        return True
+    except Exception:
+        if job is not None:
+            job.clear()
+            job['reason'] = 'invalid_image'
+        print("image_generation reason=invalid_image", flush=True)
         return False
 
 
@@ -5885,7 +5848,7 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
             assets, image_warnings = await prepare_images(
                 content["title"], visual_slides, list(data.get("user_photos") or []),
                 data.get("pres_photo_captions") or {}, visual_tmp.name,
-                generate_image, ask_presentation_vision, extract_json, owned=owned,
+                generate_image, ask_presentation_vision, extract_json, owned=owned, resumable=True,
             )
         missing = missing_images(visual_slides, assets)
         if missing:
@@ -5966,7 +5929,7 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
         await state.set_state(Form.waiting_confirm)
         try:
             chat_id = m.chat.id if getattr(m, "chat", None) else uid
-            notice = recovery_notice(missing, lang, order_cost) if recovery_saved else image_failure_notice(lang)
+            notice = recovery_notice(missing, lang, order_cost, visual_slides) if recovery_saved else image_failure_notice(lang)
             keyboard = presentation_recovery_kb(lang) if recovery_saved else confirm_kb(lang)
             await bot.send_message(chat_id, notice, reply_markup=keyboard)
         except Exception:
