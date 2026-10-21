@@ -1028,6 +1028,7 @@ async def signature_line(lang: str) -> str:
 
 
 class Form(StatesGroup):
+    waiting_document_intake = State()
     waiting_mode = State()
     waiting_topic = State()
     waiting_user_text = State()
@@ -2559,13 +2560,25 @@ def wants_style_copy(text: str) -> bool:
 # логика извлечения слайдов/стиля/фото), а Word и Excel просто отправляли
 # отговорку "открой меню" вместо того, чтобы реально собрать документ.
 WORD_KIND_KEYWORDS = [
+    (("акт оказанных услуг", "акт оказания услуг"), "services_act_ru"),
+    (("акт выполненных работ",), "work_act"),
+    (("договор аренды квартиры", "договор найма квартиры", "найм жилого помещения", "аренда квартиры"), "rent_flat_ru"),
+    (("аренды нежилого", "аренда нежилого"), "nonresidential_rent"),
+    (("с самозанятым", "с самозанятой", "плательщиком нпд"), "self_employed"),
+    (("замене некачественного товара", "замене товара"), "claim_replace_ru"),
+    (("агентский договор",), "agency"),
+    (("договор простого товарищества", "совместной деятельности"), "joint_activity"),
+    (("договор уступки", "уступки требования", "договор цессии"), "cession"),
+    (("соглашение о конфиденциальности", "соглашение о неразглашении", "nda"), "nda"),
+    (("соглашение об уплате алиментов",), "alimony"),
+    (("гарантийное письмо",), "warranty_letter"),
     (("резюме", "cv", "resume"), "resume"),
     (("договор аренды", "договор найма"), "rent"),
     (("трудовой договор",), "employment"),
     (("договор поставки",), "supply"),
     (("договор дарения",), "gift"),
     (("брачный договор",), "marriage_contract"),
-    (("договор оказания услуг", "договор услуг"), "services"),
+    (("договор оказания услуг", "договор возмездного оказания услуг", "договор услуг"), "services"),
     (("расписка", "договор займа"), "loan"),
     (("доверенность",), "proxy"),
     (("акт приема-передачи", "акт приёма-передачи", "акт приема передачи"), "act"),
@@ -7546,7 +7559,8 @@ async def excel_build(m: Message, state: FSMContext):
         else:
             schema = EXCEL_ROW_SCHEMA[kind]
             min_rows = EXCEL_MIN_ROWS_AI.get(kind, 10)
-            ai_mode = data.get("excel_mode") != "user"
+            from document_intake import source_mode
+            ai_mode = data.get("excel_mode") != "user" and source_mode(topic + "\n" + extra, "excel") != "user"
             has_category_field = "category" in schema["fields"]
             category_line = ""
             if has_category_field:
@@ -9190,6 +9204,172 @@ async def respond_in_chat(m, text, lang):
         _chat_gate.leave(uid)
 
 
+# Guided requests from free text. No file builder runs at this stage.
+_intake_busy = set()
+
+
+def intake_kb(labels, lang):
+    from document_intake import FORMATS, CHAT
+    rows = [[KeyboardButton(text=x)] for x in labels]
+    rows += [[KeyboardButton(text=x) for x in FORMATS.values()],
+             [KeyboardButton(text=CHAT)], [KeyboardButton(text=tr('btn_main_menu', lang))]]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+async def offer_document_intake(m, state, text, fmt, lang):
+    from document_intake import FORMATS, YES
+    if fmt not in FORMATS:
+        return
+    draft = dict(text=text, fmt=fmt, step='format')
+    await state.update_data(document_intake=draft)
+    await state.set_state(Form.waiting_document_intake)
+    kind = guess_excel_kind(text) if fmt == 'excel' else guess_word_kind(text) if fmt == 'word' else None
+    label = EXCEL_KIND_DESC.get(kind, '') if fmt == 'excel' else WORD_KIND_LABELS.get(kind, {}).get(lang, WORD_KIND_LABELS.get(kind, {}).get('ru', 'документ')) if fmt == 'word' else ''
+    await m.answer(
+        f'Правильно понял: нужен {FORMATS[fmt]}'+(f' — {label}' if label else '')+'?\n\n'
+        f'Твой запрос: {text[:320]}'+('…' if len(text)>320 else '')+
+        '\n\nПодтверди или выбери другой формат ниже. Исходный текст сохранён. '
+        'Сначала уточним настройки и покажем план; полный файл создадим только после согласования.',
+        reply_markup=intake_kb([YES],lang), parse_mode=None)
+
+
+async def intake_question(m, state, draft, step, prompt, labels, lang):
+    draft = {**draft, 'step':step}
+    await state.update_data(document_intake=draft)
+    await state.set_state(Form.waiting_document_intake)
+    await m.answer(prompt, reply_markup=intake_kb(labels,lang), parse_mode=None)
+
+
+async def advance_document_intake(m, state, draft, lang):
+    from document_intake import source_mode, needs_topic, excel_appearance, excel_palette, OWN, AI, STANDARD, DESIGNER
+    text, fmt = draft['text'], draft['fmt']
+    if needs_topic(text):
+        await intake_question(m,state,draft,'details','О чём должен быть файл и для кого? Пришли тему, задачу или готовые данные.',[],lang)
+        return
+    if fmt == 'presentation':
+        if not can_afford(m.from_user.id, presentation_cost(extract_slide_count(text) or 8, {'theme_name':extract_style(text) or 'default'})):
+            await send_no_credits_notice(m,state,lang)
+            return
+        settings = {'mode':'user','user_text':text} if source_mode(text,fmt)=='user' else None
+        await state.update_data(document_intake=None)
+        await _start_presentation_request(m,state,text,lang,settings=settings)
+        return
+    if fmt == 'word':
+        kind = guess_word_kind(text)
+        mode = draft.get('mode') or source_mode(text,fmt) or 'ai'
+        if not can_afford(m.from_user.id, word_cost(normalize_word_pages((extract_page_count(text) if kind in WORD_PAGE_CHOICE_KINDS else None) or WORD_DEFAULT_PAGES))):
+            await send_no_credits_notice(m,state,lang)
+            return
+        await state.update_data(document_intake=None, word_kind=kind, topic=text, user_text=text if mode=='user' else '',
+            mode=mode, extra='', extra_used=0, sample=None, word_pages=None, word_size=None,
+            car_sale=None, fixed_word=None, content_lang=lang, academic_cover_allow_blanks=None)
+        pages = extract_page_count(text)
+        if pages and kind in WORD_PAGE_CHOICE_KINDS:
+            pages = normalize_word_pages(pages)
+            if not can_afford(m.from_user.id, word_cost(pages)):
+                await send_no_credits_notice(m,state,lang)
+                return
+            await state.update_data(word_pages=pages,word_size='short' if pages<=3 else 'long')
+            await state.set_state(Form.waiting_word_size)
+            await word_build_draft(m,state,await state.get_data(),'short' if pages<=3 else 'long')
+        else:
+            await word_after_input(m,state)
+        return
+    if not can_afford(m.from_user.id, CREDIT_COSTS['excel']):
+        await send_no_credits_notice(m,state,lang)
+        return
+    kind = draft.get('kind') or guess_excel_kind(text)
+    if kind == 'calc_table' and not draft.get('kind'):
+        await intake_question(m,state,draft,'kind','Какая таблица лучше подходит к этой задаче?',list(INTAKE_EXCEL_KINDS),lang)
+        return
+    draft = {**draft,'kind':kind}
+    mode = draft.get('mode') or ('user' if kind=='startup_model' else source_mode(text,'excel'))
+    if mode is None:
+        await intake_question(m,state,draft,'source','Использовать твои реальные данные или подготовить условный пример? Готовые позиции и числа повторно присылать не нужно.',[OWN,AI],lang)
+        return
+    draft = {**draft,'mode':mode}
+    style = draft.get('style') or excel_appearance(text)
+    if not style:
+        await intake_question(m,state,draft,'style','Выбери оформление таблицы. '+('Использую только твои данные, без дополнительных позиций.' if mode=='user' else 'Создам условный пример по теме.'),[STANDARD,DESIGNER],lang)
+        return
+    draft = {**draft,'style':style}
+    palette = draft.get('palette') or excel_palette(text)
+    if style=='designer' and not palette:
+        await intake_question(m,state,draft,'palette','Какой цвет выбрать?',list(EXCEL_PALETTES.values()),lang)
+        return
+    palette = palette if style=='designer' else 'green'
+    protect = bool(re.search(r'(?<!не )защити\w*\s+формул',text,re.I))
+    await state.update_data(document_intake=None, excel_kind=kind, excel_topic=text, extra='', excel_mode=mode,
+        excel_style=style, excel_palette=palette, excel_protect=protect, content_lang=lang)
+    await state.set_state(Form.waiting_excel_confirm)
+    await m.answer(
+        f'План таблицы: {EXCEL_KIND_DESC.get(kind,"таблица")}.\n'
+        + ('Данные: только присланные позиции и числа. Новые позиции не добавляю.\n' if mode=='user' else 'Данные: условный пример по теме.\n')
+        + f'Оформление: {EXCEL_STYLES[style]}'+(f', {EXCEL_PALETTES[palette]}' if style=='designer' else '')+'.\n'
+        + ('Защита формул включена, без пароля.\n' if protect else 'Защита выключена, файл можно редактировать.\n')
+        + f'Стоимость: {CREDIT_COSTS["excel"]} кредитов. Собрать файл?',
+        reply_markup=excel_confirm_kb(lang), parse_mode=None)
+
+
+INTAKE_EXCEL_KINDS = {'Смета расходов':'expense_estimate','Семейный бюджет':'family_budget',
+    'Бюджет проекта':'project_budget','Прайс-лист':'price_list',
+    'Учебный расчёт':'calc_table','Финансовая модель':'startup_model'}
+
+
+@dp.message(Form.waiting_document_intake)
+async def document_intake_reply(m: Message, state: FSMContext, text_override=None):
+    from document_intake import FORMATS, YES, CHAT, OWN, AI, STANDARD, DESIGNER, source_mode
+    uid=m.from_user.id
+    if uid in _intake_busy:
+        return
+    _intake_busy.add(uid)
+    try:
+        lang=user_lang(uid);text=(text_override if text_override is not None else m.text or '').strip()
+        draft=(await state.get_data()).get('document_intake')
+        if not draft:
+            return
+        if text == CHAT:
+            original=draft['text']
+            await state.clear()
+            await m.answer('Хорошо, отвечу здесь, без создания файла.',reply_markup=main_kb(lang,uid=uid))
+            await respond_in_chat(m,original,lang)
+            return
+        if text in FORMATS.values() or text.lower() in ('excel','word','презентация','ворд','эксель','иксель'):
+            fmt=next((key for key,label in FORMATS.items() if text==label),None)
+            fmt=fmt or {'excel':'excel','эксель':'excel','иксель':'excel','word':'word','ворд':'word','презентация':'presentation'}[text.lower()]
+            await advance_document_intake(m,state,dict(text=draft['text'],fmt=fmt,step='format'),lang)
+            return
+        step=draft['step']
+        if step=='format' and (text==YES or text.lower().strip('.!') in ('да','верно','всё верно','все верно','yes')):
+            await advance_document_intake(m,state,draft,lang)
+            return
+        if step=='details' and text and not text.startswith('/'):
+            draft={**draft,'text':draft['text']+'\nУточнение: '+text}
+        elif step=='kind' and text in INTAKE_EXCEL_KINDS:
+            draft={**draft,'kind':INTAKE_EXCEL_KINDS[text]}
+        elif step=='source' and text in (OWN,AI):
+            draft={**draft,'mode':'user' if text==OWN else 'ai'}
+            if text==OWN and source_mode(draft['text'],'excel')!='user':
+                await intake_question(m,state,draft,'details','Пришли реальные позиции и числа для таблицы. Название и предыдущий запрос уже сохранены.',[],lang)
+                return
+        elif step=='style' and text in (STANDARD,DESIGNER):
+            draft={**draft,'style':'standard' if text==STANDARD else 'designer'}
+        elif step=='palette' and text in EXCEL_PALETTES.values():
+            draft={**draft,'palette':next(k for k,v in EXCEL_PALETTES.items() if v==text)}
+        elif len(text)>8 and not text.startswith('/'):
+            # Free-form corrections retain the original data and ask for confirmation again.
+            from document_intake import suggest_format
+            combined=draft['text']+'\nУточнение: '+text
+            await offer_document_intake(m,state,combined,suggest_format(text) or draft['fmt'],lang)
+            return
+        else:
+            await m.answer('Выбери вариант на клавиатуре или напиши уточнение. Запрос сохранён.',parse_mode=None)
+            return
+        await advance_document_intake(m,state,draft,lang)
+    finally:
+        _intake_busy.discard(uid)
+
+
 async def handle_free_text_request(m: Message, state: FSMContext, text: str):
     """Общая обработка фразы из чата бота и из поля чата Mini App."""
     lang = user_lang(m.from_user.id)
@@ -9205,47 +9385,22 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
         else:
             await ask_language_first(m.from_user.id, state, text)
         return
+    if (await state.get_data()).get('document_intake'):
+        await document_intake_reply(m, state, text_override=text)
+        return
     if chat_rate_limited(m.from_user.id):
         await bot.send_message(m.from_user.id, tr("msg_chat_rate_limited", lang))
         return
+    from document_intake import suggest_format, DECLINE, QUESTION
     fmt = None
-    if not prefers_chat_reply(text) and looks_like_document_request(text):
-        fmt = detect_requested_format(text)
-    elif len(text.split()) >= 12 and may_request_document(text):
-        # Ключевые слова ничего не поймали, но сообщение достаточно длинное/конкретное,
-        # чтобы стоило перепроверить через модель - вдруг это косвенная просьба
-        # ("нужно что-то показать клиентам про наш продукт" - презентация без слова
-        # "презентация"). Короткие сообщения так не проверяем - слишком велик риск
-        # тратить лишний запрос на обычные вопросы вроде "как дела".
-        fmt = await classify_uncertain_intent(text)
+    if not prefers_chat_reply(text) and not DECLINE.search(text) and not QUESTION.search(text):
+        fmt = suggest_format(text)
+        if not fmt and looks_like_document_request(text):
+            fmt = detect_requested_format(text)
+        elif not fmt and len(text.split()) >= 12 and may_request_document(text):
+            fmt = await classify_uncertain_intent(text)
     if fmt:
-        if fmt == "presentation":
-            if not can_afford(m.from_user.id, presentation_cost(PRESENTATION_MIN_SLIDES)):
-                await send_no_credits_notice(m, state, lang)
-                return
-            await _start_presentation_request(m, state, text, lang)
-            return
-        if fmt == "excel":
-            if not can_afford(m.from_user.id, CREDIT_COSTS["excel"]):
-                await send_no_credits_notice(m, state, lang)
-                return
-            kind = guess_excel_kind(text)
-            await state.update_data(excel_kind=kind, excel_topic=text, extra="", excel_mode="ai", excel_style='standard', excel_palette='green', excel_protect=False)
-            await bot.send_message(m.from_user.id, tr("msg_request_accepted", lang))
-            await excel_build(m, state)
-            return
-        pages = extract_page_count(text) or 2
-        pages = normalize_word_pages(pages)
-        if not can_afford(m.from_user.id, word_cost(pages)):
-            await send_no_credits_notice(m, state, lang)
-            return
-        kind = guess_word_kind(text)
-        await state.update_data(word_kind=kind, word_size="short" if pages <= 3 else "long", word_pages=pages, topic=text, user_text="", extra="", car_sale=None, fixed_word=None, content_lang=lang, academic_cover_allow_blanks=None)
-        warning = thin_long_doc_warning(pages, text, lang)
-        if warning:
-            await bot.send_message(m.from_user.id, warning)
-        await bot.send_message(m.from_user.id, tr("msg_request_accepted", lang))
-        await word_build(m, state)
+        await offer_document_intake(m, state, text, fmt, lang)
         return
     await respond_in_chat(m, text, lang)
 

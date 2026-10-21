@@ -169,16 +169,17 @@ class BriefFlowTests(unittest.IsolatedAsyncioTestCase):
         await ns['process_topic'](self.message('Киты'),State({'content_lang':'de'}))
         self.assertEqual(start.await_args.kwargs['settings'],{'content_lang':'de'})
 
-    async def test_free_chat_routes_to_shared_brief(self):
+    async def test_free_chat_offers_confirmation_before_shared_brief(self):
         start=AsyncMock()
-        env=self.env(_start_presentation_request=start,
+        env=self.env(_start_presentation_request=start,offer_document_intake=AsyncMock(),
             get_user=lambda uid:{'lang_chosen':True},chat_rate_limited=lambda uid:False,
             prefers_chat_reply=lambda t:False,looks_like_document_request=lambda t:True,
             detect_requested_format=lambda t:'presentation',PRESENTATION_MIN_SLIDES=3)
         ns=load_functions(['handle_free_text_request'],env)
         m=self.message('Сделай презентацию про китов');state=State({})
         await ns['handle_free_text_request'](m,state,m.text)
-        start.assert_awaited_once_with(m,state,m.text,'ru')
+        start.assert_not_awaited()
+        ns['offer_document_intake'].assert_awaited_once_with(m,state,m.text,'presentation','ru')
 
     async def test_miniapp_preserves_form_values_in_shared_brief(self):
         start=AsyncMock()
