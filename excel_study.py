@@ -17,7 +17,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.page import PageMargins
 from openpyxl.workbook.properties import CalcProperties
-from excel_styles import PALETTES, normalize_excel_appearance
+from excel_styles import apply_formula_protection, PALETTES, normalize_excel_appearance
 
 
 class StudyValidationError(ValueError):
@@ -210,7 +210,7 @@ def calculated_values(rows):
     return values
 
 
-def build_study(path, title, rows, *, style='standard', palette='green', subtitle=None, number=None):
+def build_study(path, title, rows, *, style='standard', palette='green', subtitle=None, number=None, protect=False):
     rows = prepare_rows(rows, number)
     values = calculated_values(rows)
     style, palette = normalize_excel_appearance(style, palette)
@@ -305,8 +305,8 @@ def build_study(path, title, rows, *, style='standard', palette='green', subtitl
     note_row = last+2
     ws.merge_cells(start_row=note_row, start_column=start, end_row=note_row, end_column=end)
     c = text(note_row, start, 'Светлые цветные ячейки — исходные числа: меняйте их, результаты пересчитаются. '
-             'Коды связывают показатели с формулами. Пустое значение не равно нулю. Единицы и метод указаны рядом. '
-             'Формулы защищены от случайной замены; защиту листа можно снять без пароля. Эту подсказку можно удалить.')
+             'Коды связывают показатели с формулами. Пустое значение не равно нулю. Единицы и метод указаны рядом. ' +
+             ('Формулы защищены от случайной замены; защиту листа можно снять без пароля. ' if protect else 'Защита выключена: формулы тоже можно менять. ') + 'Эту подсказку можно удалить.')
     c.font = Font(name='Arial', size=10, color='66726B')
     c.alignment = Alignment(wrap_text=True, vertical='center')
     c.protection = Protection(locked=False)
@@ -323,5 +323,6 @@ def build_study(path, title, rows, *, style='standard', palette='green', subtitl
     ws.page_margins = PageMargins(left=.3, right=.3, top=.3, bottom=.3, header=.1, footer=.1)
     ws.print_title_rows = f'{header}:{header}'
     ws.print_area = f'A1:{get_column_letter(end)}{note_row}'
+    apply_formula_protection(wb, protect)
     wb.save(path)
     return cache

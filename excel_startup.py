@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.page import PageMargins
 from openpyxl.workbook.properties import CalcProperties
-from excel_styles import PALETTES, normalize_excel_appearance
+from excel_styles import apply_formula_protection, PALETTES, normalize_excel_appearance
 
 MISSING = 'Заполните данные'
 INVALID = 'Проверьте данные'
@@ -121,7 +121,7 @@ def _money(value):
     return float(Decimal(str(value)).quantize(Decimal('.01'),rounding=ROUND_HALF_UP))
 
 
-def build_startup(path, title, data, *, style='standard', palette='green', number=None):
+def build_startup(path, title, data, *, style='standard', palette='green', number=None, protect=False):
     model = normalize_model(data,number)
     style,palette = normalize_excel_appearance(style,palette)
     designer=style=='designer'
@@ -313,7 +313,7 @@ def build_startup(path, title, data, *, style='standard', palette='green', numbe
             cell=f'{col}{first}';rng=f'{cell}:{col}{last}'
             ws.conditional_formatting.add(rng,FormulaRule(formula=[f'AND(ISNUMBER({cell}),{cell}<0)'],font=Font(color='9C0006',bold=True),fill=PatternFill('solid',fgColor='FCE4D6')))
             ws.conditional_formatting.add(rng,FormulaRule(formula=[f'ISTEXT({cell})'],font=Font(color='9C0006'),fill=PatternFill('solid',fgColor='FFF2CC')))
-    note(inputs,last_input+2,'Цветные ячейки доступны для ввода. Месяцы сначала связаны с базовыми параметрами; можно заменить число для отдельного месяца. Пустое поле не равно нулю. Если затраты или налог исключены, явно впишите 0. Налог вводится с %, например 6%. Защита снимается без пароля.',6)
+    note(inputs,last_input+2,'Цветные ячейки доступны для ввода. Месяцы сначала связаны с базовыми параметрами; можно заменить число для отдельного месяца. Пустое поле не равно нулю. Если затраты или налог исключены, явно впишите 0. Налог вводится с %, например 6%. ' + ('Защита снимается без пароля.' if protect else 'Защита выключена: формулы тоже можно менять.'),6)
     note(plan,pl+3,'Результат = выручка − постоянные расходы − переменные расходы − заданный налог с выручки. Возврат вложений = накопленный результат минус стартовые вложения. Остаток денег учитывает деньги на старте. Отрицательный остаток означает нехватку средств.',8)
     explanation=('Упрощённый денежный план одного продукта: оплата и затраты приходятся на месяц продажи. '
         'Кредиты, отсрочки, НДС и амортизация не моделируются. Налог — только заданный процент от выручки. '
@@ -346,5 +346,6 @@ def build_startup(path, title, data, *, style='standard', palette='green', numbe
     inputs.print_title_rows=f'{monthly_header}:{monthly_header}'
     plan.print_title_rows=f'{header}:{header}'
     wb.active=0
+    apply_formula_protection(wb, protect)
     wb.save(path)
     return caches

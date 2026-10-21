@@ -10,10 +10,10 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.page import PageMargins
 from openpyxl.worksheet.table import Table
 from openpyxl.workbook.properties import CalcProperties
-from excel_styles import PALETTES, normalize_excel_appearance
+from excel_styles import apply_formula_protection, PALETTES, normalize_excel_appearance
 
 
-def build_price_list(path, title, rows, *, style='standard', palette='green', subtitle=None, number=None):
+def build_price_list(path, title, rows, *, style='standard', palette='green', subtitle=None, number=None, protect=False):
     if not rows:
         raise ValueError('В прайс-листе нет позиций')
     number = number or (lambda value, default=None: default if value in (None, '') else float(value))
@@ -105,8 +105,7 @@ def build_price_list(path, title, rows, *, style='standard', palette='green', su
                 lines = sum(max(1, math.ceil(len(line)/max(1, width-3))) for line in value.split('\n'))
                 height = max(height, lines*16+8)
         ws.row_dimensions[r].height = height
-    # A native Excel Table supports filtering and full-row sorting. No sheet protection:
-    # Excel cannot sort protected ranges containing locked formula cells.
+    # A native Excel Table supports filtering. Sorting locked formulas requires unprotecting.
     ref = f'{get_column_letter(start)}{header}:{get_column_letter(end)}{last}'
     ws.add_table(Table(displayName='PriceCatalogue', ref=ref))
     ws.freeze_panes = f'{mapping["price"]}{first}'
@@ -130,6 +129,7 @@ def build_price_list(path, title, rows, *, style='standard', palette='green', su
     ws.merge_cells(start_row=note_row, start_column=start, end_row=note_row, end_column=end)
     note = 'Цены и описания можно менять. Пустая цена — не указана. Фильтры в заголовках позволяют отбирать и сортировать позиции.'
     if discounts: note += ' Скидку вводите с %, например 10%. Цена со скидкой пересчитывается автоматически.'
+    if protect: note += ' Защита формул включена. Для сортировки строк с формулами снимите защиту листа без пароля.'
     note += ' Эту подсказку можно удалить.'
     c = text(note_row, start, note)
     c.font = Font(name='Arial', size=10, color='66726B')
@@ -143,5 +143,6 @@ def build_price_list(path, title, rows, *, style='standard', palette='green', su
     ws.page_margins = PageMargins(left=.3,right=.3,top=.3,bottom=.3,header=.1,footer=.1)
     ws.print_title_rows = f'{header}:{header}'
     ws.print_area = f'A1:{get_column_letter(end)}{note_row}'
+    apply_formula_protection(wb, protect)
     wb.save(path)
     return cache

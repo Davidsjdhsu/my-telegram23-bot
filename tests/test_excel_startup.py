@@ -109,13 +109,13 @@ class StartupTests(unittest.TestCase):
 
 class StartupFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_miniapp_calls_real_builder_and_charges_only_after_delivery(self):
-        for fail,invalid in [(False,False),(True,False),(False,True)]:
+        for fail,invalid,protect in [(f,i,p) for f,i in [(False,False),(True,False),(False,True)] for p in [False,True,'false']]:
             data={}
             async def update(**kw):data.update(kw)
             state=SimpleNamespace(update_data=update,get_data=AsyncMock(side_effect=lambda:data),clear=AsyncMock(),set_state=AsyncMock())
             order=[];user={'generations':0,'history':[]}
             async def send(file,**kw):
-                w=load_workbook(file);self.assertEqual(w['Итоги']['A6'].fill.fgColor.rgb[-6:],PALETTES['burgundy'][0]);order.append('send')
+                w=load_workbook(file);self.assertTrue(all(s.protection.sheet == (protect is True) for s in w));self.assertEqual(w['Итоги']['A6'].fill.fgColor.rgb[-6:],PALETTES['burgundy'][0]);order.append('send')
                 if fail:raise RuntimeError('test send failure')
             msg=SimpleNamespace(from_user=SimpleNamespace(id=-903045),answer=AsyncMock(),answer_document=send)
             async def run(fn,*args,**kw):return fn(*args,**kw)
@@ -129,7 +129,7 @@ class StartupFlowTests(unittest.IsolatedAsyncioTestCase):
                 FSInputFile=lambda path,**kw:path,datetime=datetime,os=os,spend_credits=lambda *a:order.append('charge'),
                 note_success=Mock(),signature_line=AsyncMock(return_value=''),main_kb=lambda *a,**k:None,
                 Form=SimpleNamespace(waiting_excel_confirm='confirm'),excel_confirm_kb=lambda _:None))
-            await env['_handle_miniapp_payload'](msg,state,dict(kind='startup_model',content='Данные',mode='ai',excel_style='designer',excel_palette='burgundy'),'gen_excel')
+            await env['_handle_miniapp_payload'](msg,state,dict(kind='startup_model',content='Данные',mode='ai',excel_style='designer',excel_palette='burgundy',excel_protect=protect),'gen_excel')
             self.assertEqual(data['excel_mode'],'user')
             self.assertEqual(order,[] if invalid else ['send'] if fail else ['send','charge'])
             if invalid:state.clear.assert_not_awaited();state.set_state.assert_awaited_with('confirm')

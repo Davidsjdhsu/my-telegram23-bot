@@ -62,9 +62,9 @@ class ExcelAppearanceTests(unittest.TestCase):
 
 class ExcelStyleFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_miniapp_settings_reach_file_and_charge_after_send(self):
-        for kind, style, palette, fail_send in [(kind,style,palette,failed)
+        for kind, style, palette, fail_send, protect in [(kind,style,palette,failed,protect)
                 for kind in ['expense_estimate','family_budget','project_budget','price_list','calc_table']
-                for style,palette,failed in [('standard','copper',False), ('designer','burgundy',False), ('designer','copper',True)]]:
+                for style,palette,failed in [('standard','copper',False), ('designer','burgundy',False), ('designer','copper',True)] for protect in [False, True, 'false']]:
             state_data = {}
             async def update(**kwargs): state_data.update(kwargs)
             state = SimpleNamespace(update_data=update, get_data=AsyncMock(side_effect=lambda: state_data), clear=AsyncMock())
@@ -72,6 +72,7 @@ class ExcelStyleFlowTests(unittest.IsolatedAsyncioTestCase):
             order = []
             async def send(file, **kwargs):
                 ws = load_workbook(file).active
+                self.assertEqual(ws.protection.sheet, protect is True)
                 header = (6 if kind in ('price_list','calc_table') else 8) if style == 'designer' else 4
                 expected = PALETTES[palette if style == 'designer' else 'green'][0]
                 self.assertEqual(ws.cell(header,2).fill.fgColor.rgb[-6:], expected)
@@ -95,7 +96,7 @@ class ExcelStyleFlowTests(unittest.IsolatedAsyncioTestCase):
                 signature_line=AsyncMock(return_value=''),main_kb=lambda *a,**kw:None)
             env=load_functions(['excel_build','_handle_miniapp_payload'],e)
             await env['_handle_miniapp_payload'](msg,state,{'kind':kind,'content':'Данные',
-                'mode':'user','excel_style':style,'excel_palette':palette},'gen_excel')
+                'mode':'user','excel_style':style,'excel_palette':palette,'excel_protect':protect},'gen_excel')
             self.assertEqual(order,['send'] if fail_send else ['send','charge'])
             self.assertEqual(user['generations'],0 if fail_send else 1)
             if fail_send: os.remove('/tmp/xl_-903020.xlsx')

@@ -8,14 +8,14 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Si
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.page import PageMargins
 from openpyxl.workbook.properties import CalcProperties
-from excel_styles import PALETTES, normalize_excel_appearance
+from excel_styles import apply_formula_protection, PALETTES, normalize_excel_appearance
 
 TYPE_MAP = {'доход':'Доход','доходы':'Доход','income':'Доход',
             'расход':'Расход','расходы':'Расход','expense':'Расход','expenses':'Расход'}
 MONEY = '#,##0.00;(#,##0.00);"—"'
 
 
-def build_budget(path, title, kind, rows, *, style='standard', palette='green', subtitle=None, number=None):
+def build_budget(path, title, kind, rows, *, style='standard', palette='green', subtitle=None, number=None, protect=False):
     if kind not in ('family_budget', 'project_budget') or not rows:
         raise ValueError('Нужен семейный бюджет или бюджет проекта с позициями')
     number = number or (lambda value, default=None: default if value in (None, '') else float(value))
@@ -182,5 +182,6 @@ def build_budget(path, title, kind, rows, *, style='standard', palette='green', 
         ws.page_setup.fitToHeight=1
     ws.page_margins=PageMargins(left=0.3,right=0.3,top=0.3,bottom=0.3,header=0.1,footer=0.1)
     ws.print_title_rows=f'{header}:{header}';ws.print_area=f'A1:E{note_row}'
+    apply_formula_protection(wb, protect)
     wb.save(path)
     return cache

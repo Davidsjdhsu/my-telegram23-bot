@@ -7080,7 +7080,7 @@ EXCEL_MIN_ROWS_AI = {
 }
 
 
-def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_style='standard', excel_palette='green'):
+def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_style='standard', excel_palette='green', excel_protect=False):
     """Собирает смету/бюджет/прайс/расчётную таблицу с реальными формулами Excel.
     rows - список dict по схеме EXCEL_ROW_SCHEMA[kind]. Если хотя бы у одной строки заполнено
     поле category - добавляется колонка "Категория" и блок промежуточных итогов по ней (реальные
@@ -7088,25 +7088,25 @@ def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_styl
     if kind == 'expense_estimate':
         from excel_styles import build_estimate
         cache = build_estimate(path, title, rows, style=excel_style, palette=excel_palette,
-                               subtitle=subtitle, number=_xl_num)
+                               subtitle=subtitle, number=_xl_num, protect=excel_protect)
         _xl_inject_cached_values(path, cache)
         return
     if kind in ('family_budget', 'project_budget'):
         from excel_budgets import build_budget
         cache = build_budget(path, title, kind, rows, style=excel_style, palette=excel_palette,
-                             subtitle=subtitle, number=_xl_num)
+                             subtitle=subtitle, number=_xl_num, protect=excel_protect)
         _xl_inject_cached_values(path, cache)
         return
     if kind == 'price_list':
         from excel_prices import build_price_list
         cache = build_price_list(path, title, rows, style=excel_style, palette=excel_palette,
-                                 subtitle=subtitle, number=_xl_num)
+                                 subtitle=subtitle, number=_xl_num, protect=excel_protect)
         _xl_inject_cached_values(path, cache)
         return
     if kind == 'calc_table':
         from excel_study import build_study
         cache = build_study(path, title, rows, style=excel_style, palette=excel_palette,
-                            subtitle=subtitle, number=_xl_num)
+                            subtitle=subtitle, number=_xl_num, protect=excel_protect)
         _xl_inject_cached_values(path, cache)
         return
     wb = openpyxl.Workbook()
@@ -7270,15 +7270,16 @@ def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_styl
             cache.update(summary_cache)
 
 
-    _xl_protect_sheet(ws)
+    if excel_protect is True:
+        _xl_protect_sheet(ws)
     wb.save(path)
     if cache:
         _xl_inject_cached_values(path, cache)
 
 
-def build_excel_startup(path, title, colors, data, excel_style='standard', excel_palette='green'):
+def build_excel_startup(path, title, colors, data, excel_style='standard', excel_palette='green', excel_protect=False):
     from excel_startup import build_startup
-    caches = build_startup(path, title, data, style=excel_style, palette=excel_palette, number=_xl_num)
+    caches = build_startup(path, title, data, style=excel_style, palette=excel_palette, number=_xl_num, protect=excel_protect)
     for sheet_index, cache in caches.items():
         _xl_inject_cached_values(path, cache, sheet_index=sheet_index,
                                  error_cells=[ref for ref, value in cache.items() if value == "#N/A"])
@@ -7309,7 +7310,7 @@ async def start_excel(m: Message, state: FSMContext):
     if not can_afford(m.from_user.id, CREDIT_COSTS["excel"]):
         await send_no_credits_notice(m, state, lang)
         return
-    await state.update_data(excel_style='standard', excel_palette='green')
+    await state.update_data(excel_style='standard', excel_palette='green', excel_protect=False)
     await m.answer(tr("msg_for_whom_table", lang), reply_markup=excel_category_kb(lang))
     await state.set_state(Form.waiting_excel_category)
 
@@ -7342,7 +7343,7 @@ async def excel_kind(m: Message, state: FSMContext):
         cat = data.get("excel_category", "physical")
         await m.answer(tr("msg_pick_table", lang), reply_markup=excel_kind_kb(cat, lang))
         return
-    await state.update_data(excel_kind=kind, extra="", excel_style='standard', excel_palette='green')
+    await state.update_data(excel_kind=kind, extra="", excel_style='standard', excel_palette='green', excel_protect=False)
     if kind in ('expense_estimate', 'family_budget', 'project_budget', 'price_list', 'calc_table', 'startup_model'):
         await m.answer('Выбери оформление таблицы:' if lang == 'ru' else 'Choose table layout:',
                        reply_markup=excel_appearance_kb('style', lang))
@@ -7539,7 +7540,7 @@ async def excel_build(m: Message, state: FSMContext):
             parsed = extract_json(raw)
             xlsx_path = f"/tmp/xl_{uid}.xlsx"
             await run_heavy(build_excel_startup, xlsx_path, parsed.get("title") or "Финансовая модель", colors, parsed,
-                            excel_style=data.get('excel_style', 'standard'), excel_palette=data.get('excel_palette', 'green'))
+                            excel_style=data.get('excel_style', 'standard'), excel_palette=data.get('excel_palette', 'green'), excel_protect=data.get('excel_protect') is True)
             title_for_name = parsed.get("title") or "Финмодель"
 
         else:
@@ -7632,7 +7633,7 @@ async def excel_build(m: Message, state: FSMContext):
                 topic_short = topic if len(topic) <= 60 else topic[:57] + "..."
                 xl_subtitle += f" · Тема: {topic_short}"
             (await run_heavy(build_excel_items, xlsx_path, parsed.get("title") or EXCEL_KIND_DESC.get(kind, "Таблица"), kind, colors, rows, subtitle=xl_subtitle,
-                             excel_style=data.get('excel_style', 'standard'), excel_palette=data.get('excel_palette', 'green')))
+                             excel_style=data.get('excel_style', 'standard'), excel_palette=data.get('excel_palette', 'green'), excel_protect=data.get('excel_protect') is True))
             title_for_name = parsed.get("title") or EXCEL_KIND_DESC.get(kind)
 
         fname = safe_filename(title_for_name, fallback=EXCEL_KIND_DESC.get(kind, "Таблица"))
@@ -9229,7 +9230,7 @@ async def handle_free_text_request(m: Message, state: FSMContext, text: str):
                 await send_no_credits_notice(m, state, lang)
                 return
             kind = guess_excel_kind(text)
-            await state.update_data(excel_kind=kind, excel_topic=text, extra="", excel_mode="ai", excel_style='standard', excel_palette='green')
+            await state.update_data(excel_kind=kind, excel_topic=text, extra="", excel_mode="ai", excel_style='standard', excel_palette='green', excel_protect=False)
             await bot.send_message(m.from_user.id, tr("msg_request_accepted", lang))
             await excel_build(m, state)
             return
@@ -9448,7 +9449,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         await state.update_data(
             excel_kind=payload.get("kind") or "calc_table", excel_topic=content,
             extra=_clip_text(payload.get("extra"), 800), excel_mode="user" if payload.get("kind") == "startup_model" else (payload.get("mode") or "ai"),
-            excel_style=excel_style, excel_palette=excel_palette,
+            excel_style=excel_style, excel_palette=excel_palette, excel_protect=payload.get('excel_protect') is True,
         )
         await excel_build(m, state)
         return
@@ -9744,7 +9745,7 @@ async def build_excel_from_upload(m: Message, state: FSMContext, source_text: st
         kind = "calc_table"
     # Переиспользуем существующий сборщик Excel (режим "свои данные") тем же способом -
     # через заполнение состояния, а не копию логики.
-    await state.update_data(excel_kind=kind, excel_mode="user", excel_topic=source_text, extra=instruction, excel_style='standard', excel_palette='green')
+    await state.update_data(excel_kind=kind, excel_mode="user", excel_topic=source_text, extra=instruction, excel_style='standard', excel_palette='green', excel_protect=False)
     await excel_build(m, state)
 
 

@@ -35,7 +35,7 @@ class StudyTests(unittest.TestCase):
                 self.assertEqual(s.cell(h+3,start+2).data_type,'f')
                 self.assertFalse(s.cell(h+1,start+2).protection.locked)
                 self.assertTrue(s.cell(h+3,start+2).protection.locked)
-                self.assertTrue(s.protection.sheet)
+                self.assertFalse(s.protection.sheet)
                 self.assertEqual(len(s._charts),0)
                 self.assertEqual(s.print_title_rows,f'${h}:${h}')
                 self.assertEqual(w.calculation.calcMode,'auto')

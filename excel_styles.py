@@ -24,7 +24,7 @@ def normalize_excel_appearance(style=None, palette=None):
     return style, palette if style == 'designer' and isinstance(palette, str) and palette in PALETTES else 'green'
 
 
-def build_estimate(path, title, rows, *, style='standard', palette='green', subtitle=None, number=None):
+def build_estimate(path, title, rows, *, style='standard', palette='green', subtitle=None, number=None, protect=False):
     """Save a real XLSX and return caches for the existing preview-cache writer."""
     if not rows:
         raise ValueError('В смете нет позиций')
@@ -179,5 +179,21 @@ def build_estimate(path, title, rows, *, style='standard', palette='green', subt
     ws.print_options.horizontalCentered = True
     ws.print_title_rows = f'{header}:{header}'
     ws.print_area = f'A1:G{note_row}'
+    apply_formula_protection(wb, protect)
     wb.save(path)
     return cache
+
+
+def apply_formula_protection(workbook, enabled=False):
+    """Opt-in accidental-edit protection; keep explicit input overrides editable."""
+    for sheet in workbook:
+        for row in sheet:
+            for cell in row:
+                cell.protection = Protection(
+                    locked=cell.data_type == 'f' and cell.protection.locked,
+                    hidden=False,
+                )
+        sheet.protection.sheet = enabled is True
+        sheet.protection.selectLockedCells = sheet.protection.selectUnlockedCells = False
+        sheet.protection.formatCells = sheet.protection.formatColumns = sheet.protection.formatRows = False
+        sheet.protection.autoFilter = sheet.protection.sort = False
