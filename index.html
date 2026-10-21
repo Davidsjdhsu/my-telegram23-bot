@@ -1066,7 +1066,8 @@
         <input class="field-input" id="excelExtra" type="text" data-i18n-ph="excelExtraPh" placeholder="Валюта, период, другие детали">
       </div>
 
-      <div class="field-block">
+      <p id="excelStartupHint" hidden style="font-size:13px;color:#a9a1bd;line-height:1.5">Для финмодели укажите вложения, деньги на старте, цену, продажи, затраты на единицу, постоянные расходы, налог с выручки (или 0), срок и валюту. Можно задать разные значения по месяцам. Неизвестные данные останутся пустыми.</p>
+      <div class="field-block" id="excelModeBlock">
         <p class="field-label" data-i18n="dataLabel">Данные</p>
         <div class="chip-row">
           <div class="field-chip active" data-value="ai" data-group="excelMode">Придумай сам</div>
@@ -1997,13 +1998,15 @@
 
   // --- Отправка формы Excel ---
   function supportsExcelAppearance() {
-    return ['expense_estimate', 'family_budget', 'project_budget', 'price_list', 'calc_table'].includes(document.getElementById('excelKind').value);
+    return ['expense_estimate', 'family_budget', 'project_budget', 'price_list', 'calc_table', 'startup_model'].includes(document.getElementById('excelKind').value);
   }
   function updateExcelAppearance() {
     const estimate = supportsExcelAppearance();
     const designer = document.getElementById('excelStyle').value === 'designer';
     document.getElementById('excelAppearanceBlock').hidden = !estimate;
     document.getElementById('excelPaletteBlock').hidden = !estimate || !designer;
+    document.getElementById('excelModeBlock').hidden = document.getElementById('excelKind').value === 'startup_model';
+    document.getElementById('excelStartupHint').hidden = document.getElementById('excelKind').value !== 'startup_model';
   }
   document.getElementById('excelKind').addEventListener('change', updateExcelAppearance);
   document.getElementById('excelStyle').addEventListener('change', updateExcelAppearance);
@@ -2015,7 +2018,7 @@
       kind: document.getElementById('excelKind').value,
       content,
       extra: document.getElementById('excelExtra').value.trim(),
-      mode: activeChipValue('excelMode', 'ai'),
+      mode: document.getElementById('excelKind').value === 'startup_model' ? 'user' : activeChipValue('excelMode', 'ai'),
       excel_style: supportsExcelAppearance() ? document.getElementById('excelStyle').value : 'standard',
       excel_palette: supportsExcelAppearance() && document.getElementById('excelStyle').value === 'designer' ? document.getElementById('excelPalette').value : 'green',
     });

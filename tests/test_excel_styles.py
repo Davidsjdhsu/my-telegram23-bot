@@ -103,7 +103,7 @@ class ExcelStyleFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_buttons_select_style_and_palette(self):
         data = {}
         async def update(**kw):data.update(kw)
-        state=SimpleNamespace(update_data=update,set_state=AsyncMock())
+        state=SimpleNamespace(update_data=update,set_state=AsyncMock(),get_data=AsyncMock(side_effect=lambda:data))
         msg=SimpleNamespace(text='Дизайнерский',from_user=SimpleNamespace(id=1),answer=AsyncMock())
         form=SimpleNamespace(waiting_excel_mode='mode',waiting_excel_palette='palette')
         env=load_functions(['excel_style_choice','excel_palette_choice'],dict(user_lang=lambda _:'ru',

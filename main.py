@@ -7019,7 +7019,7 @@ def _xl_protect_sheet(ws):
     ws.protection.selectUnlockedCells = False
 
 
-def _xl_inject_cached_values(path, cache):
+def _xl_inject_cached_values(path, cache, sheet_index=1, error_cells=()):
     """openpyxl пишет в ячейку с формулой только сам текст формулы ("=SUM(...)"),
     без результата - настоящий Excel/Numbers/Google Таблицы пересчитывают всё сами
     при открытии, но быстрый просмотр файла (например Quick Look на iPhone) формулы
@@ -7031,7 +7031,7 @@ def _xl_inject_cached_values(path, cache):
     import zipfile
     import shutil
 
-    sheet_path = "xl/worksheets/sheet1.xml"
+    sheet_path = f"xl/worksheets/sheet{sheet_index}.xml"
     tmp_path = path + ".tmp"
     with zipfile.ZipFile(path, "r") as zin:
         data = {n: zin.read(n) for n in zin.namelist()}
@@ -7044,7 +7044,7 @@ def _xl_inject_cached_values(path, cache):
         if ref not in cache or cache[ref] is None or cell.find("{" + ns + "}f") is None:
             continue
         val = cache[ref]
-        cell.set("t", "str" if isinstance(val, str) else "n")
+        cell.set("t", "e" if ref in error_cells else "str" if isinstance(val, str) else "n")
         v = cell.find("{" + ns + "}v")
         if v is None:
             v = ET.SubElement(cell, "{" + ns + "}v")
@@ -7276,125 +7276,12 @@ def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_styl
         _xl_inject_cached_values(path, cache)
 
 
-def build_excel_startup(path, title, colors, data):
-    """Финмодель стартапа - данные (инвестиции, расходы, цена, продажи, срок) реальные,
-    от пользователя, никогда не придумываются моделью. Всё, что видно в файле кроме
-    самих исходных чисел - настоящие формулы Excel (выручка/прибыль/накопительный итог)."""
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Финмодель"
-
-    horizon = max(1, min(int(_xl_num(data.get("horizon_months"), 12)), 36))
-    investment = _xl_num(data.get("investment"))
-    price = _xl_num(data.get("price"))
-    monthly_sales = _xl_num(data.get("monthly_sales"))
-    expenses = [{"name": (e or {}).get("name", ""), "amount": _xl_num((e or {}).get("amount"))}
-                for e in (data.get("expenses") or [])]
-
-    n_cols = 5
-    _xl_style_sheet(ws, colors, n_cols)
-    _xl_title(ws, title, colors, n_cols)
-    cache = {}  # адрес ячейки -> посчитанное код значение, для _xl_inject_cached_values
-
-    _xl_subtitle(ws, "Синие ячейки — исходные данные. Постоянные цена, продажи и расходы по месяцам.", colors, n_cols)
-    for row, label, value in ((3, "Стартовые вложения, ₽", investment),
-                              (4, "Цена за единицу, ₽", price),
-                              (5, "Продажи в месяц, шт.", monthly_sales)):
-        _xl_body_row(ws, row, [label, None, None, None, value], colors,
-                     money_cols={5} if row != 5 else set())
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
-        ws.cell(row, 5).font = XlFont(color="1767B0", bold=True)
-    r = 8
-    ws.cell(row=r, column=1, value="Ежемесячные расходы").font = XlFont(bold=True)
-    r += 1
-    exp_first = r
-    total_exp_value = sum((e.get("amount") or 0) for e in expenses)
-    for i, e in enumerate(expenses, 1):
-        _xl_body_row(ws, r, [e.get("name", ""), None, None, None, e.get("amount", 0)], colors, money_cols={5}, zebra=(i % 2 == 0))
-        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=4)
-        r += 1
-    exp_last = r - 1 if expenses else exp_first
-    if not expenses:
-        _xl_body_row(ws, r, [None, "—", None, None, 0], colors, money_cols={5})
-        exp_last = r
-        r += 1
-    total_exp_row = r
-    _xl_total_row(ws, total_exp_row, "Итого расходов в месяц", [None, None, None, f"=SUM(E{exp_first}:E{exp_last})"], colors, n_cols, money_cols={5})
-    cache[f"E{total_exp_row}"] = total_exp_value
-    r = total_exp_row + 1
-
-    fx_note = data.get("_fx_note")
-    if fx_note:
-        ws.cell(row=r, column=1, value=f"💱 {fx_note}").font = XlFont(italic=True, size=9, color=_xl_hex(colors["mute"]))
-        r += 1
-
-    r += 1
-
-    headers = ["Месяц", "Выручка, ₽", "Расходы, ₽", "Прибыль, ₽", "Накопительно, ₽"]
-    _xl_header_row(ws, r, headers, colors)
-    table_start = r + 1
-    r = table_start
-
-    # cum_values считаем заранее (не только для "срока окупаемости", но и чтобы
-    # сразу знать, какое число закешировать в каждую ячейку E - формула та же математика)
-    rev_value = price * monthly_sales
-    profit_value = rev_value - total_exp_value
-    cum_values = []
-    running = -investment
-    for month in range(1, horizon + 1):
-        running += profit_value
-        cum_values.append(running)
-
-    for month in range(1, horizon + 1):
-        rev_formula = "=$E$4*$E$5"
-        exp_formula = f"=$E${total_exp_row}"
-        profit_formula = f"=B{r}-C{r}"
-        if month == 1:
-            cum_formula = f"=D{r}-$E$3"
-        else:
-            cum_formula = f"=D{r}+E{r - 1}"
-        _xl_body_row(ws, r, [f"Месяц {month}", rev_formula, exp_formula, profit_formula, cum_formula], colors, money_cols={2, 3, 4, 5}, zebra=(month % 2 == 0))
-        cache[f"B{r}"] = rev_value
-        cache[f"C{r}"] = total_exp_value
-        cache[f"D{r}"] = profit_value
-        cache[f"E{r}"] = cum_values[month - 1]
-        r += 1
-    table_end = r - 1
-    _xl_finalize_table(ws, colors, table_start - 1, table_start, table_end, n_cols)
-
-    import math
-    # Depends on the calculated monthly rows, so manual changes recalculate too.
-    r += 1
-    payback_formula = (f'=IF($E$3<=0,0,IF(COUNTIF(E{table_start}:E{table_end},">=0")=0,'
-                       f'"Не достигается",MATCH(TRUE,INDEX(E{table_start}:E{table_end}>=0,0),0)))')
-    _xl_total_row(ws, r, "Окупаемость в пределах расчёта, мес.", [None, None, None, payback_formula], colors, n_cols)
-    cache[f"E{r}"] = 0 if investment <= 0 else next((i + 1 for i, v in enumerate(cum_values) if v >= 0), "Не достигается")
-    r += 1
-    _xl_total_row(ws, r, "Точка безубыточности, продаж/мес.", [None, None, None,
-                  f'=IF($E$4>0,ROUNDUP(E{total_exp_row}/$E$4,0),"Укажите цену")'], colors, n_cols)
-    cache[f"E{r}"] = math.ceil(total_exp_value / price) if price > 0 else "Укажите цену"
-
-    for i in range(1, n_cols + 1):
-        ws.column_dimensions[get_column_letter(i)].width = 20
-    ws.column_dimensions["A"].width = 40
-
-    # Линейный график прибыли и накопительного итога по месяцам - сразу видно момент
-    # выхода в плюс (пересечение накопительной линии с нулём), а не только число в ячейке.
-    chart = LineChart()
-    chart.style = 12
-    chart.y_axis.title = "₽"
-    chart.x_axis.title = "Месяц"
-    data_ref = Reference(ws, min_col=4, max_col=5, min_row=table_start - 1, max_row=table_end)
-    cats_ref = Reference(ws, min_col=1, min_row=table_start, max_row=table_end)
-    chart.add_data(data_ref, titles_from_data=True)
-    chart.set_categories(cats_ref)
-    chart.height = 9
-    chart.width = 19
-    ws.add_chart(chart, f"{get_column_letter(n_cols + 2)}{table_start - 1}")
-
-    _xl_protect_sheet(ws)
-    wb.save(path)
-    _xl_inject_cached_values(path, cache)
+def build_excel_startup(path, title, colors, data, excel_style='standard', excel_palette='green'):
+    from excel_startup import build_startup
+    caches = build_startup(path, title, data, style=excel_style, palette=excel_palette, number=_xl_num)
+    for sheet_index, cache in caches.items():
+        _xl_inject_cached_values(path, cache, sheet_index=sheet_index,
+                                 error_cells=[ref for ref, value in cache.items() if value == "#N/A"])
 
 
 EXCEL_KIND_DESC = {
@@ -7456,18 +7343,10 @@ async def excel_kind(m: Message, state: FSMContext):
         await m.answer(tr("msg_pick_table", lang), reply_markup=excel_kind_kb(cat, lang))
         return
     await state.update_data(excel_kind=kind, extra="", excel_style='standard', excel_palette='green')
-    if kind in ('expense_estimate', 'family_budget', 'project_budget', 'price_list', 'calc_table'):
+    if kind in ('expense_estimate', 'family_budget', 'project_budget', 'price_list', 'calc_table', 'startup_model'):
         await m.answer('Выбери оформление таблицы:' if lang == 'ru' else 'Choose table layout:',
                        reply_markup=excel_appearance_kb('style', lang))
         await state.set_state(Form.waiting_excel_style)
-        return
-    if kind == "startup_model":
-        # Финмодель - данные всегда реальные от пользователя, режим "сгенерировать" тут не предлагаем.
-        await m.answer(
-            tr("msg_startup_data_prompt", lang),
-            reply_markup=cancel_kb(lang)
-        )
-        await state.set_state(Form.waiting_excel_startup_data)
         return
     await m.answer(
         tr("msg_how_build_table", lang),
@@ -7495,6 +7374,13 @@ async def excel_style_choice(m: Message, state: FSMContext):
         await m.answer('Выбери цвет таблицы:', reply_markup=excel_appearance_kb('palette', lang))
         await state.set_state(Form.waiting_excel_palette)
     else:
+        data = await state.get_data()
+        if data.get('excel_kind') == 'startup_model':
+            from excel_startup import STARTUP_HINT_RU, STARTUP_HINT_EN
+            await state.update_data(excel_mode='user')
+            await m.answer(STARTUP_HINT_RU if lang == 'ru' else STARTUP_HINT_EN, reply_markup=cancel_kb(lang))
+            await state.set_state(Form.waiting_excel_startup_data)
+            return
         await m.answer(tr('msg_how_build_table', lang), reply_markup=excel_mode_kb(lang))
         await state.set_state(Form.waiting_excel_mode)
 
@@ -7507,6 +7393,13 @@ async def excel_palette_choice(m: Message, state: FSMContext):
         await m.answer('Выбери цвет кнопкой:', reply_markup=excel_appearance_kb('palette', lang))
         return
     await state.update_data(excel_style='designer', excel_palette=palette)
+    data = await state.get_data()
+    if data.get('excel_kind') == 'startup_model':
+        from excel_startup import STARTUP_HINT_RU, STARTUP_HINT_EN
+        await state.update_data(excel_mode='user')
+        await m.answer(STARTUP_HINT_RU if lang == 'ru' else STARTUP_HINT_EN, reply_markup=cancel_kb(lang))
+        await state.set_state(Form.waiting_excel_startup_data)
+        return
     await m.answer(tr('msg_how_build_table', lang), reply_markup=excel_mode_kb(lang))
     await state.set_state(Form.waiting_excel_mode)
 
@@ -7641,59 +7534,14 @@ async def excel_build(m: Message, state: FSMContext):
 
     try:
         if kind == "startup_model":
-            # Только извлечение реальных чисел, которые пользователь уже прислал -
-            # модель не имеет права ничего досочинять или менять числа.
-            raw = await ask_grok(f"""Извлеки структурированные данные для финансовой модели стартапа
-из сообщения пользователя. Числа НИЧЕГО не выдумывай и не досчитывай за пользователя - если какой-то
-суммы нет в тексте, ставь 0 (кроме horizon_months - если не указано, ставь 12).
-В список expenses включи не только статьи, явно названные пользователем, но и типичные для такого
-проекта категории расходов (аренда, зарплаты, маркетинг/реклама, оборудование/техника, хостинг/ИТ,
-налоги и обязательные платежи, прочее - выбери те, что подходят по смыслу проекта), даже если сумма
-по ним не упомянута - в таком случае ставь amount=0. Это делает список ПОЛНЕЕ, а не выдуманнее: суммы
-остаются честными, добавляются только названия недостающих статей. Не меньше 6 строк в expenses.
-Для КАЖДОЙ суммы (стартовые вложения, каждая статья расходов, цена за единицу) отдельно определи,
-в какой валюте её назвал пользователь - по явному указанию ("долларов", "$", "евро", "€") или по
-контексту. Если валюта явно не указана - ставь "RUB". НИКОГДА не конвертируй суммы сам и не пересчитывай
-их в рубли - оставляй исходное число ровно как в сообщении пользователя, конвертация делается отдельно
-кодом по курсу, а не тобой.
-Сообщение пользователя:
-{topic}
-Доп. уточнения: {extra}
-Только JSON:
-{{"title":"короткое название проекта по смыслу сообщения","investment":0,"investment_currency":"RUB",
-"expenses":[{{"name":"...","amount":0,"currency":"RUB"}}],"price":0,"price_currency":"RUB",
-"monthly_sales":0,"horizon_months":12}}{lang_instr}""")
+            from excel_startup import STARTUP_PROMPT
+            raw = await ask_grok(STARTUP_PROMPT + f"\nСообщение пользователя: {topic}\nУточнения: {extra}\n" + lang_instr)
             parsed = extract_json(raw)
-
-            # Конвертация в рубли делается здесь кодом по фиксированному курсу (FX_TO_RUB),
-            # а не доверяется модели - иначе есть риск, что она либо забудет сконвертировать
-            # (как было раньше: доллары просто вставлялись как есть вместо рублей), либо
-            # применит собственный устаревший/придуманный курс. Собираем список реальных
-            # конвертаций, чтобы честно показать пользователю, что и по какому курсу пересчитано.
-            fx_notes = []
-
-            def _conv(amount, currency, label):
-                rate = _xl_fx_rate(currency)
-                amount = _xl_num(amount)
-                if rate != 1.0 and amount:
-                    converted = amount * rate
-                    fx_notes.append(f"{label}: {amount:,.0f} {currency} → {converted:,.0f} ₽".replace(",", " "))
-                    return converted
-                return amount
-
-            parsed["investment"] = _conv(parsed.get("investment"), parsed.get("investment_currency"), "Стартовые вложения")
-            parsed["price"] = _conv(parsed.get("price"), parsed.get("price_currency"), "Цена за единицу")
-            for e in (parsed.get("expenses") or []):
-                e["amount"] = _conv(e.get("amount"), e.get("currency"), e.get("name") or "Расход")
-            if fx_notes:
-                parsed["_fx_note"] = (
-                    f"Курс на {FX_NOTE_DATE} (примерный, уточни актуальный при необходимости): "
-                    + "; ".join(fx_notes)
-                )
-
             xlsx_path = f"/tmp/xl_{uid}.xlsx"
-            (await run_heavy(build_excel_startup, xlsx_path, parsed.get("title") or "Финансовая модель", colors, parsed))
+            await run_heavy(build_excel_startup, xlsx_path, parsed.get("title") or "Финансовая модель", colors, parsed,
+                            excel_style=data.get('excel_style', 'standard'), excel_palette=data.get('excel_palette', 'green'))
             title_for_name = parsed.get("title") or "Финмодель"
+
         else:
             schema = EXCEL_ROW_SCHEMA[kind]
             min_rows = EXCEL_MIN_ROWS_AI.get(kind, 10)
@@ -7800,12 +7648,21 @@ async def excel_build(m: Message, state: FSMContext):
         note = tr("msg_table_ready", lang)
         if kind == "startup_model":
             note += tr("msg_check_source_numbers", lang)
-            if parsed.get("_fx_note"):
-                note += f"\n\n💱 {parsed['_fx_note']}"
         note += "\n\n" + await signature_line(lang)
         await m.answer(note, reply_markup=main_kb(lang, uid=m.from_user.id))
         await state.clear()
     except Exception as e:
+        from excel_startup import StartupValidationError
+        if kind == 'startup_model' and isinstance(e, StartupValidationError):
+            await state.set_state(Form.waiting_excel_confirm)
+            await m.answer(
+                'Нужно уточнить финансовую модель. Поддерживается один продукт, одна валюта, срок до 36 месяцев '
+                'и заданный налог с выручки. Пришли уточнение или измени запрос. '
+                'Исходный запрос сохранён, кредиты не списаны.' if lang == 'ru' else
+                'Please clarify the model: one product, one currency, up to 36 months, and an explicit revenue tax rate. '
+                'Add details or change the request. Your request is saved; no credits were charged.',
+                reply_markup=excel_confirm_kb(lang))
+            return
         from excel_study import StudyValidationError
         if kind == 'calc_table' and isinstance(e, StudyValidationError):
             await state.set_state(Form.waiting_excel_confirm)
@@ -9590,7 +9447,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         excel_style, excel_palette = normalize_excel_appearance(payload.get('excel_style'), payload.get('excel_palette'))
         await state.update_data(
             excel_kind=payload.get("kind") or "calc_table", excel_topic=content,
-            extra=_clip_text(payload.get("extra"), 800), excel_mode=payload.get("mode") or "ai",
+            extra=_clip_text(payload.get("extra"), 800), excel_mode="user" if payload.get("kind") == "startup_model" else (payload.get("mode") or "ai"),
             excel_style=excel_style, excel_palette=excel_palette,
         )
         await excel_build(m, state)

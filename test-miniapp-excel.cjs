@@ -6,7 +6,7 @@ el('excelKind').value='startup_model'; el('excelStyle').value='standard'; el('ex
 const sent=[];
 vm.runInNewContext(html.slice(html.indexOf('  // --- Отправка формы Excel'),html.indexOf('  // --- Отправка договора купли-продажи')),
  {document:{getElementById:el},activeChipValue:()=> 'user',sendAction:(action,payload)=>sent.push({action,payload})});
-assert.equal(el('excelAppearanceBlock').hidden,true);
+assert.equal(el('excelAppearanceBlock').hidden,false);
 el('excelKind').value='expense_estimate';el('excelKind').click();
 assert.equal(el('excelAppearanceBlock').hidden,false);assert.equal(el('excelPaletteBlock').hidden,true);
 el('excelContent').value='Смета';el('excelSubmit').click();
@@ -24,6 +24,8 @@ for (const kind of ['family_budget','project_budget','price_list','calc_table'])
  assert.equal(sent.at(-1).payload.excel_palette,'copper');
 }
 el('excelKind').value='startup_model';el('excelKind').click();el('excelSubmit').click();
-assert.equal(el('excelAppearanceBlock').hidden,true);assert.equal(sent.at(-1).payload.excel_style,'standard');
+assert.equal(el('excelAppearanceBlock').hidden,false);assert.equal(sent.at(-1).payload.excel_style,'designer');
+assert.equal(sent.at(-1).payload.mode,'user');assert.equal(el('excelModeBlock').hidden,true);assert.equal(el('excelStartupHint').hidden,false);
+el('excelKind').value='calc_table';el('excelKind').click();assert.equal(el('excelModeBlock').hidden,false);assert.equal(el('excelStartupHint').hidden,true);
 assert.match(html,/data-cost="5"/);
 console.log('PASS: estimate layout selection, palette visibility, standard fixed green, outgoing payload.');

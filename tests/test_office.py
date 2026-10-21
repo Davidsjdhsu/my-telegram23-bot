@@ -25,15 +25,6 @@ class OfficeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p=str(Path(td)/'test.docx');e['build_word'](p,'Документ',[{'title':'Раздел','content':'Текст','table':{'headers':['Имя','Количество'],'rows':[['А','12']]}}]);d=e['Document'](p)
             self.assertAlmostEqual(d.sections[0].page_width.cm,21,places=2);h=next(p for p in d.paragraphs if p.text=='Раздел');self.assertEqual(h.style.name,'Heading 1');self.assertTrue(h.paragraph_format.keep_with_next);self.assertIn('tblHeader',d.tables[0].rows[0]._tr.xml)
-    def test_startup_inputs_formulas_and_cache(self):
-        e=office_env()
-        with tempfile.TemporaryDirectory() as td:
-            p=str(Path(td)/'model.xlsx');e['build_excel_startup'](p,'Мастерская',COLORS,{'investment':100000,'price':1000,'monthly_sales':100,'expenses':[{'name':'Аренда','amount':60000}],'horizon_months':12});w=e['openpyxl'].load_workbook(p).active;c=e['openpyxl'].load_workbook(p,data_only=True).active
-            self.assertEqual(w['E3'].value,100000);self.assertFalse(w['E3'].protection.locked);self.assertTrue(any(x.value=='=$E$4*$E$5' for row in w for x in row));pay=next(x for row in w for x in row if x.data_type=='f' and 'MATCH(TRUE' in x.value);self.assertEqual(c[pay.coordinate].value,3);self.assertTrue(pay.protection.locked)
-    def test_nonpayback_cache(self):
-        e=office_env()
-        with tempfile.TemporaryDirectory() as td:
-            p=str(Path(td)/'model.xlsx');e['build_excel_startup'](p,'Убыток',COLORS,{'investment':100,'price':0,'monthly_sales':0,'expenses':[]});w=e['openpyxl'].load_workbook(p,data_only=True).active;values=[x.value for row in w for x in row];self.assertIn('Не достигается',values);self.assertIn('Укажите цену',values)
     def test_budget_type_and_labels(self):
         e=office_env()
         with tempfile.TemporaryDirectory() as td:
