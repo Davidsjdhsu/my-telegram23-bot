@@ -1,0 +1,71 @@
+"""Shared task context and writing guidance, independent of the subject matter.
+
+Optional planning metadata is advisory: old plans remain valid and a missing
+summary must never turn an otherwise valid presentation into an error.
+"""
+
+PURPOSES = ('overview', 'definition', 'process', 'structure', 'comparison',
+            'example', 'cause', 'application', 'summary')
+
+EXPLANATION_RULES = '''
+Общие правила объяснения для любой темы:
+Сначала учитывай цель, аудиторию и её исходные знания. Сведения пользователя
+отличай от предположений автора: конкретный пример не означает правило для всех случаев.
+Задача слайда определяет текст, а не декоративный макет:
+- overview: какие стороны темы рассматриваем и как они связаны;
+- definition: что это, отличительный признак и при необходимости короткий пример;
+- process: кто или что действует, что меняется, результат и существенные условия;
+- structure: части целого и их роли/связи, без выдуманного порядка действий;
+- comparison: одинаковые критерии для обеих сторон, существенное различие;
+- example: конкретная ситуация и её связь с объясняемой мыслью, без обобщения на все случаи;
+- cause: причина, связь с результатом и границы утверждения;
+- application: где и при каких условиях это применимо;
+- summary: ответ на цель презентации из уже объяснённого, без новых обещаний.
+Не пытайся использовать все задачи в одной презентации. Не добавляй пункты ради симметрии.
+Одно предложение должно выражать понятное действие, свойство или связь. У глагола должен
+быть подходящий субъект; при неясном «это», «он», «та же» назови предмет прямо.
+Профессиональный термин объясни при первом существенном употреблении с учётом аудитории;
+не повторяй определение на каждом слайде. Предметная точность важнее красивой фразы.
+Упрощай глубину, но сохраняй смысл: не превращай «может» во «всегда», типичный вариант
+в единственный, косвенную связь в прямую, условное действие в обязательный этап.
+Не добавляй оговорки к каждому общеизвестному факту; уточнение нужно, только если без него
+читатель получит неверное представление. Аналогия объясняет отдельное свойство и не является
+буквальным описанием устройства. Покажи границу аналогии, если иначе она вводит в заблуждение.
+Не раскрывай полный механизм на слайде, задача которого — определение, обзор или сравнение.
+Если при кратком изложении теряется нужное условие, сократи вводные слова и повторы;
+не выкидывай условие ради лимита и не заменяй объяснение набором существительных.
+Формулировка point в плане задаёт направление, но не доказывает факт. При написании можно
+уточнить неверное обобщение из point, сохранив тему, порядок и обязательные вопросы пользователя.
+Текст в блоках, таблице и узлах схемы должен сохранять те же условия, что и content:
+читатель видит именно эти элементы. Частный пример пометь в видимом тексте, не только в content.
+'''
+
+
+def clean_understanding(value):
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    goal = value.get('goal')
+    if isinstance(goal, str) and 0 < len(goal.strip()) <= 240:
+        result['goal'] = goal.strip()
+    for key in ('requirements', 'assumptions'):
+        values = value.get(key)
+        if isinstance(values, list):
+            clean = [v.strip() for v in values if isinstance(v, str) and 0 < len(v.strip()) <= 200]
+            clean = list(dict.fromkeys(clean))[:(12 if key == 'requirements' else 3)]
+            if clean:
+                result[key] = clean
+    return result
+
+
+def request_context(data, plan=None):
+    """Raw request is authoritative; the model's summary is only an interpretation."""
+    plan = plan or {}
+    return {
+        'source': {k: data.get(k) for k in ('topic', 'user_text', 'extra', 'mode',
+                   'content_lang', 'pres_photo_context', 'photo_album_only')},
+        'audience': plan.get('audience'),
+        'slide_count': len(plan['slides']) if plan.get('slides') else data.get('slides'),
+        'plan_interpretation': clean_understanding(plan.get('understanding')),
+        'priority': 'Явный запрос пользователя важнее интерпретации автора. Предположения не являются фактами.',
+    }
