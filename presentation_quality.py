@@ -3,6 +3,7 @@ from presentation_diagrams import effective_diagram, diagram_text, diagram_relat
 from presentation_copy import source_instruction, final_process_requested
 import json
 import re
+import time
 from difflib import SequenceMatcher
 
 REVIEW_SYSTEM = 'Ты редактор. Проверяй данные, возвращай только JSON с issues.'
@@ -132,9 +133,48 @@ def parse_review(value,slide_numbers):
 
 
 async def review_content(data,plan,content,generate,parse):
+    started = time.monotonic()
+    numbers = {s['number'] for s in content['slides']}
+    previous = data.get('_editor_previous') or {}
+    before = previous.get('content') or {}
+    old_slides = {s['number']:review_slide(s) for s in before.get('slides', [])}
+    changed = {s['number'] for s in content['slides']
+               if review_slide(s) != old_slides.get(s['number'])}
+    if before.get('title') != content.get('title') or set(old_slides) != numbers:
+        changed = numbers
+    # A successful review belongs to the exact content, not to the repair attempt.
+    # Carry unresolved findings on unchanged slides; do not ask critics to invent
+    # new objections to material they have already accepted.
+    carried = [x for x in previous.get('issues', []) if x['slide'] in numbers - changed]
+    if not changed:
+        print(f'presentation_review cached slides={len(numbers)} unresolved={len(carried)}', flush=True)
+        return carried
+    scope = '\nОбласть проверки: ' + json.dumps(sorted(changed)) + '''.
+Остальные слайды даны для контекста и уже проверены. Возвращай замечания только к
+номерам из области проверки. Проверь также противоречия исправленного текста с
+остальными слайдами: относить такое замечание нужно к изменённому слайду.
+Не начинай новую редактуру принятых неизменённых слайдов. Проверь устранение прежних
+замечаний и новые фактические ошибки, внесённые исправлением, без повышения требований.
+Предыдущие замечания: ''' + json.dumps(previous.get('issues', []), ensure_ascii=False)
+    practical = '''
+Калибровка существенности: учитывай указанную аудиторию, количество слайдов и цель.
+Не требуй полного физического механизма от обзорной презентации, определения или
+схемы structure, которая показывает понятия или части целого. Возврат обязателен
+только для cycle; последовательность — для sequence и дизайнерского process. Абстрактные понятия
+не превращай в этапы процесса. Упрощённое, но верное объяснение не является logic.
+logic требует конкретной ложной связи/вывода в visible_text или relations; назови
+её в fix и предложи минимальное исправление. missing — отсутствие явно запрошенного
+пункта или перехода, без которого заявленное объяснение неверно; не дополнительная
+деталь сверх плана. empty — действительно бессодержательный текст, а не краткий
+вывод с конкретным фактом, применением или ограничением. language — непонятный
+смысл; стилистическая неловкость понятной фразы — wording. Если можно убрать
+неверное обобщение, предложи это вместо добавления новых неподтверждённых деталей.
+Не пропускай фактические ошибки, выдуманные личные сведения и ложные стрелки.
+Собери все существенные замечания в текущей области сразу.
+'''
     visual_issues=[]
     mechanism_issues=[]
-    if any(s.get('diagram') for s in content['slides']):
+    if any(s.get('diagram') and s['number'] in changed for s in content['slides']):
         prompt='''Независимая проверка полноты объяснения. Сначала восстанови правильный механизм
 по теме и знаниям предмета, не копируя предложенную схему. Затем сравни с видимым текстом.
 Особенно проверь возврат в цикле: состояние, давление, температура или другие условия должны
@@ -149,9 +189,9 @@ async def review_content(data,plan,content,generate,parse):
             {'topic':data.get('topic'),'request':data.get('extra'),
              'slides':[{'number':s['number'],'text':visible_copy(s),'relations':diagram_relations(s)} for s in content['slides']]},ensure_ascii=False)
         for attempt in range(2):
-            raw=await generate(prompt,max_tokens=1800,system_prompt=REVIEW_SYSTEM,temperature=0.1)
+            raw=await generate(prompt+scope+practical,max_tokens=1800,system_prompt=REVIEW_SYSTEM,temperature=0.1)
             try:
-                mechanism_issues=parse_review(parse(raw),{s['number'] for s in content['slides']})
+                mechanism_issues=parse_review(parse(raw),changed)
                 if any(x['problem'] not in ('missing','logic','unsupported') for x in mechanism_issues):raise ValueError('Invalid mechanism review')
                 break
             except (ValueError,TypeError,KeyError,AttributeError):
@@ -159,13 +199,15 @@ async def review_content(data,plan,content,generate,parse):
     # Inspect image subjects separately: a long prose review can otherwise notice
     # one fabricated component at a time and exhaust the bounded repair budget.
     photo_slides=[{'number':s['number'],'title':s['title'],'image_prompt':s.get('image_prompt')}
-                  for s in content['slides'] if s.get('visual_kind')=='photo' and not effective_diagram(s)]
+                  for s in content['slides'] if s['number'] in changed and s.get('visual_kind')=='photo' and not effective_diagram(s)]
     if photo_slides:
         prompt='''Проверь ВСЕ перечисленные замыслы сгенерированных фотографий за один проход.
 Нужно ли изображать точное устройство функционального узла, внутренности, трубки/соединения,
 разрез или анатомию, чтобы фотография объясняла функцию? Такая выдуманная фотография
 недопустима: укажи КАЖДЫЙ такой слайд, problem=image_mismatch, fix=заменить на
-technical_diagram с понятными этапами и пустым image_prompt. Нельзя исправить это новым ракурсом.
+technical_diagram с пустым image_prompt. Для частей или понятий используй structure,
+для настоящей последовательности sequence. Не выдумывай этапы ради схемы.
+Нельзя исправить это новым ракурсом.
 Фото целого прибора в комнате, людей, пейзажа, наблюдаемого действия, еды допустимы.
 Не проверяй текст, стиль или факты. Верни только JSON {"issues":[{"slide":2,"problem":"image_mismatch","fix":"..."}]}.
 Не больше 6 замечаний. Если нарушений нет, issues=[]. Данные:\n'''+json.dumps(photo_slides,ensure_ascii=False)
@@ -180,12 +222,15 @@ technical_diagram с понятными этапами и пустым image_pro
                 if attempt:raise DeckQualityError('Visual subject review unavailable') from None
     # A transient/invalid critic response gets one retry, never approval by default.
     for attempt in range(2):
-        raw=await generate(review_prompt(data,plan,content),max_tokens=2200,
+        raw=await generate(review_prompt(data,plan,content)+scope+practical,max_tokens=2200,
                            system_prompt=REVIEW_SYSTEM,temperature=0.1)
         try:
-            editorial=parse_review(parse(raw),{s['number'] for s in content['slides']})
-            combined=mechanism_issues+editorial+visual_issues
-            combined=[x for i,x in enumerate(combined) if not any(y['slide']==x['slide'] and y['problem']==x['problem'] for y in combined[:i])]
-            return combined[:6]
+            editorial=parse_review(parse(raw),changed)
+            combined=carried+mechanism_issues+editorial+visual_issues
+            # Distinct fixes in the same category can be independent errors.
+            # Truncation previously hid findings until a later repair round.
+            combined=[x for i,x in enumerate(combined) if x not in combined[:i]]
+            print(f'presentation_review seconds={time.monotonic()-started:.2f} changed={len(changed)} accepted_unchanged={len(numbers-changed)} issues={len(combined)}', flush=True)
+            return combined
         except (ValueError,TypeError,KeyError,AttributeError):
             if attempt:raise DeckQualityError('Editorial review unavailable') from None

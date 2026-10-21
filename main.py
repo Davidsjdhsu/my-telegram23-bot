@@ -5760,6 +5760,7 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
                 prompt += "\n" + content_instruction(photo_story=photo_story, final_process=final_process_requested(data))
             base_prompt = prompt
             repair_snapshot = None
+            editor_previous = None
             for attempt in range(3):
                 raw = await ask_grok(prompt, max_tokens=10000, system_prompt=PRESENTATION_SYSTEM, temperature=0.35)
                 if grok_failed(raw):
@@ -5797,7 +5798,10 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
                         # or become fatal merely because a local checker found them.
                         # Assign only after review succeeds: an unavailable reviewer
                         # must never leave an advisory-only result eligible for delivery.
-                        reviewed = await review_content(data, plan, content, ask_grok, extract_json)
+                        review_data = dict(data, _editor_previous=editor_previous)
+                        reviewed = await review_content(review_data, plan, content, ask_grok, extract_json)
+                        editor_previous = {'content':json.loads(json.dumps(content)),
+                                           'issues':json.loads(json.dumps(reviewed))}
                         quality_issues = local_findings + reviewed
                     if quality_issues:
                         # Only fixed issue categories enter logs; editor text stays within this request.
@@ -5947,9 +5951,10 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
         except Exception:
             print("presentation_pdf notice_delivery_failed", flush=True)
     except DeckQualityError:
+        print('presentation_editor failed=review_not_passed', flush=True)
         await state.set_state(Form.waiting_confirm)
         notice = {
-            "ru": "Не удалось подготовить достаточно качественный текст. Баллы не списаны, тема и настройки сохранены. Можно повторить сборку или уточнить план.",
+            "ru": "Не удалось завершить проверку текста. Кредиты не списаны, тема и настройки сохранены. Можно повторить сборку или уточнить план.",
             "en": "The content did not pass review. No credits were charged; your topic and settings are saved. Retry or refine the plan.",
         }
         try:
