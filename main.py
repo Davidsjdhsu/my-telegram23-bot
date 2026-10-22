@@ -2270,79 +2270,79 @@ THEMES = {
     # включая арабский и китайский, где декоративные латинские шрифты всё равно не
     # применяются рендерером). Для строгих/деловых тем (business, minimal) и универсальной
     # (default) шрифт заголовка намеренно не меняем - там уместна одна типографика без игры.
-    "nature": {"bg": (248, 246, 241), "ink": (22, 22, 24), "mid": (70, 70, 74), "mute": (130, 128, 124), "line": (22, 22, 24),
+    "nature": {"bg": (35, 60, 50), "ink": (244, 241, 231), "mid": (244, 241, 231), "mute": (219, 219, 209), "line": (213, 214, 204),
                "photo": "photorealistic nature photography, cinematic sunlight, no text, no watermark", "heading_font": "Georgia"},
-    "business": {"bg": (16, 16, 18), "ink": (245, 245, 247), "mid": (196, 196, 200), "mute": (120, 120, 126), "line": (212, 175, 90),
+    "business": {"bg": (36, 40, 50), "ink": (243, 244, 247), "mid": (243, 244, 247), "mute": (218, 220, 223), "line": (212, 175, 90),
                  "photo": "premium business photography, architecture, cinematic, no text, no watermark", "heading_font": "Calibri"},
-    "tech": {"bg": (8, 16, 28), "ink": (240, 246, 255), "mid": (176, 196, 220), "mute": (110, 130, 155), "line": (90, 170, 230),
+    "tech": {"bg": (16, 34, 56), "ink": (234, 242, 252), "mid": (234, 242, 252), "mute": (208, 217, 228), "line": (90, 170, 230),
              "photo": "futuristic technology photography, cinematic, no text, no watermark", "heading_font": "Trebuchet MS"},
-    "school": {"bg": (250, 249, 246), "ink": (28, 32, 40), "mid": (60, 64, 72), "mute": (120, 124, 132), "line": (40, 90, 180),
+    "school": {"bg": (219, 230, 241), "ink": (36, 54, 75), "mid": (36, 54, 75), "mute": (58, 75, 95), "line": (40, 90, 180),
                "photo": "clear educational photo, bright, no text, no watermark", "heading_font": "Trebuchet MS"},
-    "fashion": {"bg": (252, 250, 247), "ink": (18, 18, 18), "mid": (70, 66, 62), "mute": (140, 134, 128), "line": (18, 18, 18),
+    "fashion": {"bg": (232, 213, 206), "ink": (54, 43, 48), "mid": (54, 43, 48), "mute": (75, 63, 67), "line": (18, 18, 18),
                 "photo": "editorial fashion photography, magazine look, no text, no watermark", "heading_font": "Georgia"},
-    "history": {"bg": (245, 237, 224), "ink": (48, 32, 20), "mid": (90, 70, 50), "mute": (140, 120, 95), "line": (140, 90, 40),
+    "history": {"bg": (228, 209, 175), "ink": (68, 48, 33), "mid": (68, 48, 33), "mute": (87, 67, 50), "line": (140, 90, 40),
                 "photo": "historical documentary photography, museums, archives, cinematic, no text", "heading_font": "Georgia"},
-    "science": {"bg": (244, 248, 252), "ink": (16, 32, 56), "mid": (50, 70, 95), "mute": (110, 130, 150), "line": (20, 90, 160),
+    "science": {"bg": (211, 229, 232), "ink": (22, 62, 73), "mid": (22, 62, 73), "mute": (45, 82, 92), "line": (20, 90, 160),
                 "photo": "scientific photography, labs, space, macro details, cinematic, no text", "heading_font": "Trebuchet MS"},
-    "sport": {"bg": (18, 18, 20), "ink": (250, 250, 252), "mid": (210, 210, 214), "mute": (140, 140, 146), "line": (230, 70, 40),
+    "sport": {"bg": (41, 50, 45), "ink": (243, 245, 233), "mid": (243, 245, 233), "mute": (219, 222, 210), "line": (230, 70, 40),
               "photo": "dynamic sports photography, motion, stadium light, cinematic, no text", "heading_font": "Trebuchet MS"},
-    "travel": {"bg": (247, 243, 236), "ink": (32, 28, 24), "mid": (80, 70, 60), "mute": (130, 120, 110), "line": (180, 120, 60),
+    "travel": {"bg": (230, 207, 173), "ink": (64, 56, 45), "mid": (64, 56, 45), "mute": (84, 74, 60), "line": (89, 79, 64),
                "photo": "travel photography, cities and landscapes, golden hour, cinematic, no text", "heading_font": "Georgia"},
-    "food": {"bg": (252, 248, 242), "ink": (40, 24, 16), "mid": (90, 60, 40), "mute": (140, 110, 90), "line": (180, 80, 40),
+    "food": {"bg": (238, 212, 188), "ink": (75, 47, 36), "mid": (75, 47, 36), "mute": (95, 67, 54), "line": (180, 80, 40),
              "photo": "food photography, editorial restaurant style, no text, no watermark", "heading_font": "Georgia"},
-    "art": {"bg": (20, 18, 22), "ink": (248, 244, 238), "mid": (200, 190, 180), "mute": (140, 130, 125), "line": (220, 180, 120),
+    "art": {"bg": (62, 48, 67), "ink": (244, 234, 240), "mid": (244, 234, 240), "mute": (222, 212, 219), "line": (220, 180, 120),
             "photo": "art gallery photography, paintings, sculpture, cinematic, no text", "heading_font": "Georgia"},
-    "eco": {"bg": (236, 244, 236), "ink": (20, 40, 24), "mid": (50, 80, 55), "mute": (100, 125, 105), "line": (40, 110, 60),
+    "eco": {"bg": (213, 227, 202), "ink": (41, 68, 50), "mid": (41, 68, 50), "mute": (62, 87, 68), "line": (40, 110, 60),
             "photo": "ecology photography, forests, clean energy, cinematic, no text", "heading_font": "Trebuchet MS"},
-    "minimal": {"bg": (250, 250, 250), "ink": (18, 18, 18), "mid": (70, 70, 70), "mute": (140, 140, 140), "line": (18, 18, 18),
+    "minimal": {"bg": (229, 227, 223), "ink": (41, 42, 45), "mid": (41, 42, 45), "mute": (64, 64, 66), "line": (18, 18, 18),
                 "photo": "minimalist photography, clean composition, negative space, no text", "heading_font": "Calibri"},
-    "default": {"bg": (248, 246, 241), "ink": (22, 22, 24), "mid": (70, 70, 74), "mute": (130, 128, 124), "line": (22, 22, 24),
+    "default": {"bg": (37, 52, 72), "ink": (239, 242, 246), "mid": (239, 242, 246), "mute": (215, 219, 225), "line": (209, 214, 220),
                 "photo": "cinematic photorealistic photo, no text, no watermark", "heading_font": "Calibri"},
 
     # --- Расширение палитры: ещё 22 темы (было 14, теперь 36) ---
-    "ocean": {"bg": (240, 248, 250), "ink": (10, 40, 60), "mid": (40, 80, 100), "mute": (110, 140, 155), "line": (20, 120, 170),
+    "ocean": {"bg": (18, 68, 81), "ink": (234, 245, 244), "mid": (234, 245, 244), "mute": (208, 224, 224), "line": (202, 218, 220),
               "photo": "ocean and underwater photography, cinematic blue tones, no text, no watermark", "heading_font": "Trebuchet MS"},
-    "space": {"bg": (10, 8, 24), "ink": (235, 235, 250), "mid": (170, 170, 200), "mute": (110, 110, 140), "line": (140, 90, 230),
+    "space": {"bg": (33, 27, 60), "ink": (241, 236, 255), "mid": (241, 236, 255), "mute": (216, 211, 232), "line": (140, 90, 230),
               "photo": "space photography, galaxies, nebulae, cinematic, no text, no watermark", "heading_font": "Trebuchet MS"},
-    "medicine": {"bg": (246, 250, 249), "ink": (20, 40, 38), "mid": (60, 90, 86), "mute": (120, 145, 140), "line": (20, 150, 140),
+    "medicine": {"bg": (215, 234, 228), "ink": (36, 69, 63), "mid": (36, 69, 63), "mute": (57, 89, 83), "line": (63, 94, 88),
                  "photo": "clean medical and healthcare photography, bright, no text, no watermark", "heading_font": "Calibri"},
-    "finance": {"bg": (20, 22, 24), "ink": (245, 244, 240), "mid": (190, 188, 180), "mute": (120, 118, 112), "line": (200, 165, 80),
+    "finance": {"bg": (25, 61, 54), "ink": (240, 241, 229), "mid": (240, 241, 229), "mute": (214, 219, 208), "line": (200, 165, 80),
                 "photo": "corporate finance photography, skyscrapers, cinematic, no text, no watermark", "heading_font": "Georgia"},
-    "luxury": {"bg": (14, 12, 10), "ink": (248, 244, 235), "mid": (200, 190, 170), "mute": (130, 120, 105), "line": (212, 175, 90),
+    "luxury": {"bg": (48, 40, 32), "ink": (239, 225, 193), "mid": (239, 225, 193), "mute": (216, 203, 174), "line": (212, 175, 90),
                "photo": "luxury premium photography, elegant, cinematic lighting, no text, no watermark", "heading_font": "Georgia"},
-    "pastel": {"bg": (252, 246, 250), "ink": (60, 40, 60), "mid": (110, 90, 110), "mute": (160, 145, 160), "line": (210, 140, 190),
+    "pastel": {"bg": (232, 221, 240), "ink": (68, 54, 79), "mid": (68, 54, 79), "mute": (88, 74, 98), "line": (93, 79, 103),
                "photo": "soft pastel photography, dreamy, gentle light, no text, no watermark", "heading_font": "Georgia"},
-    "neon": {"bg": (8, 8, 10), "ink": (240, 255, 250), "mid": (150, 220, 210), "mute": (90, 140, 135), "line": (60, 240, 200),
+    "neon": {"bg": (20, 40, 43), "ink": (182, 244, 223), "mid": (182, 244, 223), "mute": (163, 220, 201), "line": (60, 240, 200),
              "photo": "neon cyberpunk photography, night city lights, cinematic, no text, no watermark", "heading_font": "Trebuchet MS"},
-    "monochrome": {"bg": (255, 255, 255), "ink": (15, 15, 15), "mid": (70, 70, 70), "mute": (150, 150, 150), "line": (15, 15, 15),
+    "monochrome": {"bg": (36, 36, 36), "ink": (242, 242, 242), "mid": (242, 242, 242), "mute": (217, 217, 217), "line": (211, 211, 211),
                    "photo": "black and white photography, high contrast, no text, no watermark", "heading_font": "Calibri"},
-    "autumn": {"bg": (250, 244, 235), "ink": (50, 30, 15), "mid": (100, 65, 35), "mute": (150, 120, 90), "line": (190, 90, 30),
+    "autumn": {"bg": (112, 64, 47), "ink": (255, 240, 223), "mid": (255, 240, 223), "mute": (238, 219, 202), "line": (234, 214, 197),
                "photo": "autumn photography, fall foliage, warm light, cinematic, no text, no watermark", "heading_font": "Georgia"},
-    "winter": {"bg": (245, 248, 252), "ink": (20, 30, 45), "mid": (60, 80, 100), "mute": (130, 145, 160), "line": (70, 130, 190),
+    "winter": {"bg": (215, 226, 238), "ink": (42, 62, 87), "mid": (42, 62, 87), "mute": (63, 82, 105), "line": (70, 130, 190),
                "photo": "winter photography, snow, ice, crisp cold light, no text, no watermark", "heading_font": "Trebuchet MS"},
-    "spring": {"bg": (248, 250, 240), "ink": (30, 45, 20), "mid": (70, 95, 50), "mute": (130, 150, 110), "line": (120, 175, 60),
+    "spring": {"bg": (224, 232, 196), "ink": (53, 70, 39), "mid": (53, 70, 39), "mute": (74, 89, 58), "line": (79, 94, 63),
                "photo": "spring photography, blossoms, fresh greenery, bright, no text, no watermark", "heading_font": "Trebuchet MS"},
-    "coffee": {"bg": (247, 240, 230), "ink": (45, 30, 20), "mid": (90, 65, 48), "mute": (140, 115, 95), "line": (110, 70, 40),
+    "coffee": {"bg": (73, 54, 43), "ink": (242, 227, 206), "mid": (242, 227, 206), "mute": (222, 206, 186), "line": (217, 201, 182),
                "photo": "coffee and cafe photography, warm cozy light, no text, no watermark", "heading_font": "Georgia"},
-    "wine": {"bg": (24, 10, 14), "ink": (245, 235, 235), "mid": (200, 170, 170), "mute": (130, 105, 105), "line": (150, 30, 50),
+    "wine": {"bg": (88, 43, 58), "ink": (247, 232, 233), "mid": (247, 232, 233), "mute": (228, 209, 212), "line": (223, 204, 207),
              "photo": "wine and vineyard photography, moody rich tones, cinematic, no text, no watermark", "heading_font": "Georgia"},
-    "forest_dark": {"bg": (12, 20, 16), "ink": (235, 245, 235), "mid": (170, 195, 170), "mute": (105, 130, 105), "line": (60, 150, 90),
+    "forest_dark": {"bg": (22, 45, 37), "ink": (231, 239, 226), "mid": (231, 239, 226), "mute": (206, 216, 203), "line": (60, 150, 90),
                     "photo": "dark forest photography, deep woods, moody light, cinematic, no text, no watermark", "heading_font": "Georgia"},
-    "sunset": {"bg": (252, 238, 225), "ink": (60, 30, 25), "mid": (120, 70, 55), "mute": (165, 120, 100), "line": (230, 110, 60),
+    "sunset": {"bg": (238, 194, 168), "ink": (89, 52, 41), "mid": (89, 52, 41), "mute": (107, 69, 56), "line": (111, 73, 60),
                "photo": "sunset and golden hour photography, warm sky, cinematic, no text, no watermark", "heading_font": "Georgia"},
-    "arctic": {"bg": (248, 250, 252), "ink": (25, 35, 45), "mid": (70, 90, 105), "mute": (140, 155, 165), "line": (50, 150, 200),
+    "arctic": {"bg": (210, 229, 234), "ink": (38, 70, 83), "mid": (38, 70, 83), "mute": (59, 89, 101), "line": (64, 94, 106),
                "photo": "arctic and glacier photography, ice, cold pristine light, no text, no watermark", "heading_font": "Trebuchet MS"},
-    "urban": {"bg": (24, 24, 26), "ink": (240, 240, 242), "mid": (180, 180, 184), "mute": (115, 115, 120), "line": (230, 80, 50),
+    "urban": {"bg": (60, 65, 72), "ink": (240, 241, 243), "mid": (240, 241, 243), "mute": (218, 220, 222), "line": (213, 215, 217),
               "photo": "urban city photography, streets, concrete architecture, cinematic, no text, no watermark", "heading_font": "Trebuchet MS"},
-    "vintage": {"bg": (244, 235, 218), "ink": (55, 42, 28), "mid": (100, 80, 58), "mute": (150, 130, 105), "line": (140, 100, 55),
+    "vintage": {"bg": (217, 196, 162), "ink": (73, 57, 39), "mid": (73, 57, 39), "mute": (90, 74, 54), "line": (140, 100, 55),
                 "photo": "vintage sepia photography, old paper texture feel, nostalgic, no text, no watermark", "heading_font": "Georgia"},
-    "cyberpunk": {"bg": (12, 6, 20), "ink": (240, 235, 250), "mid": (200, 150, 220), "mute": (120, 95, 140), "line": (220, 40, 200),
+    "cyberpunk": {"bg": (50, 30, 66), "ink": (248, 222, 250), "mid": (248, 222, 250), "mute": (224, 199, 228), "line": (220, 40, 200),
                   "photo": "cyberpunk photography, neon magenta and cyan lights, night, cinematic, no text, no watermark", "heading_font": "Trebuchet MS"},
-    "floral": {"bg": (250, 246, 244), "ink": (45, 35, 38), "mid": (95, 75, 80), "mute": (150, 130, 132), "line": (200, 110, 130),
+    "floral": {"bg": (232, 206, 213), "ink": (80, 53, 64), "mid": (80, 53, 64), "mute": (98, 71, 82), "line": (103, 76, 86),
                "photo": "floral photography, flowers, soft natural light, no text, no watermark", "heading_font": "Georgia"},
-    "royal": {"bg": (16, 12, 28), "ink": (245, 240, 250), "mid": (195, 180, 210), "mute": (125, 112, 140), "line": (190, 155, 60),
+    "royal": {"bg": (57, 40, 92), "ink": (244, 232, 205), "mid": (244, 232, 205), "mute": (222, 209, 191), "line": (190, 155, 60),
               "photo": "royal palace and regal photography, opulent, cinematic, no text, no watermark", "heading_font": "Georgia"},
-    "desert": {"bg": (248, 238, 220), "ink": (60, 42, 25), "mid": (115, 85, 55), "mute": (160, 135, 105), "line": (200, 120, 50),
+    "desert": {"bg": (225, 189, 136), "ink": (74, 53, 34), "mid": (74, 53, 34), "mute": (92, 69, 46), "line": (97, 73, 49),
                "photo": "desert photography, dunes, warm sand tones, cinematic, no text, no watermark", "heading_font": "Georgia"},
 }
 
@@ -4271,11 +4271,13 @@ def sandwich_colors(colors):
 
 
 def slide_background(slide, colors):
-    """Фон слайда - мягкий диагональный градиент в сторону акцентного цвета темы, а не
-    плоская сплошная заливка (раньше каждый слайд был одним и тем же прямоугольником цвета -
-    визуально скучно и все презентации выглядели "плоско"). Разница между стоп-цветами
-    держится небольшой (12%), чтобы не спорить по контрасту с текстом поверх фона."""
+    """Обычные слайды используют точный сплошной фон; старые вызовы — градиент."""
     bg = colors["bg"]
+    if colors.get("solid_background"):
+        # One editable, exact theme color on photo, text and diagram slides.
+        slide.background.fill.solid()
+        slide.background.fill.fore_color.rgb = RGBColor(*bg)
+        return None
     accent = colors["line"]
     blend = 0.12
     bg2 = tuple(int(bg[i] + (accent[i] - bg[i]) * blend) for i in range(3))
@@ -5710,11 +5712,17 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
         theme_name = data.get("theme_name") or pick_theme(data.get("topic", ""))[0]
         colors = data.get("custom_colors") or THEMES.get(theme_name, THEMES["default"])
         colors = apply_design(colors, plan)
-        dark_colors, light_colors = sandwich_colors(colors)
-        if plan["design"]["background"] != "theme":
+        designer = is_designer(data)
+        if designer:
+            dark_colors, light_colors = sandwich_colors(colors)
+            if plan["design"]["background"] != "theme":
+                dark_colors = light_colors = colors
+        else:
+            # Keep the confirmed palette across the entire ordinary deck.
+            # Explicit light/dark requests and imported palettes still take priority.
+            colors = {**colors, "solid_background": True}
             dark_colors = light_colors = colors
         cgl = content_gen_lang(data, lang)
-        designer = is_designer(data)
         if resumed:
             content = resumed['content']
         else:
