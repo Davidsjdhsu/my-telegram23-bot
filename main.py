@@ -50,7 +50,7 @@ from collections import deque
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.filters import Command, StateFilter
-from aiogram.types import (Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+from aiogram.types import (Message, FSInputFile, BufferedInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
                             WebAppInfo, MenuButtonWebApp, MenuButtonDefault,
                             LabeledPrice, PreCheckoutQuery,
                             InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery)
@@ -5031,7 +5031,8 @@ def native_miniapp_url(lang="ru"):
 
 
 async def sync_menu_button(chat_id: int | None, u: dict, lang: str):
-    url = native_miniapp_url(lang)
+    from studio_private import menu_url
+    url = menu_url(WEB_BASE_URL, chat_id, native_miniapp_url(lang))
     if not url:
         return
     try:
@@ -9537,6 +9538,8 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
             "theme_name": payload.get("style") or "default", "slides": slides,
             "mode": "user" if user_text else "ai", "content_lang": lang,
             "photo_mode": payload.get("photo_mode") or "ai",
+            **({"extra": "Шаблон №" + payload["studio_template"][1:]}
+               if m.from_user.id == 465823470 and re.fullmatch(r"d(?:0?[1-9]|[1-4][0-9]|50)", str(payload.get("studio_template", ""))) else {}),
         })
         return
 
@@ -10268,10 +10271,13 @@ async def api_action_handler(request):
     user = miniapp_verified_user(body.get("initData"))
     if not user:
         return _aiohttp_web.json_response({"ok": False, "error": "invalid init data"}, status=401, headers=headers)
-    action, payload = body.get("action"), body.get("payload") or {}
+    return await accept_miniapp_action(user, body.get("action"), body.get("payload") or {}, body.get("requestId"))
+
+
+async def accept_miniapp_action(user, action, payload, request_id):
+    headers = _cors_headers()
     if not isinstance(action, str) or action not in MINIAPP_ACTIONS:
         return _aiohttp_web.json_response({"ok": False, "error": "unknown action"}, status=400, headers=headers)
-    request_id = body.get("requestId")
     if request_id is not None and (not isinstance(request_id, str) or not 1 <= len(request_id) <= 100):
         return _aiohttp_web.json_response({"ok": False, "error": "bad request id"}, status=400, headers=headers)
     uid = user["id"]
@@ -10505,6 +10511,22 @@ async def start_web_server():
     статику Mini App, если она перенесена на этот же сервер (см. MINIAPP_STATIC_DIR),
     3) принимает вебхуки от ЮKassa и действия Mini App из /api/action."""
     app = _aiohttp_web.Application()
+    from studio_private import Studio
+    async def studio_send_file(uid, data):
+        await bot.send_document(uid, BufferedInputFile(data, filename="AlixDoc-constructor.pptx"),
+            caption="Конструктор: ваш редактируемый PPTX. Закрытый тест, кредиты не списаны.")
+    async def studio_action(user, payload, request_id):
+        return await accept_miniapp_action(user, "gen_presentation", payload, request_id)
+    async def studio_profile(user):
+        from studio_menu import recent_payments
+        u = miniapp_user_record(user)
+        return {"name": u.get("name") or "", "credits": u.get("credits", 0),
+                "unlimited": user["id"] in ADMIN_IDS, "lang": user_lang(user["id"]),
+                "mode": u.get("control_mode", "buttons"),
+                "history": [str(h)[:200] for h in (u.get("history") or [])[-30:]],
+                "payments": await asyncio.to_thread(recent_payments, PAYMENTS_LOG_FILE, user["id"])}
+    Studio(miniapp_verified_user, studio_send_file, studio_action, WEB_BASE_URL,
+           profile=studio_profile, menu_action=accept_miniapp_action).register(app)
     app.router.add_get("/", _health_handler)
     app.router.add_get("/health", _health_handler)
     app.router.add_get("/index.html", _miniapp_static_handler)
@@ -10530,6 +10552,7 @@ async def main():
     print("REPLICATE TOKEN:", "YES" if REPLICATE_API_TOKEN else "NO")
     await start_web_server()
     await sync_menu_button(None, {}, "ru")
+    await sync_menu_button(465823470, {}, "ru")
     # Текст на экране бота ДО нажатия Start (карточка профиля бота в Telegram) -
     # выставляется один раз при каждом запуске, обёрнуто в try/except, потому что
     # это не критичная для работы бота вещь: если Telegram сейчас недоступен для
