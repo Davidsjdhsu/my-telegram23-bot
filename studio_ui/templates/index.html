@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AlixDoc · Реальные оформления</title><link rel="stylesheet" href="fonts.css"><link rel="stylesheet" href="style.css"></head><body><a href="/studio/home/" style="display:block;padding:10px 20px;color:#c4aa7d;font:14px system-ui">← Главное меню · Word, Excel и профиль</a>
+<div id="alix-real-catalog" class="viz-dotted-background">
+ <div class="rc-app">
+  <header><div class="rc-logo">Alix<span>Doc</span></div><small>Личный тест · AlixDoc</small></header>
+  <main>
+   <h1>Ваше оформление</h1>
+   <p>Реальные слайды из шаблонов AlixDoc</p>
+   <div class="rc-kinds" aria-label="Тип презентации">
+    <button type="button" class="cursor-interaction" data-kind="standard"><strong>Обычная</strong><small>5 кредитов за слайд</small></button>
+    <button type="button" class="cursor-interaction" data-kind="designer"><strong>Дизайнерская</strong><small>10 кредитов за слайд</small></button>
+    <a class="rc-constructor" href="/studio/constructor/"><strong>Конструктор</strong><small>Бесплатно в личном тесте</small></a>
+   </div>
+   <div class="rc-style" aria-label="Дизайнерское оформление">
+    <button type="button" class="cursor-interaction" data-style="strict">Строгое</button>
+    <button type="button" class="cursor-interaction" data-style="soft">Мягкое</button>
+   </div>
+   <a id="rc-diagrams" href="/studio/constructor/diagrams.html" hidden>Посмотреть новые варианты схем →</a>
+   <div class="rc-row"><label for="rc-templates">Все оформления</label><small id="rc-count"></small></div>
+   <select id="rc-templates" aria-label="Выберите оформление"></select>
+   <div class="rc-stage"><img id="rc-slide" alt="" draggable="false"><span id="rc-quality" role="status"></span><button type="button" id="rc-zoom-open" aria-label="Увеличить слайд">Увеличить</button></div>
+   <div class="rc-slide-tabs" aria-label="Слайды примера">
+    <button type="button" class="cursor-interaction" data-page="0">Обложка</button>
+    <button type="button" class="cursor-interaction" data-page="1">Текст</button>
+<button type="button" class="cursor-interaction" data-page="2">Фото</button>
+<button type="button" class="cursor-interaction" data-page="3">Схема</button>
+   </div>
+   <div class="rc-caption"><span>Пример: «Работа кофейни»</span><span>Листайте слайды ↔</span></div>
+   <div class="rc-nav">
+    <button type="button" class="cursor-interaction" data-move="-1" aria-label="Предыдущее оформление">‹</button>
+    <div class="rc-name" aria-live="polite"><span id="rc-name"></span><small id="rc-position"></small></div>
+    <button type="button" class="cursor-interaction" data-move="1" aria-label="Следующее оформление">›</button>
+   </div>
+   <div class="rc-rail" aria-label="Каталог оформлений"></div>
+   <p id="rc-pattern"></p>
+   <dialog id="rc-zoom"><div class="rc-zoom-bar"><span id="rc-zoom-title"></span><button type="button" id="rc-zoom-close">Закрыть ×</button></div><img id="rc-zoom-image" alt=""><div class="rc-zoom-controls"><button type="button" data-page-move="-1">← Предыдущий</button><button type="button" data-page-move="1">Следующий →</button></div></dialog>
+   <div class="rc-footer">
+    <div class="rc-price-row">
+     <label for="rc-slides">Слайдов <select id="rc-slides"><option>4</option><option selected>6</option><option>8</option><option>10</option><option>12</option><option>16</option></select></label>
+     <div class="rc-total"><strong id="rc-price"></strong><small>Обложка, PPTX и PDF включены</small></div>
+    </div>
+    <label for="rc-topic">Тема презентации</label><textarea id="rc-topic" maxlength="500" rows="3" placeholder="О чём сделать презентацию?" style="width:100%;box-sizing:border-box;background:#202630;color:#eee3d2;border:1px solid #655c50;border-radius:12px;padding:12px;margin:12px 0;font:16px system-ui"></textarea><button type="button" class="rc-primary cursor-interaction" id="rc-confirm">Показать план в Telegram</button><p>Сначала бот покажет план. Полная сборка и списание — после подтверждения в чате.</p>
+    <p class="rc-status" id="rc-status" aria-live="polite"></p>
+   </div>
+  </main>
+ </div>
+</div>
+
+<script src="preview-loader.js"></script><script src="app.js"></script></body></html>

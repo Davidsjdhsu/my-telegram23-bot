@@ -22,7 +22,7 @@ class MiniAppEntryTests(unittest.IsolatedAsyncioTestCase):
         self.bot = SimpleNamespace(id=10, send_message=AsyncMock(), set_chat_menu_button=AsyncMock())
         self.env = load_functions(['verify_telegram_init_data', 'miniapp_verified_user',
             'miniapp_user_record', 'api_profile_handler', 'api_action_handler',
-            'run_miniapp_action', '_cors_headers', 'native_miniapp_url', 'sync_menu_button'], {
+            'run_miniapp_action', 'accept_miniapp_action', '_cors_headers', 'native_miniapp_url', 'sync_menu_button'], {
             'BOT_TOKEN': 'unit-test-token', 'INIT_DATA_MAX_AGE_SECONDS': 604800,
             'hashlib': hashlib, 'hmac': hmac, 'time': time, 'asyncio': asyncio,
             'parse_qsl': __import__('urllib.parse', fromlist=['parse_qsl']).parse_qsl,

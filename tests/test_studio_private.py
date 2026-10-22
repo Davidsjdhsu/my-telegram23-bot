@@ -1,0 +1,125 @@
+import hashlib,hmac,io,json,time,unittest
+from unittest.mock import AsyncMock,patch
+from urllib.parse import urlencode,parse_qsl
+from aiohttp import web,CookieJar
+from aiohttp.test_utils import TestClient,TestServer
+from studio_private import Studio,PILOT_UID,COOKIE,menu_url
+from studio_export import build_pptx
+from pptx import Presentation
+from test_presentation_support import load_functions
+ORIGIN='https://example.test'
+HEADERS={'Origin':ORIGIN,'X-Studio-Request':'1'}
+class StudioTests(unittest.IsolatedAsyncioTestCase):
+ async def asyncSetUp(self):
+  self.send=AsyncMock();self.action=AsyncMock(side_effect=lambda *a: web.json_response({'ok':True},status=202))
+  verify=load_functions(['verify_telegram_init_data','miniapp_verified_user'],{'BOT_TOKEN':'test-token','INIT_DATA_MAX_AGE_SECONDS':604800,'parse_qsl':parse_qsl,'hmac':hmac,'hashlib':hashlib,'json':json,'time':time})['miniapp_verified_user']
+  self.studio=Studio(verify,self.send,self.action,ORIGIN)
+  app=web.Application();self.studio.register(app)
+  self.client=TestClient(TestServer(app),cookie_jar=CookieJar(unsafe=True));await self.client.start_server()
+ async def asyncTearDown(self):
+  await self.client.close()
+  for archive in self.studio.archives:archive.close()
+ def signed(self,uid=PILOT_UID,age=0):
+  p={'auth_date':str(int(time.time())-age),'user':json.dumps({'id':uid,'first_name':'Test'})}
+  secret=hmac.new(b'WebAppData',b'test-token',hashlib.sha256).digest()
+  p['hash']=hmac.new(secret,'\n'.join(f'{k}={v}' for k,v in sorted(p.items())).encode(),hashlib.sha256).hexdigest()
+  return urlencode(p)
+ async def login(self):
+  r=await self.client.post('/studio/session',json={'initData':self.signed()},headers=HEADERS);self.assertEqual(r.status,200)
+  c=r.cookies[COOKIE];self.assertTrue(c['httponly']);self.assertTrue(c['secure']);self.assertEqual(c['samesite'],'Strict')
+  self.client.session.cookie_jar.update_cookies({COOKIE:c.value})
+ async def test_auth_rejects_unsigned_other_user_expired_future_missing_date(self):
+  for v in ['',self.signed(123),self.signed(age=3602),self.signed(age=-100),self.signed().replace('auth_date=','not_date=')]:
+   r=await self.client.post('/studio/session',json={'initData':v,'user_id':PILOT_UID},headers=HEADERS);self.assertEqual(r.status,403)
+  for path in ['/studio/constructor/','/studio/templates/catalog.json','/studio/constructor/app.js']:
+   self.assertEqual((await self.client.get(path)).status,401)
+  self.assertEqual((await self.client.post('/studio/export',json={})).status,401)
+ async def test_valid_session_paths_and_csrf(self):
+  await self.login()
+  for path in ['/studio/templates/','/studio/constructor/app.js']:self.assertEqual((await self.client.get(path)).status,200)
+  r=await self.client.post('/studio/generate',json={},headers={'Origin':'https://evil.test','X-Studio-Request':'1'});self.assertEqual(r.status,403)
+  self.assertEqual((await self.client.post('/studio/session',json={},headers={'Origin':ORIGIN})).status,403)
+  with patch('studio_private.Path.is_file',return_value=False):
+   r=await self.client.get('/studio/constructor/coffee.jpg');self.assertEqual(r.status,200);self.assertGreater(len(await r.read()),1000)
+  for session in self.studio.sessions.values():session['expires']=0
+  self.assertEqual((await self.client.get('/studio/templates/')).status,401)
+ async def test_template_choice_and_price_mode_forwarded(self):
+  await self.login()
+  for kind,style,key,expected in [('standard','strict','nature','nature'),('designer','soft','d16','designer_soft')]:
+   r=await self.client.post('/studio/generate',headers=HEADERS,json={'kind':kind,'style':style,'key':key,'slides':6,'topic':'Киты','requestId':'test-'+kind});self.assertEqual(r.status,202)
+   user,payload,rid=self.action.call_args.args;self.assertEqual(user['id'],PILOT_UID);self.assertEqual(payload['style'],expected)
+   if kind=='designer':self.assertEqual(payload['studio_template'],'d16')
+  r=await self.client.post('/studio/generate',headers=HEADERS,json={'kind':'designer','style':'soft','key':'d999','slides':6,'topic':'Киты'});self.assertEqual(r.status,400)
+ def deck(self):return {'version':1,'chat_id':123,'slides':[{'background':{'type':'solid','color':'#14293b'},'elements':[{'type':'text','text':'Проверка','x':40,'y':50,'w':900,'h':90,'size':40,'font':'Arial','color':'#e8dfcf'}]}]}
+ async def test_export_delivery_deduplication_and_fixed_recipient(self):
+  await self.login()
+  for _ in range(2):
+   r=await self.client.post('/studio/export',headers=HEADERS,json=self.deck());self.assertEqual(r.status,200,await r.text())
+  self.send.assert_awaited_once();uid,data=self.send.call_args.args;self.assertEqual(uid,PILOT_UID)
+  p=Presentation(io.BytesIO(data));self.assertEqual(p.slides[0].shapes[0].text,'Проверка')
+ async def test_failed_delivery_retriable_and_busy(self):
+  await self.login();self.studio.busy=True
+  self.assertEqual((await self.client.post('/studio/export',headers=HEADERS,json={})).status,409)
+  self.studio.busy=False;self.send.side_effect=RuntimeError('delivery')
+  self.assertEqual((await self.client.post('/studio/export',headers=HEADERS,json=self.deck())).status,503)
+  self.assertFalse(self.studio.receipts);self.assertFalse(self.studio.busy);self.send.side_effect=None
+  self.assertEqual((await self.client.post('/studio/export',headers=HEADERS,json=self.deck())).status,200)
+ def test_menu_target_only_owner(self):
+  for uid in [None,123,str(PILOT_UID)]:self.assertEqual(menu_url(ORIGIN,uid,'old'),'old')
+  self.assertEqual(menu_url(ORIGIN,PILOT_UID,'old'),ORIGIN+'/studio/')
+ def test_export_rejects_external_image_and_nonfinite_geometry(self):
+  d=self.deck();d['slides'][0]['elements'][0].update(type='photo',raster='https://example.test/file')
+  with self.assertRaises(ValueError):build_pptx(d)
+  d['slides'][0]['elements'][0]['w']=float('nan')
+  with self.assertRaises(ValueError):build_pptx(d)
+
+class StudioTemplateIntegration(unittest.IsolatedAsyncioTestCase):
+ async def test_every_designer_template_reaches_real_design_selection(self):
+  import re
+  from types import SimpleNamespace
+  from unittest.mock import Mock
+  from presentation_pricing import presentation_cost
+  from presentation_profiles import choose_design
+  start=AsyncMock();balance=Mock(return_value=True)
+  fn=load_functions(['_handle_miniapp_payload'],{'ensure_answerable':lambda m:m,'user_lang':lambda uid:'ru','get_user':lambda uid:{},'_clip_text':lambda v,n:(v or '')[:n],'can_afford':balance,'presentation_cost':presentation_cost,'_start_presentation_request':start,'send_no_credits_notice':AsyncMock(),'re':re})['_handle_miniapp_payload']
+  for n in range(1,51):
+   for style in ('designer_soft','designer_strict'):
+    key=f'd{n:02d}'
+    await fn(SimpleNamespace(from_user=SimpleNamespace(id=PILOT_UID)),object(),{'topic':'Кофейня','style':style,'slides':6,'studio_template':key},'gen_presentation')
+    settings=start.call_args.kwargs['settings']
+    self.assertEqual(choose_design({'topic':'Кофейня',**settings})['template_id'],key)
+    self.assertEqual(balance.call_args.args,(PILOT_UID,60))
+  await fn(SimpleNamespace(from_user=SimpleNamespace(id=123)),object(),{'topic':'Кофейня','style':'designer_soft','slides':6,'studio_template':'d01'},'gen_presentation')
+  self.assertNotIn('extra',start.call_args.kwargs['settings'])
+
+class FullMenuTests(StudioTests):
+ async def test_owner_profile_forms_and_action(self):
+  self.studio.profile_callback=AsyncMock(return_value={'name':'Owner','credits':15,'history':[],'payments':[]})
+  self.studio.menu_action=AsyncMock(side_effect=lambda *a:web.json_response({'ok':True},status=202))
+  for path in ['/studio/home/','/studio/forms/','/studio/profile']:
+   self.assertEqual((await self.client.get(path)).status,401)
+  self.assertEqual((await self.client.post('/studio/action',json={})).status,401)
+  await self.login()
+  self.assertEqual((await self.client.get('/studio/home/')).status,200)
+  r=await self.client.get('/studio/profile?user_id=123');self.assertEqual((await r.json())['profile']['credits'],15)
+  self.assertEqual(self.studio.profile_callback.call_args.args[0]['id'],PILOT_UID)
+  r=await self.client.get('/studio/forms/?screen=form-word');html=await r.text()
+  self.assertIn('<base href="/">',html);self.assertIn("showScreen(studioScreen)",html);self.assertIn("fetch('/studio/'",html)
+  for action in ['gen_word','gen_excel','topup','history','help']:
+   r=await self.client.post('/studio/action',headers=HEADERS,json={'action':action,'payload':{'topic':'test','user_id':123},'requestId':'id'});self.assertEqual(r.status,202)
+   self.assertEqual(self.studio.menu_action.call_args.args[0]['id'],PILOT_UID)
+  self.assertEqual((await self.client.post('/studio/action',json={'action':'gen_word'},headers={'Origin':'https://evil.test','X-Studio-Request':'1'})).status,403)
+  self.assertEqual((await self.client.post('/studio/action',json={'action':'unknown'},headers=HEADERS)).status,400)
+ def test_payment_data_filtered_no_secrets(self):
+  from tempfile import TemporaryDirectory
+  from pathlib import Path
+  from studio_menu import recent_payments
+  with TemporaryDirectory() as d:
+   p=Path(d)/'payments.jsonl';p.write_text('\n'.join([json.dumps({'uid':123,'credits':999,'payment_id':'private'}),'{bad',json.dumps({'uid':str(PILOT_UID),'credits':20,'ts':'2026-10-23','payment_id':'private'})]))
+   self.assertEqual(recent_payments(p,PILOT_UID),[{'credits':20,'ts':'2026-10-23'}])
+ def test_menu_has_no_demo_balance_and_local_fonts(self):
+  from pathlib import Path
+  root=Path(__file__).resolve().parents[1]/'studio_ui/home'
+  html=(root/'index.html').read_text();js=(root/'app.js').read_text()
+  self.assertNotIn('120 кредитов',js);self.assertNotIn('const transactions=',js)
+  self.assertIn('/studio/templates/fonts.css',html);self.assertIn('escape(data?.name',js)

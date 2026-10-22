@@ -1,0 +1,69 @@
+
+#alix-real-catalog{padding:16px 0}
+body{margin:0;background:#111318;color:#e7e2d9}
+#alix-real-catalog .rc-stage{aspect-ratio:16/9}
+#alix-real-catalog #rc-quality{position:absolute;top:8px;left:8px;right:8px;width:max-content;max-width:calc(100% - 16px);padding:4px 8px;background:#191b20e8;color:#e7e2d9;border-radius:6px;font-size:11px}
+#alix-real-catalog #rc-zoom-open{position:absolute;right:8px;bottom:8px;background:#191b20e8;border-color:#ffffff33;color:#e7e2d9;font-size:11px;min-height:36px;padding:7px 10px}
+#alix-real-catalog .rc-slide-tabs{grid-template-columns:repeat(4,minmax(0,1fr))!important}
+#alix-real-catalog #rc-zoom{background:#191b20;color:#e7e2d9;border:1px solid #45464e;border-radius:14px;width:min(1280px,96vw);max-width:96vw;padding:14px;max-height:95dvh;overflow:auto}
+#alix-real-catalog #rc-zoom::backdrop{background:#080a10dd}
+#alix-real-catalog .rc-zoom-bar,#alix-real-catalog .rc-zoom-controls{display:flex;align-items:center;justify-content:space-between;gap:12px}
+#alix-real-catalog .rc-zoom-bar{margin-bottom:12px;font-size:13px}
+#alix-real-catalog .rc-zoom-bar span{min-width:0;overflow-wrap:anywhere}
+#alix-real-catalog #rc-zoom-image{width:100%;aspect-ratio:16/9;object-fit:contain;display:block;background:#11151a;max-height:72dvh}
+#alix-real-catalog .rc-zoom-controls{margin-top:12px}
+#alix-real-catalog .rc-app{--rc-bg:#191b20;--rc-text:#e7e2d9;--rc-muted:#b7b3ad;--rc-gold:#c4aa7d;max-width:440px;margin:auto;border-radius:24px;background:var(--rc-bg);color:var(--rc-text);font:13px/1.5 Manrope,sans-serif;overflow:hidden;box-shadow:0 18px 48px #0003}
+#alix-real-catalog .rc-app *{box-sizing:border-box}
+#alix-real-catalog [hidden]{display:none!important}
+#alix-real-catalog header{padding:17px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #ffffff12}
+#alix-real-catalog .rc-logo{font:500 28px 'Cormorant Garamond',Georgia,serif;letter-spacing:-.5px}
+#alix-real-catalog .rc-logo span{color:var(--rc-gold)}
+#alix-real-catalog small{font-size:11px;color:var(--rc-muted)}
+#alix-real-catalog main{padding:22px 18px}
+#alix-real-catalog h1{font:500 34px/1.1 'Cormorant Garamond',Georgia,serif;margin:0 0 8px;color:var(--rc-text)}
+#alix-real-catalog p{margin:0;color:var(--rc-muted);font-size:12px}
+#alix-real-catalog button,#alix-real-catalog select{font:inherit;min-height:44px;color:var(--rc-text);border:1px solid #41424a;background:#25272e;border-radius:10px;padding:10px}
+#alix-real-catalog button:focus-visible,#alix-real-catalog select:focus-visible{outline:2px solid var(--rc-gold);outline-offset:2px}
+#alix-real-catalog button[aria-pressed=true]{border-color:var(--rc-gold);background:#332e2c;color:#eedcbd}
+#alix-real-catalog .rc-kinds{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:22px 0 12px}
+#alix-real-catalog .rc-kinds button{text-align:left;padding:13px 12px;border-radius:14px;background:linear-gradient(140deg,#283443,#22262e)}
+#alix-real-catalog .rc-kinds button[data-kind=designer]{background:linear-gradient(140deg,#512d3f,#29252c)}
+#alix-real-catalog .rc-kinds strong{display:block;font-weight:500;margin-bottom:4px}
+#alix-real-catalog .rc-kinds small{display:block;font-size:11px}
+#alix-real-catalog .rc-style{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+#alix-real-catalog .rc-style button{font-size:12px}
+#alix-real-catalog .rc-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:18px 0 9px}
+#alix-real-catalog .rc-row label{font-size:12px;color:var(--rc-muted)}
+#alix-real-catalog select{width:100%;min-width:0;font-size:16px;background:#25272e;color:var(--rc-text)}
+#alix-real-catalog .rc-stage{margin-top:16px;background:#11151a;border-radius:12px;overflow:hidden;touch-action:pan-y;position:relative}
+#alix-real-catalog .rc-stage img{width:100%;aspect-ratio:16/9;display:block;object-fit:contain;user-select:none;-webkit-user-drag:none}
+#alix-real-catalog .rc-slide-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:9px 0}
+#alix-real-catalog .rc-slide-tabs button{font-size:12px;min-height:40px;padding:8px}
+#alix-real-catalog .rc-caption{display:flex;justify-content:space-between;gap:10px;font-size:11px;color:var(--rc-muted);margin:10px 0 0}
+#alix-real-catalog .rc-nav{display:grid;grid-template-columns:44px minmax(0,1fr) 44px;align-items:center;gap:8px;margin:19px 0 9px}
+#alix-real-catalog .rc-nav button{padding:0;font-size:20px}
+#alix-real-catalog .rc-name{text-align:center;min-width:0;font-weight:500;font-size:13px;overflow-wrap:anywhere}
+#alix-real-catalog .rc-name small{display:block;font-weight:400;margin-top:2px}
+#alix-real-catalog .rc-rail{display:flex;gap:9px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;padding:5px 2px 12px;scrollbar-width:thin;scrollbar-color:#796b54 #25272e}
+#alix-real-catalog .rc-thumb{flex:0 0 120px;padding:4px;border-radius:9px;text-align:left;scroll-snap-align:center;overflow:hidden;background:#22242a}
+#alix-real-catalog .rc-thumb img{width:110px;height:62px;display:block;object-fit:contain;border-radius:5px}
+#alix-real-catalog .rc-thumb span{display:block;font-size:11px;line-height:1.35;padding:6px 3px;min-height:42px;overflow-wrap:anywhere}
+#alix-real-catalog .rc-footer{border-top:1px solid #ffffff12;margin-top:18px;padding-top:17px}
+#alix-real-catalog .rc-price-row{display:flex;justify-content:space-between;gap:15px;align-items:center;margin-bottom:14px}
+#alix-real-catalog .rc-price-row label{display:flex;gap:8px;align-items:center;font-size:12px}
+#alix-real-catalog .rc-price-row select{width:68px;padding:8px}
+#alix-real-catalog .rc-total{text-align:right}
+#alix-real-catalog .rc-total strong{font-size:19px;font-weight:500;display:block;color:var(--rc-gold)}
+#alix-real-catalog .rc-primary{width:100%;background:var(--rc-gold);color:#211e19;border:0;font-weight:600;padding:14px;border-radius:12px}
+#alix-real-catalog .rc-status{margin-top:10px;color:var(--rc-gold);font-size:12px}
+@media(max-width:360px){#alix-real-catalog main{padding:20px 12px}#alix-real-catalog .rc-kinds{gap:7px}#alix-real-catalog .rc-kinds button{padding:12px 9px}#alix-real-catalog .rc-price-row{gap:8px}}
+@media(prefers-reduced-motion:reduce){#alix-real-catalog .rc-rail{scroll-behavior:auto}}
+
+#alix-real-catalog .rc-kinds{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+#alix-real-catalog .rc-kinds button,#alix-real-catalog .rc-constructor{padding:11px 7px;min-width:0;text-align:left;border-radius:12px}
+#alix-real-catalog .rc-kinds strong{font-size:11px;font-weight:600}
+#alix-real-catalog .rc-kinds small{font-size:9px}
+#alix-real-catalog .rc-constructor{display:block;color:var(--rc-text);text-decoration:none;border:1px solid #41424a;background:linear-gradient(140deg,#433b2c,#25272c)}
+#alix-real-catalog .rc-constructor:focus-visible{outline:2px solid var(--rc-gold);outline-offset:2px}
+
+#alix-real-catalog #rc-diagrams{display:block;margin:12px 0 16px;padding:12px;border:1px solid #c4aa7d66;border-radius:10px;color:var(--rc-gold);text-decoration:none;font-size:12px}
