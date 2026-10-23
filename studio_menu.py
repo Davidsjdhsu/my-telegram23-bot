@@ -28,6 +28,7 @@ def forms_html(base):
       async function request(path,body){const r=await fetch('/studio/'+path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json','X-Studio-Request':'1'}:{},body:body?JSON.stringify(body):undefined,cache:'no-store'});const b=await r.json();if(!r.ok||!b.ok)throw Error(b.error||'request_failed');return b}
       return {loadProfile:()=>request('profile'),async send(action,payload={}){if(pending)return false;pending=true;const key=JSON.stringify({action,payload});if(!retry||retry.key!==key)retry={key,id:crypto.randomUUID()};try{await request('action',{action,payload,requestId:retry.id});retry=null;return true}finally{pending=false}}};
     })();''')
+    source=source.replace('new URL(relativePath, window.location.href)', "new URL(relativePath, window.location.origin + '/')")
     source=source.replace('if (tg.initData) {','if (true) {').replace("if (!getTg()?.initData) return;",'')
     # Match existing theme while preserving every form, price and validation rule.
     theme='''<link rel="stylesheet" href="/studio/templates/fonts.css"><style>

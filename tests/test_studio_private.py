@@ -104,7 +104,7 @@ class FullMenuTests(StudioTests):
   r=await self.client.get('/studio/profile?user_id=123');self.assertEqual((await r.json())['profile']['credits'],15)
   self.assertEqual(self.studio.profile_callback.call_args.args[0]['id'],PILOT_UID)
   r=await self.client.get('/studio/forms/?screen=form-word');html=await r.text()
-  self.assertIn('<base href="/">',html);self.assertIn("showScreen(studioScreen)",html);self.assertIn("fetch('/studio/'",html)
+  self.assertIn("new URL(relativePath, window.location.origin + '/')",html);self.assertIn('<base href="/">',html);self.assertIn("showScreen(studioScreen)",html);self.assertIn("fetch('/studio/'",html)
   for action in ['gen_word','gen_excel','topup','history','help']:
    r=await self.client.post('/studio/action',headers=HEADERS,json={'action':action,'payload':{'topic':'test','user_id':123},'requestId':'id'});self.assertEqual(r.status,202)
    self.assertEqual(self.studio.menu_action.call_args.args[0]['id'],PILOT_UID)
