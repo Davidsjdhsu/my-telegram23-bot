@@ -38,7 +38,13 @@ def forms_html(base):
     initialization='''
     const studioScreen=new URLSearchParams(location.search).get('screen');
     if(['form-word','form-excel','form-resume','form-dkp-car','form-dkp-realty','topup','profile','create'].includes(studioScreen))showScreen(studioScreen);
-    document.addEventListener('click',e=>{const b=e.target.closest('[data-back-to],.tab-item');if(b){e.preventDefault();e.stopImmediatePropagation();location.href='/studio/home/'}},true);
+    document.getElementById('topupBackBtn')?.setAttribute('aria-label','Назад в профиль');
+    const studioReturn=()=>{location.href=studioScreen==='topup'||studioScreen==='profile'?'/studio/home/?screen=profile':'/studio/home/'};
+    document.querySelector('.studio-return').href=studioScreen==='topup'||studioScreen==='profile'?'/studio/home/?screen=profile':'/studio/home/';
+    document.addEventListener('click',e=>{const b=e.target.closest('#topupBackBtn,#legalBackBtn,[data-back-to],.tab-item');if(b){e.preventDefault();e.stopImmediatePropagation();studioReturn()}},true);
+    const studioBack=window.Telegram?.WebApp?.BackButton;
+    studioBack?.onClick(studioReturn);studioBack?.show();
+    window.addEventListener('pagehide',()=>{studioBack?.offClick(studioReturn);studioBack?.hide()});
     '''
     at=source.rfind('</script>');source=source[:at]+initialization+source[at:]
     return source

@@ -9,7 +9,7 @@ const measure=(t,e)=>{ctx.font=`${e.italic?'italic ':''}${e.bold?'bold ':''}${e.
 const status=t=>$('#status').textContent=t;
 function snapshot(){return JSON.stringify({deck,slideIndex,selected});}
 function remember(){undo.push(snapshot());if(undo.length>45)undo.shift();redo=[];}
-function save(){clearTimeout(saveTimer);const previousStatus=$('#status').textContent;saveTimer=setTimeout(()=>{try{localStorage.setItem(storageKey,JSON.stringify(deck));if(!exporting&&$('#status').textContent===previousStatus)status('Изменения сохранены в этом браузере');}catch{status('Память браузера заполнена. Нажмите «Сохранить проект».');}},450);}
+function save(){clearTimeout(saveTimer);const previousStatus=$('#status').textContent;saveTimer=setTimeout(()=>{try{localStorage.setItem(storageKey,JSON.stringify(deck));if(!exporting&&$('#status').textContent===previousStatus)status('Изменения сохранены в этом браузере');}catch{status('Память устройства заполнена. Скачайте копию через меню «Проект».');}},450);}
 function historyButtons(){$('#undo').disabled=!undo.length;$('#redo').disabled=!redo.length;}
 const diagramMeasure=(t,size)=>measure(t,{size,font:'Arial'});
 function hasOverflow(e){return e.type==='diagram'?D.overflow(e,diagramMeasure):e.type==='text'&&S.wrap(e,measure).length*e.size*1.22>e.h+5;}
@@ -55,7 +55,7 @@ function properties(){const e=element(),b=current().background;
  if(e.type==='text')html+=`<label>Содержание<textarea data-prop="text" maxlength="3000">${S.esc(e.text)}</textarea></label><label>Шрифт<select data-prop="font">${S.FONTS.map(f=>`<option ${f===e.font?'selected':''}>${f}</option>`).join('')}</select></label><div class="grid2">${number('Размер шрифта','size',e.size,12,120)}<label>Выравнивание<select data-prop="align"><option value="left" ${e.align==='left'?'selected':''}>Слева</option><option value="center" ${e.align==='center'?'selected':''}>По центру</option><option value="right" ${e.align==='right'?'selected':''}>Справа</option></select></label></div><div class="row"><button data-toggle="bold" aria-pressed="${e.bold}"><b>Жирный</b></button><button data-toggle="italic" aria-pressed="${e.italic}"><i>Курсив</i></button></div>${color('Цвет текста','color',e.color)}`;
  if(e.type==='photo')html+=`<button id="replace-photo" class="wide">Заменить фотографию</button><p class="file-note">Файл остаётся на вашем компьютере.</p><label>Форма<select data-prop="shape"><option value="rect" ${e.shape==='rect'?'selected':''}>Прямоугольник</option><option value="round" ${e.shape==='round'?'selected':''}>Скруглённая</option><option value="circle" ${e.shape==='circle'?'selected':''}>Круг / овал</option></select></label>${range('Приближение','zoom',e.zoom,1,3,.05)}${range('Кадр по горизонтали','fx',e.fx,0,100)}${range('Кадр по вертикали','fy',e.fy,0,100)}${color('Цвет рамки','border',e.border)}${number('Толщина рамки','borderWidth',e.borderWidth,0,12)}`;
  if(e.type==='pattern')html+=`<div class="choice-patterns">${[['rings','Кольца'],['lines','Линии'],['dots','Точки'],['frame','Рамки']].map(([k,l])=>`<button data-pattern="${k}" aria-pressed="${e.kind===k}">${l}</button>`).join('')}</div>${color('Цвет узора','color',e.color)}${number('Толщина линий','weight',e.weight,1,12)}`;
- html+=`<div class="separator"></div><div class="grid2">${number('Слева','x',Math.round(e.x),0,1200-e.w)}${number('Сверху','y',Math.round(e.y),0,675-e.h)}${number('Ширина','w',Math.round(e.w),40,1200)}${number('Высота','h',Math.round(e.h),30,675)}</div>${e.type==='diagram'?'':range('Поворот','rotation',Math.round(e.rotation),-180,180)}${range('Непрозрачность','opacity',Math.round(e.opacity*100),0,100)}<div class="row"><button id="layer-down">Назад</button><button id="layer-up">Вперёд</button></div><div class="row"><button id="duplicate-element">Копия</button><button id="delete-element" class="danger">Удалить</button></div>`;
+ html+=`<div class="separator"></div><div class="grid2">${number('Слева','x',Math.round(e.x),0,1200-e.w)}${number('Сверху','y',Math.round(e.y),0,675-e.h)}${number('Ширина','w',Math.round(e.w),40,1200)}${number('Высота','h',Math.round(e.h),30,675)}</div>${e.type==='diagram'?'':range('Поворот','rotation',Math.round(e.rotation),-180,180)}${range('Непрозрачность','opacity',Math.round(e.opacity*100),0,100)}<div class="row"><button id="layer-down">На слой ниже</button><button id="layer-up">На слой выше</button></div><div class="row"><button id="duplicate-element">Копия</button><button id="delete-element" class="danger">Удалить</button></div>`;
  $('#properties').innerHTML=html;
 }
 function layers(){
@@ -113,7 +113,9 @@ document.addEventListener('click',ev=>{
  case 'duplicate-slide':if(deck.slides.length<20)mutate(()=>{const s=structuredClone(current());s.id=S.uid();s.elements.forEach(e=>e.id=S.uid());deck.slides.splice(slideIndex+1,0,s);slideIndex++;selected=null;});break;
  case 'delete-slide':if(deck.slides.length>1)mutate(()=>{deck.slides.splice(slideIndex,1);slideIndex=Math.min(slideIndex,deck.slides.length-1);selected=null;});break;
  case 'slide-up':case 'slide-down':{const j=slideIndex+(b.id==='slide-up'?-1:1);if(j>=0&&j<deck.slides.length)mutate(()=>{[deck.slides[j],deck.slides[slideIndex]]=[deck.slides[slideIndex],deck.slides[j]];slideIndex=j;});break;}
- case 'save-project':download(new Blob([JSON.stringify(deck)],{type:'application/json'}),'AlixDoc-project.json');status('Проект сохранён. Его можно снова открыть в конструкторе.');break;
+ case 'save-project':try{deck.name=$('#deck-name').value.slice(0,80);clearTimeout(saveTimer);localStorage.setItem(storageKey,JSON.stringify(deck));status('Проект сохранён на этом устройстве. Можно закрыть меню и продолжить позже.');}catch{status('Не удалось сохранить. Скачайте копию через меню «Проект».');}break;
+ case 'backup-project':download(new Blob([JSON.stringify(deck)],{type:'application/octet-stream'}),'AlixDoc-project.alixdoc');status('Копия проекта скачана. Для редактирования выберите «Открыть копию проекта».');break;
+ case 'open-ready':window.AlixMobile.openFiles();break;
  case 'open-project':$('#project-file').click();break;
  case 'mobile-preview':case 'preview':renderPreview();$('#preview-dialog').showModal();break;
  case 'close-preview':$('#preview-dialog').close();break;
@@ -123,7 +125,7 @@ document.addEventListener('click',ev=>{
 });
 function insertDiagram(kind,palette='strict'){if(deck.slides.length>=20){status('В примере можно создать до 20 слайдов.');return;}mutate(()=>{const p=D.PALETTES[palette]||D.PALETTES.strict,d=D.create(kind,palette);deck.slides.push({id:S.uid(),background:{type:'solid',color:p.bg,second:p.bg,angle:0},elements:[S.text('Схема: '+D.NAMES[kind],70,60,1060,90,48,p.color,'Georgia'),d]});slideIndex=deck.slides.length-1;selected=d.id;});}
 function renderPreview(){$('#preview-canvas').innerHTML=S.svg(current(),{prefix:'present',measure});$('#preview-name').textContent=`${deck.name} · ${slideIndex+1} / ${deck.slides.length}`;}
-$('#deck-name').value=deck.name;$('#deck-name').addEventListener('change',e=>mutate(()=>deck.name=e.target.value.slice(0,80),false));
+$('#deck-name').value=deck.name;$('#deck-name').addEventListener('input',e=>mutate(()=>deck.name=e.target.value.slice(0,80),false));
 $('#layout').addEventListener('change',ev=>{
  const mode=ev.target.value;if(mode==='free')return;
  mutate(()=>{const p=current().elements.find(e=>e.type==='photo'),texts=current().elements.filter(e=>e.type==='text');
@@ -164,9 +166,9 @@ async function rasterElement(e){
 }
 async function exportDeck(){
  if(exporting)return;if($('#properties textarea:invalid')){status('Сначала исправьте количество блоков схемы: от 2 до 7.');return;}const bad=deck.slides.findIndex(s=>s.elements.some(hasOverflow));if(bad>=0){slideIndex=bad;selected=current().elements.find(hasOverflow).id;update();status('Сначала поправьте текст, который не помещается в рамку.');return;}
- exporting=true;$('#export').disabled=true;status('Готовлю PPTX с вашими настройками…');
+ exporting=true;$('#export').disabled=true;$('#open-ready').hidden=true;status('Готовлю PPTX с вашими настройками…');
  try{const payload=structuredClone(deck);for(const s of payload.slides)for(const e of s.elements){if(e.type==='text')e.lines=S.wrap(e,measure);else if(e.type==='diagram')e.parts=D.parts(e,diagramMeasure);else e.raster=await rasterElement(e);}
- const response=await fetch('/studio/export',{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Request':'1'},body:JSON.stringify(payload)});if(!response.ok)throw Error((await response.json()).error||'Не удалось собрать PPTX');await response.json();status('PPTX отправлен в чат бота. Кредиты не списаны.');}catch(e){status('Не удалось скачать: '+e.message);}finally{exporting=false;$('#export').disabled=false;}
+ const response=await fetch('/studio/export',{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Request':'1'},body:JSON.stringify(payload)});if(!response.ok)throw Error((await response.json()).error||'Не удалось собрать PPTX');await response.json();clearTimeout(saveTimer);status('Готово. Презентация отправлена в чат бота.');$('#open-ready').hidden=false;}catch(e){status('Не удалось получить презентацию: '+e.message);}finally{exporting=false;$('#export').disabled=false;}
 }
 window.addEventListener('beforeunload',()=>{try{localStorage.setItem(storageKey,JSON.stringify(deck));}catch{}});
 const params=new URLSearchParams(location.search),incoming=params.get('diagram');if(Object.keys(D.NAMES).includes(incoming)){insertDiagram(incoming,params.get('palette')||'strict');params.delete('diagram');params.delete('palette');history.replaceState(null,'',location.pathname+(params.size?'?'+params:'')+location.hash);}

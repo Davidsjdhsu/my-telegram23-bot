@@ -18,7 +18,7 @@ async function openSample(kind,button){
  catch(e){error='Не удалось открыть пример. Проверьте соединение и нажмите ещё раз.';render();}
  finally{button.disabled=false;}
 }
-let page='home',data=null,error='',busy=false,request=null,loading=false;
+let page=new URLSearchParams(location.search).get('screen')==='profile'?'profile':'home',data=null,error='',busy=false,request=null,loading=false;
 const connection=root.querySelector('.as-connection');
 const transition=()=>window.AlixMobile?.enter(main);
 function connectionState(message,retry=false){connection.hidden=!message;connection.querySelector('span').textContent=message;connection.querySelector('button').hidden=!retry;}

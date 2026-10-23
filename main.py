@@ -10511,10 +10511,12 @@ async def studio_plan_preview(user, payload):
     if get_user(uid).get('busy') or uid in _miniapp_action_tasks:
         raise _aiohttp_web.HTTPConflict(text='Предыдущая работа ещё выполняется.')
     lang = user_lang(uid)
+    designer = payload.get('kind') == 'designer'
+    theme = 'designer_' + payload['style'] if designer else payload['key']
     data = {'topic': payload['topic'], 'pres_topic': payload['topic'],
-            'theme_name': payload['key'], 'slides': payload['slides'],
+            'theme_name': theme, 'slides': payload['slides'],
             'mode': 'ai', 'photo_mode': 'ai', 'content_lang': lang,
-            'user_text': '', 'extra': '', 'extra_used': 0, 'custom_colors': None,
+            'user_text': '', 'extra': ('Шаблон №' + payload['key'][1:]) if designer else '', 'extra_used': 0, 'custom_colors': None,
             'user_photos': [], 'pres_photo_captions': {}, 'pres_photo_context': None,
             'photo_album_only': False, 'pres_request_id': str(uuid.uuid4())}
     if not can_afford(uid, presentation_cost(data['slides'], data)):

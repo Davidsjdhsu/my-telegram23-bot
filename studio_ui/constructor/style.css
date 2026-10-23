@@ -64,3 +64,6 @@
  .studio-editor.inspector-open footer{display:none}
  .studio-editor.inspector-open .inspector-bar{padding:4px 12px}
 }
+
+.project-menu>div{width:230px}.project-menu small{display:block;padding:6px;font-size:11px;line-height:1.5;color:var(--muted)}#open-ready{background:var(--gold);color:#211e19;white-space:nowrap}#open-ready[hidden]{display:none}
+@media(max-width:740px){.studio-editor footer:has(#open-ready:not([hidden])){display:grid;grid-template-columns:auto 1fr;gap:8px}.studio-editor footer:has(#open-ready:not([hidden])) #status{grid-column:1/-1;max-width:none;font-size:13px}.studio-editor footer:has(#open-ready:not([hidden]))>span:last-of-type{display:none}.studio-editor footer:has(#open-ready:not([hidden])) #mobile-preview{grid-row:2}.studio-editor #open-ready{grid-row:2;min-height:40px}}

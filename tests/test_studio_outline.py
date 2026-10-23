@@ -82,6 +82,18 @@ class OutlineTests(unittest.IsolatedAsyncioTestCase):
   self.client.session.cookie_jar.clear()
   self.assertEqual((await self.client.post('/studio/outline',json=PAYLOAD,headers=HEADERS)).status,401)
   self.assertEqual((await self.client.get('/studio/outline/'+token)).status,401)
+ async def test_designer_preview_price_and_saved_settings(self):
+  for style in ['strict','soft']:
+   self.studio.outline.rows.clear()
+   payload={**PAYLOAD,'kind':'designer','style':style,'key':'d16','slides':6}
+   r=await self.client.post('/studio/outline',json=payload,headers=HEADERS);self.assertEqual(r.status,200)
+   body=await r.json();self.assertEqual(body['cost'],60)
+   row=self.studio.outline.rows[body['id']];await row['task']
+   self.assertEqual(self.planner.call_args.args[1],payload)
+   r=await self.client.post('/studio/outline/'+body['id']+'/confirm',json={'cost':0},headers=HEADERS)
+   self.assertEqual((await r.json())['cost'],60)
+  for change in [{'style':'invalid'},{'key':'coffee'},{'key':'d999'}]:
+   r=await self.client.post('/studio/outline',json={**payload,**change},headers=HEADERS);self.assertEqual(r.status,400)
  async def test_tester_plans_and_confirmation_are_isolated(self):
   owner_token=await self.create()
   self.studio.sessions['tester']={'user':{'id':909828109},'expires':time.monotonic()+600}
@@ -119,3 +131,15 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
   env={'get_user':lambda uid:{},'_miniapp_action_tasks':{},'user_lang':lambda uid:'ru','uuid':uuid,'can_afford':lambda *a:True,'presentation_cost':presentation_cost,'_create_presentation_plan':creator,'plan_key':plan_key,'format_plan':lambda *a:'summary','apply_design':lambda color,plan:color,'THEMES':{'coffee':color,'default':color}}
   fn=load_functions(['studio_plan_preview'],env)['studio_plan_preview'];data,palette=await fn({'id':PILOT_UID},PAYLOAD)
   self.assertEqual(data['pres_plan'],PLAN);self.assertEqual(data['pres_plan_key'],plan_key(data));self.assertEqual(data['theme_name'],'coffee');self.assertEqual(palette['bg'],'#49362b');creator.assert_awaited_once()
+
+ async def test_designer_planner_preserves_template_style_and_price(self):
+  import uuid
+  from presentation_profiles import choose_design
+  for style in ['strict','soft']:
+   creator=AsyncMock(return_value=PLAN);color={'bg':(20,41,59),'ink':(242,227,206)}
+   afford=Mock(return_value=True)
+   env={'get_user':lambda uid:{},'_miniapp_action_tasks':{},'user_lang':lambda uid:'ru','uuid':uuid,'can_afford':afford,'presentation_cost':presentation_cost,'_create_presentation_plan':creator,'plan_key':plan_key,'format_plan':lambda *a:'summary','apply_design':lambda color,plan:color,'THEMES':{'default':color}}
+   fn=load_functions(['studio_plan_preview'],env)['studio_plan_preview']
+   data,palette=await fn({'id':909828109},{**PAYLOAD,'kind':'designer','style':style,'key':'d16','slides':6})
+   self.assertEqual(data['theme_name'],'designer_'+style);self.assertEqual(choose_design(data)['template_id'],'d16')
+   afford.assert_called_once_with(909828109,60);self.assertEqual(data['pres_plan_key'],plan_key(data))

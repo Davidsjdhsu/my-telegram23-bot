@@ -52,8 +52,8 @@ function paint(row){
   if(row.status==='building'){
    remember(row.id);timer=setTimeout(()=>poll(row.id,generation),2500);
   }else{
-   const link=el('a','op-primary',row.status==='completed'?'Открыть файлы в Telegram':'Открыть сообщения бота');link.href='https://t.me/AlixDocBot';link.target='_blank';link.rel='noopener';
-   link.onclick=e=>{if(window.Telegram?.WebApp?.openTelegramLink){e.preventDefault();window.Telegram.WebApp.openTelegramLink(link.href)}};f.append(link);
+   const button=el('button','op-primary',row.status==='completed'?'Открыть файл':'Вернуться в чат');button.type='button';
+   button.onclick=()=>window.AlixMobile.openFiles();f.append(button);
    // Keep the result available after a reload until the user closes it.
    remember(row.id);
   }

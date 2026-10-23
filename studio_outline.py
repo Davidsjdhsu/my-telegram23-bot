@@ -1,4 +1,4 @@
-"""Bounded owner-only outline cache. Content/images/billing start only on confirm."""
+"""Bounded private outline cache. Content/images/billing start only on confirm."""
 import asyncio
 import copy
 import hashlib
@@ -31,11 +31,15 @@ class OutlinePreview:
         topic, key, count = (body.get(k) for k in ('topic', 'key', 'slides'))
         from studio_private import BASE
         catalog = json.loads((BASE/'studio_ui/templates/catalog.json').read_text())
-        if (body.get('kind') != 'standard' or not isinstance(topic, str) or not 1 <= len(topic.strip()) <= 500
+        kind, style = body.get('kind'), body.get('style')
+        group = 'standard' if kind == 'standard' else style if kind == 'designer' and style in ('strict', 'soft') else None
+        if (not group or not isinstance(topic, str) or not 1 <= len(topic.strip()) <= 500
                 or type(count) is not int or count not in (4, 6, 8, 10, 12, 16)
-                or not any(r['group'] == 'standard' and r['key'] == key for r in catalog)):
+                or not any(r['group'] == group and r['key'] == key for r in catalog)):
             raise web.HTTPBadRequest()
-        payload = {'topic': topic.strip(), 'key': key, 'slides': count}
+        payload = {'topic': topic.strip(), 'key': key, 'slides': count, 'kind': kind}
+        if kind == 'designer':
+            payload['style'] = style
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         now = time.monotonic()
         self.rows = {k: r for k, r in self.rows.items() if r['expires'] > now}
@@ -52,7 +56,7 @@ class OutlinePreview:
             del self.rows[oldest]
         token = secrets.token_urlsafe(24)
         row = dict(id=token, uid=user['id'], fingerprint=fingerprint, created=now, expires=now+3600,
-                   status='planning', cost=presentation_cost(count), error=None)
+                   status='planning', cost=presentation_cost(count, 'designer_'+style if kind == 'designer' else key), error=None)
         self.rows[token] = row
         row['task'] = asyncio.create_task(self.prepare(row, user, payload))
         return self.response(row)

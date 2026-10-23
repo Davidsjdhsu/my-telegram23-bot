@@ -14,7 +14,12 @@ function size(){cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{
   doc.style.setProperty('--app-safe-'+edge,inset+'px');
  }
 });}
-window.AlixMobile={enter};
+function openFiles(){
+ const app=window.Telegram?.WebApp;
+ if(app?.close&&(app.initData||(app.platform&&app.platform!=='unknown'))){app.close();return;}
+ location.href='https://t.me/AlixDocBot';
+}
+window.AlixMobile={enter,openFiles};
 addEventListener('resize',size,{passive:true});window.visualViewport?.addEventListener('resize',size,{passive:true});
 for(const event of ['viewportChanged','safeAreaChanged','contentSafeAreaChanged'])tg?.onEvent?.(event,size);
 tg?.ready();tg?.expand();size();

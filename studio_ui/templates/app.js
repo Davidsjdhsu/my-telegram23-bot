@@ -85,8 +85,8 @@ function render(scrollToChoice=false){
  if(rebuilt)observeThumbnails();
  $('#rc-pattern').textContent=state.kind==='standard'?'Единый фон на всех слайдах · без узоров':'Узор этого оформления · '+(state.style==='strict'?'строгий':'мягкий');
  $('#rc-slides').value=String(state.slides);$('#rc-price').textContent=state.slides*(state.kind==='standard'?5:10)+' кредитов';
- $('#rc-confirm').textContent=state.kind==='standard'?'Посмотреть план':'Показать план в Telegram';
- $('#rc-plan-hint').textContent=state.kind==='standard'?'Заголовки и примерное расположение текста — в меню. Полный текст и картинки создадим после подтверждения.':'Сначала бот покажет план в Telegram. Полная сборка — после подтверждения.';
+ $('#rc-confirm').textContent='Посмотреть план';
+ $('#rc-plan-hint').textContent='Заголовки и примерное расположение текста — в меню. Полный текст и картинки создадим после подтверждения.';
  $('#rc-status').textContent=state.confirmed?'Выбрано: '+r.name+'. Это просмотр — создание файла не запускается.':'';
 }
 function change(edit,scroll=false){const before=JSON.stringify(state);edit();state=normalize(state);if(before!==JSON.stringify(state)){render(scroll);save();}}
@@ -102,11 +102,7 @@ root.addEventListener('click',async e=>{
  else if(b.id==='rc-confirm'){
  const topic=$('#rc-topic').value.trim();if(!topic){$('#rc-status').textContent='Напишите тему презентации.';return;}
  if(b.disabled)return;
- if(state.kind==='standard'){b.disabled=true;try{outlineModule??=await import('./outline.js');await outlineModule.open({topic,kind:state.kind,key:selected().key,slides:state.slides},b);}catch(e){$('#rc-status').textContent='Не удалось открыть план. Повторите попытку.';}finally{b.disabled=false;}return;}
- b.disabled=true;$('#rc-status').textContent='Передаю запрос боту…';
- const payload={topic,kind:state.kind,style:state.style,key:selected().key,slides:state.slides};
- const fingerprint=JSON.stringify(payload);if(window.studioLastRequest?.fingerprint!==fingerprint)window.studioLastRequest={fingerprint,id:crypto.randomUUID()};
- try{const r=await fetch('/studio/generate',{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Request':'1'},body:JSON.stringify({...payload,requestId:window.studioLastRequest.id})});if(!r.ok)throw Error(r.status===401?'Сессия закончилась. Откройте «Меню» заново.':r.status===409?'Бот уже обрабатывает запрос. Дождитесь результата.':'Не удалось передать запрос. Повторите попытку.');$('#rc-status').textContent='Запрос принят. Вернитесь в чат бота — там появится план.';}catch(e){$('#rc-status').textContent=e.message;}finally{b.disabled=false;}
+ b.disabled=true;try{outlineModule??=await import('./outline.js');await outlineModule.open({topic,kind:state.kind,style:state.style,key:selected().key,slides:state.slides},b);}catch(e){$('#rc-status').textContent='Не удалось открыть план. Повторите попытку.';}finally{b.disabled=false;}
  }
  else if(b.id==='rc-zoom-open')$('#rc-zoom').showModal();
  else if(b.id==='rc-zoom-close')$('#rc-zoom').close();
@@ -126,5 +122,5 @@ window.addEventListener('openai:set_globals',e=>{
  const next=normalize(incoming);if(JSON.stringify(next)!==JSON.stringify(state)){state=next;render();}
 });
 render();save();
- if(state.kind==='standard'){outlineModule=await import('./outline.js');outlineModule.resume($('#rc-confirm'));}
+ outlineModule=await import('./outline.js');outlineModule.resume($('#rc-confirm'));
 })().catch(()=>{document.getElementById('rc-status').textContent='Не удалось открыть каталог. Обновите страницу.';});
