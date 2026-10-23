@@ -1,0 +1,51 @@
+/* Phone viewport shared by the owner pilot only. */
+:root{--app-height:100dvh;--app-safe-top:0px;--app-safe-bottom:0px;--app-safe-left:0px;--app-safe-right:0px}
+html{height:100%;background:#191b20;-webkit-text-size-adjust:100%}
+body{min-width:0;overflow-x:clip}
+button,a,input,textarea,select{touch-action:manipulation}
+input:not([type=color]):not([type=range]),textarea,select{font-size:16px}
+button,a{-webkit-tap-highlight-color:transparent}
+@media(prefers-reduced-motion:no-preference){
+ @view-transition{navigation:auto}
+ ::view-transition-old(root){animation:alix-fade-out 100ms ease-out both}
+ ::view-transition-new(root){animation:alix-fade-in 170ms ease-out both}
+ button,a{transition:background-color 150ms,color 150ms,opacity 150ms}
+ button:active{opacity:.8}
+ dialog[open]{animation:alix-panel-in 180ms ease-out}
+ .screen.active{animation:alix-fade-in 170ms ease-out}
+}
+@keyframes alix-fade-out{to{opacity:0}}
+@keyframes alix-fade-in{from{opacity:.45;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes alix-panel-in{from{opacity:.5;transform:translateY(12px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+dialog{box-sizing:border-box;max-height:calc(var(--app-height) - 24px);overscroll-behavior:contain}
+/* Main navigation stays on screen; only the page content scrolls. */
+body:has(#alix-studio-mixed){height:var(--app-height);overflow:hidden}
+#alix-studio-mixed{height:100%;padding:0}
+#alix-studio-mixed .as-app{height:100%;min-height:0;display:flex;flex-direction:column;padding-top:max(env(safe-area-inset-top),var(--app-safe-top));padding-left:max(env(safe-area-inset-left),var(--app-safe-left));padding-right:max(env(safe-area-inset-right),var(--app-safe-right));box-sizing:border-box}
+#alix-studio-mixed .as-header{flex:none;padding:12px 20px}
+#alix-studio-mixed .as-content{flex:1;min-height:0;overflow-y:auto;overscroll-behavior-y:contain;padding:18px 20px 22px;scrollbar-width:thin}
+#alix-studio-mixed .as-nav{position:static;transform:none;width:100%;flex:none;padding:8px 11px max(8px,env(safe-area-inset-bottom),var(--app-safe-bottom));box-sizing:border-box}
+#alix-studio-mixed .as-nav button{justify-content:center;min-height:44px}
+#alix-studio-mixed .as-welcome{margin-bottom:18px}
+#alix-studio-mixed .as-app .as-headline{margin-bottom:18px!important;font-size:34px}
+#alix-studio-mixed .as-hero{min-height:0;padding:18px}
+#alix-studio-mixed .as-format{min-height:115px}
+#alix-studio-mixed .as-section-head{margin-top:22px}
+#alix-studio-mixed .as-notice:empty{display:none}
+#alix-studio-mixed .as-connection{flex:none;padding:12px 20px;background:#302b26;font:13px/1.5 Manrope,sans-serif}
+#alix-studio-mixed .as-connection[hidden]{display:none}
+#alix-studio-mixed .as-connection button{background:#c4aa7d;color:#211e19;border-radius:9px;padding:10px 14px;margin:8px 0 0;display:block}
+#alix-studio-mixed .as-connection button[hidden]{display:none}
+#alix-studio-mixed main[inert] .as-welcome{opacity:.55}
+@media(max-height:700px){#alix-studio-mixed .as-app .as-headline{font-size:30px}#alix-studio-mixed .as-hero{padding:14px 16px}#alix-studio-mixed .as-hero-bottom{margin-top:12px}#alix-studio-mixed .as-format{min-height:105px;padding:12px}#alix-studio-mixed .as-content{padding-top:14px}}
+/* Catalog has no mock phone frame and keeps its own natural form scroll. */
+#alix-real-catalog{padding:0}
+#alix-real-catalog .rc-app{max-width:600px;border-radius:0;box-shadow:none}
+#alix-real-catalog header{padding:10px 18px}
+#alix-real-catalog main{padding:16px 18px max(20px,env(safe-area-inset-bottom),var(--app-safe-bottom))}
+#alix-real-catalog .rc-kinds{margin-top:16px}
+#alix-real-catalog .rc-rail{max-width:100%}
+#alix-real-catalog #rc-zoom{max-height:calc(var(--app-height) - 24px)}
+#alix-real-catalog #rc-zoom-image{max-height:calc(var(--app-height) - 160px)}
+.studio-return{padding-top:max(12px,env(safe-area-inset-top),var(--app-safe-top))!important}

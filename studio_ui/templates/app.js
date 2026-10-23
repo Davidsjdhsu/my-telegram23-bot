@@ -27,7 +27,7 @@ function paint(url){$('#rc-slide').src=url;$('#rc-zoom-image').src=url;}
 function showSlide(r){
  const url=r.images[state.page];if(shownURL===url)return;
  shownURL=url;const ticket=++requestID;clearTimeout(idleTimer);
- paint(r.thumbs[state.page]);$('#rc-quality').textContent='Загружаю чёткий слайд…';
+ paint(r.thumbs[state.page]);window.AlixMobile?.enter($('.rc-stage'));$('#rc-quality').textContent='Загружаю чёткий слайд…';
  $('#rc-quality').hidden=false;$('#rc-slide').setAttribute('aria-busy','true');
  previews.focus(url).then(objectURL=>{
   if(ticket!==requestID)return;

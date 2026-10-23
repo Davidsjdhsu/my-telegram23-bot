@@ -34,6 +34,20 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
   for path in ['/studio/constructor/','/studio/templates/catalog.json','/studio/constructor/app.js']:
    self.assertEqual((await self.client.get(path)).status,401)
   self.assertEqual((await self.client.post('/studio/export',json={})).status,401)
+ async def test_entry_shell_is_public_but_never_exposes_private_data(self):
+  self.studio.profile_callback=AsyncMock(return_value={'name':'Private Owner','credits':9876})
+  r=await self.client.get('/studio/');self.assertEqual(r.status,200)
+  html=await r.text();self.assertNotIn('Открываю личный тест',html);self.assertNotIn('Прежнее меню',html)
+  self.assertIn('as-content',html);self.assertNotIn('Private Owner',html)
+  for path in ['/studio/home/app.js','/studio/home/style.css','/studio/shared/mobile.js','/studio/shared/mobile.css','/studio/templates/fonts.css','/studio/templates/fonts/017fab69b4be8ffc.woff2']:
+   r=await self.client.get(path);self.assertEqual(r.status,200,path)
+   self.assertEqual(r.headers['X-Content-Type-Options'],'nosniff')
+  for path in ['/studio/profile','/studio/home/','/studio/forms/','/studio/templates/catalog.json','/studio/constructor/coffee.jpg','/studio/templates/assets/standard-space-0-hd-b78b5f1e45.webp']:
+   self.assertEqual((await self.client.get(path)).status,401,path)
+  self.studio.profile_callback.assert_not_awaited()
+  self.assertEqual((await self.client.post('/studio/generate',json={})).status,401)
+  await self.login()
+  r=await self.client.get('/studio/profile');self.assertEqual((await r.json())['profile']['credits'],9876)
  async def test_valid_session_paths_and_csrf(self):
   await self.login()
   for path in ['/studio/templates/','/studio/constructor/app.js']:self.assertEqual((await self.client.get(path)).status,200)

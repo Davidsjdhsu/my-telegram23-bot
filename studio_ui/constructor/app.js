@@ -22,6 +22,24 @@ function update(inspector=true){
  if(inspector)properties();layers();historyButtons();clearTimeout(thumbTimer);thumbTimer=setTimeout(thumbnails,120);
  if($('#preview-dialog').open)renderPreview();
 }
+const phone=matchMedia('(max-width:740px)');
+function setInspector(open){
+ if(open&&!document.body.classList.contains('inspector-open'))$('.inspector-scroll').scrollTop=0;
+ document.body.classList.toggle('inspector-open',open&&phone.matches);
+ $('#edit-element').setAttribute('aria-expanded',String(open&&phone.matches));
+ $('#inspector').inert=phone.matches&&!open;
+ if(!open&&$('#inspector').contains(document.activeElement))$('#edit-element').focus({preventScroll:true});
+}
+phone.addEventListener('change',()=>setInspector(false));
+setInspector(false);
+const canvasArea=$('.canvas-area');
+function fitCanvas(){
+ if(!phone.matches){$('#canvas-wrap').style.width='';return;}
+ const area=canvasArea.getBoundingClientRect();
+ $('#canvas-wrap').style.width=Math.max(0,Math.min(area.width,area.height*16/9))+'px';
+}
+const canvasObserver=new ResizeObserver(fitCanvas);canvasObserver.observe(canvasArea);
+phone.addEventListener('change',fitCanvas);
 function thumbnails(){
  $('#slide-list').innerHTML=deck.slides.map((s,i)=>`<button class="slide-thumb ${i===slideIndex?'active':''}" data-slide="${i}" aria-label="Слайд ${i+1}" aria-pressed="${i===slideIndex}">${S.svg(s,{prefix:'thumb'+i,measure})}<span>${String(i+1).padStart(2,'0')}</span></button>`).join('');$('#slide-count').textContent=deck.slides.length;
 }
@@ -69,19 +87,22 @@ function undoRedo(from,to){if(!from.length)return;to.push(snapshot());const old=
 document.querySelector('.mode-switch').addEventListener('click',()=>{try{localStorage.setItem(storageKey,JSON.stringify(deck));}catch{}});
 document.addEventListener('click',ev=>{
  const b=ev.target.closest('button');if(!b)return;
+ if(b.closest('.project-menu'))b.closest('.project-menu').open=false;
  if(b.dataset.diagram){insertDiagram(b.dataset.diagram);$('#diagram-dialog').close();return;}
- if(b.dataset.slide!==undefined){slideIndex=+b.dataset.slide;selected=null;$('#layout').value='free';update();return;}
+ if(b.dataset.slide!==undefined){window.AlixMobile?.enter($('#canvas-wrap'));slideIndex=+b.dataset.slide;selected=null;$('#layout').value='free';update();return;}
  if(b.dataset.layer){select(b.dataset.layer);return;}
  const e=element();
  if(b.dataset.toggle&&e){mutate(()=>e[b.dataset.toggle]=!e[b.dataset.toggle]);return;}
  if(b.dataset.pattern&&e){mutate(()=>e.kind=b.dataset.pattern);return;}
  switch(b.id){
  case 'undo':undoRedo(undo,redo);break;case 'redo':undoRedo(redo,undo);break;
- case 'deselect':select(null);break;
+ case 'deselect':select(null);setInspector(true);break;
+ case 'edit-element':setInspector(!document.body.classList.contains('inspector-open'));break;
+ case 'close-inspector':setInspector(false);break;
  case 'add-diagram':$('#diagram-options').innerHTML=Object.entries(D.NAMES).map(([k,v])=>`<button data-diagram="${k}"><svg viewBox="0 0 1060 400">${D.markup(D.create(k))}</svg><strong>${v}</strong></button>`).join('');$('#diagram-dialog').showModal();break;
  case 'close-diagram':$('#diagram-dialog').close();break;
- case 'add-text':add(S.text('Ваш текст',100,100,600,150,42));break;
- case 'add-pattern':add(S.pattern(800,310,310,280));break;
+ case 'add-text':add(S.text('Ваш текст',100,100,600,150,42));setInspector(true);break;
+ case 'add-pattern':add(S.pattern(800,310,310,280));setInspector(true);break;
  case 'add-photo':photoMode='add';$('#photo-file').click();break;
  case 'replace-photo':photoMode='replace';$('#photo-file').click();break;
  case 'apply-background':mutate(()=>{const bg=structuredClone(current().background);deck.slides.forEach(s=>s.background=structuredClone(bg));});break;
@@ -94,7 +115,7 @@ document.addEventListener('click',ev=>{
  case 'slide-up':case 'slide-down':{const j=slideIndex+(b.id==='slide-up'?-1:1);if(j>=0&&j<deck.slides.length)mutate(()=>{[deck.slides[j],deck.slides[slideIndex]]=[deck.slides[slideIndex],deck.slides[j]];slideIndex=j;});break;}
  case 'save-project':download(new Blob([JSON.stringify(deck)],{type:'application/json'}),'AlixDoc-project.json');status('Проект сохранён. Его можно снова открыть в конструкторе.');break;
  case 'open-project':$('#project-file').click();break;
- case 'preview':renderPreview();$('#preview-dialog').showModal();break;
+ case 'mobile-preview':case 'preview':renderPreview();$('#preview-dialog').showModal();break;
  case 'close-preview':$('#preview-dialog').close();break;
  case 'prev-preview':case 'next-preview':slideIndex=(slideIndex+(b.id==='next-preview'?1:deck.slides.length-1))%deck.slides.length;selected=null;update();break;
  case 'export':exportDeck();break;

@@ -1,7 +1,7 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AlixDoc · Конструктор</title><link rel="stylesheet" href="fonts.css"><link rel="stylesheet" href="style.css"></head>
-<body><a href="/studio/home/" style="display:block;padding:10px 20px;color:#c4aa7d;font:14px system-ui">← Главное меню · Word, Excel и профиль</a>
- <header class="top"><a class="logo" href="/studio/home/">Alix<span>Doc</span></a><div class="heading"><input id="deck-name" aria-label="Название презентации" value="Моя кофейня"><small>Конструктор · личный тест</small></div><div class="history"><button id="undo" title="Отменить Ctrl+Z" aria-label="Отменить">↶</button><button id="redo" title="Повторить Ctrl+Shift+Z" aria-label="Повторить">↷</button></div><button id="save-project">Сохранить проект</button><button id="open-project">Открыть проект</button><button class="gold" id="export">Отправить PPTX в Telegram</button></header>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>AlixDoc · Конструктор</title><link rel="stylesheet" href="fonts.css"><link rel="stylesheet" href="style.css"><script src="/telegram-web-app.js"></script><link rel="stylesheet" href="/studio/shared/mobile.css"><script defer src="/studio/shared/mobile.js"></script></head>
+<body class="studio-editor">
+ <header class="top"><a class="logo" href="/studio/home/">Alix<span>Doc</span></a><div class="heading"><input id="deck-name" aria-label="Название презентации" value="Моя кофейня"><small>Конструктор · личный тест</small></div><div class="history"><button id="undo" title="Отменить Ctrl+Z" aria-label="Отменить">↶</button><button id="redo" title="Повторить Ctrl+Shift+Z" aria-label="Повторить">↷</button></div><details class="project-menu"><summary>Проект ⋯</summary><div><button id="save-project">Сохранить проект</button><button id="open-project">Открыть проект</button></div></details><button class="gold" id="export">Отправить PPTX</button></header>
  <nav class="mode-switch" aria-label="Тип презентации">
   <a href="/studio/templates/?kind=standard"><strong>Обычная</strong><small>5 кредитов / слайд</small></a>
   <a href="/studio/templates/?kind=designer"><strong>Дизайнерская</strong><small>10 кредитов / слайд</small></a>
@@ -12,13 +12,13 @@
   <section class="editor">
    <div class="toolbar"><button id="add-text">＋ Текст</button><button id="add-photo">＋ Фото</button><button id="add-pattern">＋ Узор</button><button id="add-diagram">＋ Схема</button><label class="layout-label">Композиция <select id="layout"><option value="free">Свободная</option><option value="right">Фото справа</option><option value="left">Фото слева</option><option value="cover">Фото на весь фон</option></select></label></div>
    <div class="canvas-area"><div id="canvas-wrap"><svg id="canvas" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" role="img" aria-label="Редактируемый слайд"></svg></div></div>
-   <div class="canvas-foot"><span id="slide-label">Слайд 1</span><span>Выберите элемент · перетащите · потяните за угол</span><button id="deselect">Настроить фон</button></div>
+   <div class="canvas-foot"><span id="slide-label">Слайд 1</span><span>Выберите элемент · перетащите · потяните за угол</span><button id="edit-element" aria-controls="inspector" aria-expanded="false">Настройки</button><button id="deselect">Фон</button></div>
    <div id="warning" role="status"></div>
    <div class="bottom-help"><strong>Соберите свой вариант</strong><span>У каждого слайда собственные настройки. Текст и фотографии можно заменить, узоры — перемещать отдельно.</span><button id="preview">Просмотр без рамок</button></div>
   </section>
-  <aside class="inspector"><div id="properties"></div><div class="layers"><div class="section-label">Слои <small>Верхний — ближе к зрителю</small></div><div id="layers"></div></div></aside>
+  <aside class="inspector" id="inspector" aria-label="Настройки слайда"><div class="inspector-bar"><span>Настройки</span><button id="close-inspector">Готово ×</button></div><div class="inspector-scroll"><div id="properties"></div><div class="layers"><div class="section-label">Слои <small>Верхний — ближе к зрителю</small></div><div id="layers"></div></div></div></aside>
  </main>
- <footer><span id="status" role="status">Изменения сохраняются в этом браузере</span><span>Без генерации и списания кредитов</span></footer>
+ <footer><button id="mobile-preview">Просмотр</button><span id="status" role="status">Изменения сохраняются в этом браузере</span><span>Без генерации и списания кредитов</span></footer>
  <input type="file" id="photo-file" accept="image/png,image/jpeg,image/webp" hidden><input type="file" id="project-file" accept="application/json,.json" hidden>
  <dialog id="preview-dialog"><div class="dialog-head"><span id="preview-name"></span><button id="close-preview">Закрыть ×</button></div><div id="preview-canvas"></div><div class="dialog-controls"><button id="prev-preview">← Назад</button><button id="next-preview">Далее →</button></div></dialog>
  <dialog id="diagram-dialog"><div class="dialog-head"><h2>Выберите схему</h2><button id="close-diagram">Закрыть ×</button></div><p>Добавится на новый слайд. Текущий слайд сохранится.</p><div id="diagram-options"></div></dialog>

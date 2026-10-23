@@ -4,7 +4,10 @@ const root=document.getElementById('alix-studio-mixed'),main=root.querySelector(
 const escape=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icon=n=>'<svg class="as-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">'+({house:'<path d="m3 11 9-8 9 8v10h-6v-7H9v7H3Z"/>',wallet:'<rect x="3" y="5" width="18" height="15" rx="3"/><path d="M15 10h6v5h-6Z"/>','arrow-up-right':'<path d="M6 18 18 6M6 6h12v12"/>','file-text':'<path d="M5 3h10l4 4v14H5ZM8 11h8M8 15h8M8 18h5"/>','table-2':'<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/>',sparkles:'<path d="m12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z"/>'}[n]||'<path d="M5 12h14m-5-5 5 5-5 5"/>')+'</svg>';
 const samples={pres:{name:'Наши презентации',format:'Презентация',ext:'PPTX · PDF'},word:{name:'Договор услуг',format:'Документ Word',ext:'DOCX'},excel:{name:'Смета',format:'Таблица Excel',ext:'XLSX'}};
-let page='home',data=null,error='',busy=false,request=null;
+let page='home',data=null,error='',busy=false,request=null,loading=false;
+const connection=root.querySelector('.as-connection');
+const transition=()=>window.AlixMobile?.enter(main);
+function connectionState(message,retry=false){connection.hidden=!message;connection.querySelector('span').textContent=message;connection.querySelector('button').hidden=!retry;}
 const credit=()=>data?(data.unlimited?'∞':escape(data.credits)):'…';
 function cover(k){if(k==='pres')return '<div class="as-cover as-slide" aria-hidden="true"><span>Город<br>будущего</span><div class="as-architecture"></div></div>';if(k==='word')return '<div class="as-cover as-word" aria-hidden="true"><div class="as-paper"><b>ДОГОВОР<br>оказания услуг</b><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>';return '<div class="as-cover as-sheet" aria-hidden="true"><div class="as-sheet-inner"><b>Бюджет за месяц</b><div class="as-mini-grid"><span>Статья</span><span>План</span><span>Факт</span><span>Доходы</span><span>90 000</span><span>92 000</span><span>Расходы</span><span>65 000</span><span>63 000</span><span>Остаток</span><span>25 000</span><span>29 000</span></div></div></div>'}
 function formats(){return '<section aria-label="Создание файлов"><button class="as-hero cursor-interaction" data-format="pres" aria-label="Настроить презентацию"><span class="as-kicker">'+icon('sparkles')+' От идеи к слайдам</span><span class="as-card-title">Ваша презентация.</span><span class="as-card-desc">С вашим настроением и оформлением.</span><span class="as-hero-bottom"><small>Обычная — 5 кредитов/слайд<br>Дизайнерская — 10</small><span class="as-card-arrow">'+icon('arrow-up-right')+'</span></span></button><div class="as-pair"><button class="as-format cursor-interaction" data-format="word">'+icon('file-text')+'<strong>Документ Word</strong><small>Учёба, работа, личное</small></button><button class="as-format excel cursor-interaction" data-format="excel">'+icon('table-2')+'<strong>Таблица Excel</strong><small>Цифры под контролем</small></button></div></section>'}
@@ -21,8 +24,29 @@ if(page==='word-sample')main.innerHTML=back()+'<h1 class="as-headline">Дого�
 if(page==='excel-sample')main.innerHTML=back()+'<h1 class="as-headline">Смета расходов</h1><img alt="Пример сметы" style="width:100%;border-radius:14px" src="/assets/preview-9b49f04cdde127cf.webp"><a class="as-link" href="/examples/smeta-template.xlsx">Открыть XLSX</a><button class="as-primary" data-format="excel">Создать свою таблицу</button>';
 main.insertAdjacentHTML('beforeend','<p class="as-notice" role="status">'+escape(error)+'</p>');
 }
-async function load(){try{const r=await fetch('/studio/profile',{cache:'no-store'});if(!r.ok)throw Error(r.status===401?'Закройте меню и откройте снова в Telegram.':'Не удалось загрузить профиль.');const b=await r.json();data=b.profile;error='';}catch(e){error=e.message}render()}
+async function load(){
+ if(loading)return;loading=true;connectionState('');
+ main.setAttribute('aria-busy','true');
+ if(!data){main.inert=true;root.querySelector('.as-nav').inert=true;}
+ const controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),15000);
+ const notice=setTimeout(()=>connectionState('Загружаем меню…'),1800);
+ const options={cache:'no-store',signal:controller.signal};
+ try{
+  let r=await fetch('/studio/profile',options);
+  if(r.status===401){
+   const initData=window.Telegram?.WebApp?.initData;
+   if(!initData)throw Error('Откройте «Меню» в чате AlixDocBot в Telegram.');
+   const auth=await fetch('/studio/session',{...options,method:'POST',headers:{'Content-Type':'application/json','X-Studio-Request':'1'},body:JSON.stringify({initData})});
+   if(!auth.ok)throw Error(auth.status===403?'Это меню пока доступно только владельцу. Откройте его заново в Telegram.':'Не удалось войти. Попробуйте ещё раз.');
+   r=await fetch('/studio/profile',options);
+  }
+  if(!r.ok)throw Error('Не удалось загрузить меню. Попробуйте ещё раз.');
+  const b=await r.json();if(!b.ok||!b.profile)throw Error('Не удалось загрузить профиль.');
+  data=b.profile;error='';connectionState('');render();main.inert=false;root.querySelector('.as-nav').inert=false;
+ }catch(e){connectionState(e.name==='AbortError'?'Загрузка заняла слишком много времени. Проверьте соединение и повторите.':e.message,true);}
+ finally{clearTimeout(deadline);clearTimeout(notice);loading=false;main.setAttribute('aria-busy','false');}
+}
 async function send(action){if(busy)return;busy=true;error='Отправляем…';render();if(!request||request.action!==action)request={action,requestId:crypto.randomUUID(),payload:{}};try{const r=await fetch('/studio/action',{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Request':'1'},body:JSON.stringify(request)});const b=await r.json();if(!r.ok||!b.ok)throw Error('Не удалось отправить запрос. Повторите попытку.');request=null;error='Ответ отправлен в чат бота.';window.Telegram?.WebApp?.close();}catch(e){error=e.message}finally{busy=false;render()}}
-root.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.dataset.nav){page=b.dataset.nav;error='';render();window.scrollTo(0,0)}else if(b.dataset.format){location.href=b.dataset.format==='pres'?'/studio/templates/?kind=standard':'/studio/forms/?screen=form-'+b.dataset.format}else if(b.dataset.form){location.href='/studio/forms/?screen='+b.dataset.form}else if(b.dataset.sample){if(b.dataset.sample==='pres')location.href='/studio/templates/?kind=standard';else{page=b.dataset.sample+'-sample';render()}}else if(b.dataset.send)send(b.dataset.send);else if(b.dataset.action==='refresh')load()});
-window.Telegram?.WebApp?.ready();window.Telegram?.WebApp?.expand();render();load();
+root.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.dataset.nav){page=b.dataset.nav;error='';render();main.scrollTop=0;transition()}else if(b.dataset.format){location.href=b.dataset.format==='pres'?'/studio/templates/?kind=standard':'/studio/forms/?screen=form-'+b.dataset.format}else if(b.dataset.form){location.href='/studio/forms/?screen='+b.dataset.form}else if(b.dataset.sample){if(b.dataset.sample==='pres')location.href='/studio/templates/?kind=standard';else{page=b.dataset.sample+'-sample';render();main.scrollTop=0;transition()}}else if(b.dataset.send)send(b.dataset.send);else if(['refresh','retry'].includes(b.dataset.action))load()});
+render();root.querySelector('.as-nav').inert=true;load();
 })();

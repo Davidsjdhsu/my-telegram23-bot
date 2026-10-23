@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import mimetypes
+import re
 import secrets
 import time
 import zipfile
@@ -12,7 +13,7 @@ from urllib.parse import parse_qsl
 from aiohttp import web
 
 PILOT_UID = 465823470
-VERSION = "studio-menu-pilot-2"
+VERSION = "studio-mobile-pilot-3"
 COOKIE = "alix_studio"
 BASE = Path(__file__).resolve().parent
 
@@ -21,9 +22,16 @@ def menu_url(base, uid, fallback):
     return base.rstrip('/') + '/studio/' if uid == PILOT_UID and base.startswith('https://') else fallback
 
 
-BOOTSTRAP = '''<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AlixDoc · Тест</title><body style="background:#191b20;color:#e8dfcf;font:18px system-ui;padding:30px"><h1>Alix<span style="color:#c4aa7d">Doc</span></h1><p id="s">Открываю личный тест…</p><a href="/index.html" style="color:#c4aa7d">Прежнее меню</a><script src="/telegram-web-app.js"></script><script>
-(async()=>{try{const tg=window.Telegram?.WebApp;tg?.ready();tg?.expand();const r=await fetch('/studio/session',{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Request':'1'},body:JSON.stringify({initData:tg?.initData||''})});if(!r.ok)throw Error('Тест доступен только владельцу. Откройте его кнопкой «Меню» в Telegram.');location.replace('/studio/home/');}catch(e){document.getElementById('s').textContent=e.message;}})();
-</script></body></html>'''
+# Only the generic entry shell is public. Account data, forms, catalog and
+# generation endpoints retain the signed Telegram owner session requirement.
+PUBLIC_SHELL = {
+    'home/style.css', 'home/app.js', 'shared/mobile.css', 'shared/mobile.js',
+    'templates/fonts.css',
+}
+PUBLIC_SHELL.update('templates/' + name for name in re.findall(
+    r'url\((fonts/[a-f0-9]+\.woff2)\)',
+    (BASE / 'studio_ui/templates/fonts.css').read_text(),
+))
 
 
 class Studio:
@@ -62,7 +70,7 @@ class Studio:
             raise web.HTTPBadRequest(text='Некорректный запрос')
 
     async def entry(self, request):
-        return web.Response(text=BOOTSTRAP, content_type='text/html', headers={'Cache-Control': 'no-store'})
+        return web.Response(text=(BASE / 'studio_ui/home/index.html').read_text(), content_type='text/html', headers={'Cache-Control': 'no-store'})
 
     async def session(self, request):
         self.check_write(request)
@@ -116,8 +124,9 @@ class Studio:
         return web.Response(text=self.forms_cache, content_type='text/html', headers={'Cache-Control':'no-store'})
 
     async def static(self, request):
-        self.authorized(request)
         name = request.match_info['path']
+        if name not in PUBLIC_SHELL:
+            self.authorized(request)
         if not name or name.endswith('/'):
             name += 'index.html'
         if '..' in name.split('/') or '\\' in name or name.startswith('/'):
