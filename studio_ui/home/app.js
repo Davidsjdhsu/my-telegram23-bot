@@ -3,7 +3,7 @@
 const root=document.getElementById('alix-studio-mixed'),main=root.querySelector('main');
 const escape=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icon=n=>'<svg class="as-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">'+({house:'<path d="m3 11 9-8 9 8v10h-6v-7H9v7H3Z"/>',wallet:'<rect x="3" y="5" width="18" height="15" rx="3"/><path d="M15 10h6v5h-6Z"/>','arrow-up-right':'<path d="M6 18 18 6M6 6h12v12"/>','file-text':'<path d="M5 3h10l4 4v14H5ZM8 11h8M8 15h8M8 18h5"/>','table-2':'<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/>',sparkles:'<path d="m12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z"/>'}[n]||'<path d="M5 12h14m-5-5 5 5-5 5"/>')+'</svg>';
-const samples={pres:{format:'Презентация',ext:'4 слайда',thumb:'/studio/templates/assets/standard-business-0-small-ee1c111c16.webp'},word:{format:'Документ Word',ext:'2 страницы',thumb:'/studio/home/examples/word-thumb.webp'},excel:{format:'Таблица Excel',ext:'Бюджет за месяц',thumb:'/studio/home/examples/excel-thumb.webp'}};
+const samples={pres:{format:'Презентация',ext:'Дизайнерская · 4 слайда',thumb:'/studio/templates/assets/soft-d16-0-small-3c4fea139c.webp'},word:{format:'Документ Word',ext:'Эссе · 3 страницы',thumb:'/studio/home/examples/essay-thumb.webp'},excel:{format:'Таблица Excel',ext:'Бюджет за месяц',thumb:'/studio/home/examples/excel-thumb.webp'}};
 let sampleViewer,legalViewer;
 async function openLegal(kind,button){
  if(button.disabled)return;button.disabled=true;

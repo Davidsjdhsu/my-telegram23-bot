@@ -1,20 +1,25 @@
 {
   "word": {
-    "title": "Договор оказания услуг",
-    "note": "Образец формы. Поля в скобках заполняются при создании документа.",
+    "title": "Эссе об удалённой работе",
+    "note": "Фрагмент готового эссе: титульный лист и две страницы текста. Учебные данные на титульном — условные.",
     "pages": [
       {
-        "src": "/studio/home/examples/word-1.webp",
+        "src": "/studio/home/examples/essay-1.webp",
         "width": 1556,
         "height": 2200
       },
       {
-        "src": "/studio/home/examples/word-2.webp",
+        "src": "/studio/home/examples/essay-2.webp",
+        "width": 1556,
+        "height": 2200
+      },
+      {
+        "src": "/studio/home/examples/essay-3.webp",
         "width": 1556,
         "height": 2200
       }
     ],
-    "thumb": "/studio/home/examples/word-thumb.webp"
+    "thumb": "/studio/home/examples/essay-thumb.webp"
   },
   "excel": {
     "title": "Бюджет за месяц",
@@ -30,29 +35,29 @@
   },
   "pres": {
     "title": "Работа кофейни",
-    "note": "Четыре слайда из нашего каталога: обложка, текст, фотография и схема.",
+    "note": "Дизайнерский стиль «Кофейная редакция». Четыре слайда из нашего каталога: обложка, текст, фотография и схема.",
     "pages": [
       {
-        "src": "/studio/templates/assets/standard-business-0-hd-135d96ecc8.webp",
+        "src": "/studio/templates/assets/soft-d16-0-hd-535e9a0666.webp",
         "width": 1600,
         "height": 900
       },
       {
-        "src": "/studio/templates/assets/standard-business-1-hd-cca64c06e3.webp",
+        "src": "/studio/templates/assets/soft-d16-1-hd-ca6f0e1fd4.webp",
         "width": 1600,
         "height": 900
       },
       {
-        "src": "/studio/templates/assets/standard-business-2-hd-b1b3a578ed.webp",
+        "src": "/studio/templates/assets/soft-d16-2-hd-6850340c54.webp",
         "width": 1600,
         "height": 900
       },
       {
-        "src": "/studio/templates/assets/standard-business-3-hd-75450766c3.webp",
+        "src": "/studio/templates/assets/soft-d16-3-hd-2ef3277b2f.webp",
         "width": 1600,
         "height": 900
       }
     ],
-    "thumb": "/studio/templates/assets/standard-business-0-small-ee1c111c16.webp"
+    "thumb": "/studio/templates/assets/soft-d16-0-small-3c4fea139c.webp"
   }
 }

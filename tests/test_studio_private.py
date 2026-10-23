@@ -49,12 +49,12 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
   await self.login()
   r=await self.client.get('/studio/profile');self.assertEqual((await r.json())['profile']['credits'],9876)
  async def test_example_pages_private_read_only_and_complete(self):
-  for path in ['/studio/home/examples.js','/studio/home/examples/catalog.json','/studio/home/examples/word-1.webp']:
+  for path in ['/studio/home/examples.js','/studio/home/examples/catalog.json','/studio/home/examples/essay-1.webp']:
    self.assertEqual((await self.client.get(path)).status,401)
   await self.login()
   r=await self.client.get('/studio/home/examples/catalog.json');self.assertEqual(r.status,200)
   examples=await r.json();self.assertEqual(set(examples),{'pres','word','excel'})
-  for kind,count in [('pres',4),('word',2),('excel',1)]:
+  for kind,count in [('pres',4),('word',3),('excel',1)]:
    self.assertEqual(len(examples[kind]['pages']),count)
    for page in examples[kind]['pages']+[{'src':examples[kind]['thumb']}]:
     self.assertTrue(page['src'].startswith('/studio/'))
