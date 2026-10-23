@@ -1,0 +1,58 @@
+{
+  "word": {
+    "title": "Договор оказания услуг",
+    "note": "Образец формы. Поля в скобках заполняются при создании документа.",
+    "pages": [
+      {
+        "src": "/studio/home/examples/word-1.webp",
+        "width": 1556,
+        "height": 2200
+      },
+      {
+        "src": "/studio/home/examples/word-2.webp",
+        "width": 1556,
+        "height": 2200
+      }
+    ],
+    "thumb": "/studio/home/examples/word-thumb.webp"
+  },
+  "excel": {
+    "title": "Бюджет за месяц",
+    "note": "Пример таблицы на условных данных. Здесь доступен только просмотр.",
+    "pages": [
+      {
+        "src": "/studio/home/examples/excel-1.webp",
+        "width": 2200,
+        "height": 1556
+      }
+    ],
+    "thumb": "/studio/home/examples/excel-thumb.webp"
+  },
+  "pres": {
+    "title": "Работа кофейни",
+    "note": "Четыре слайда из нашего каталога: обложка, текст, фотография и схема.",
+    "pages": [
+      {
+        "src": "/studio/templates/assets/standard-business-0-hd-135d96ecc8.webp",
+        "width": 1600,
+        "height": 900
+      },
+      {
+        "src": "/studio/templates/assets/standard-business-1-hd-cca64c06e3.webp",
+        "width": 1600,
+        "height": 900
+      },
+      {
+        "src": "/studio/templates/assets/standard-business-2-hd-b1b3a578ed.webp",
+        "width": 1600,
+        "height": 900
+      },
+      {
+        "src": "/studio/templates/assets/standard-business-3-hd-75450766c3.webp",
+        "width": 1600,
+        "height": 900
+      }
+    ],
+    "thumb": "/studio/templates/assets/standard-business-0-small-ee1c111c16.webp"
+  }
+}

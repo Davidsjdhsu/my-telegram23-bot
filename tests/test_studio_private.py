@@ -48,6 +48,20 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
   self.assertEqual((await self.client.post('/studio/generate',json={})).status,401)
   await self.login()
   r=await self.client.get('/studio/profile');self.assertEqual((await r.json())['profile']['credits'],9876)
+ async def test_example_pages_private_read_only_and_complete(self):
+  for path in ['/studio/home/examples.js','/studio/home/examples/catalog.json','/studio/home/examples/word-1.webp']:
+   self.assertEqual((await self.client.get(path)).status,401)
+  await self.login()
+  r=await self.client.get('/studio/home/examples/catalog.json');self.assertEqual(r.status,200)
+  examples=await r.json();self.assertEqual(set(examples),{'pres','word','excel'})
+  for kind,count in [('pres',4),('word',2),('excel',1)]:
+   self.assertEqual(len(examples[kind]['pages']),count)
+   for page in examples[kind]['pages']+[{'src':examples[kind]['thumb']}]:
+    self.assertTrue(page['src'].startswith('/studio/'))
+    r=await self.client.get(page['src']);self.assertEqual(r.status,200,page['src'])
+    content=await r.read();self.assertEqual(content[:4],b'RIFF');self.assertEqual(content[8:12],b'WEBP')
+    self.assertNotIn('attachment',r.headers.get('Content-Disposition',''))
+  self.action.assert_not_awaited();self.send.assert_not_awaited()
  async def test_valid_session_paths_and_csrf(self):
   await self.login()
   for path in ['/studio/templates/','/studio/constructor/app.js']:self.assertEqual((await self.client.get(path)).status,200)
