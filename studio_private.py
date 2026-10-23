@@ -35,10 +35,14 @@ PUBLIC_SHELL.update('templates/' + name for name in re.findall(
 
 
 class Studio:
-    def __init__(self, verify, send_file, action, origin, profile=None, menu_action=None):
+    def __init__(self, verify, send_file, action, origin, profile=None, menu_action=None, outline_planner=None, outline_submit=None):
         self.verify, self.send_file, self.action = verify, send_file, action
         self.profile_callback, self.menu_action = profile, menu_action
         self.forms_cache = None
+        self.outline = None
+        if outline_planner and outline_submit:
+            from studio_outline import OutlinePreview
+            self.outline = OutlinePreview(self, outline_planner, outline_submit)
         self.origin = origin.rstrip('/')
         self.sessions = {}
         self.busy = False
@@ -200,6 +204,8 @@ class Studio:
             self.busy = False
 
     def register(self, app):
+        if self.outline:
+            self.outline.register(app)
         app.router.add_get('/studio/', self.entry)
         app.router.add_post('/studio/session', self.session)
         app.router.add_post('/studio/generate', self.generate)

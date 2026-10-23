@@ -1,0 +1,89 @@
+import asyncio
+import copy
+import json
+import time
+import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+from aiohttp import web, CookieJar
+from aiohttp.test_utils import TestClient, TestServer
+from studio_private import Studio, COOKIE, PILOT_UID
+from test_presentation_support import load_functions
+from presentation_support import plan_key
+from presentation_pricing import presentation_cost
+
+HEADERS={'Origin':'https://example.test','X-Studio-Request':'1'}
+PAYLOAD={'topic':'Как работает кофе','kind':'standard','key':'coffee','slides':4}
+PLAN={'title':'Кофе','audience':'широкая аудитория','slides':[{'title':x,'number':i+1,'point':'Internal outline point'} for i,x in enumerate(['Кофе','Зачем пьют кофе','Где выращивают','Путь до чашки'])]}
+DATA={'slides':4,'topic':'Как работает кофе','theme_name':'coffee','pres_plan':PLAN,'pres_plan_key':'saved-key'}
+
+class OutlineTests(unittest.IsolatedAsyncioTestCase):
+ async def asyncSetUp(self):
+  self.planner=AsyncMock(return_value=(copy.deepcopy(DATA),{'bg':'#49362b','ink':'#f2e3ce'}));self.submit=AsyncMock();self.send=AsyncMock()
+  self.studio=Studio(lambda _:None,self.send,AsyncMock(),'https://example.test',outline_planner=self.planner,outline_submit=self.submit)
+  self.studio.sessions['owner']={'user':{'id':PILOT_UID},'expires':time.monotonic()+600}
+  app=web.Application();self.studio.register(app);self.client=TestClient(TestServer(app),cookie_jar=CookieJar(unsafe=True));await self.client.start_server()
+  self.client.session.cookie_jar.update_cookies({COOKIE:'owner'})
+ async def asyncTearDown(self):
+  await self.client.close()
+  for z in self.studio.archives:z.close()
+ async def create(self):
+  r=await self.client.post('/studio/outline',json=PAYLOAD,headers=HEADERS);self.assertEqual(r.status,200);row=await r.json();await self.studio.outline.rows[row['id']]['task'];return row['id']
+ async def test_preview_only_titles_and_reuses_same_outline(self):
+  token=await self.create();r=await self.client.get('/studio/outline/'+token);body=await r.json()
+  self.assertEqual(body['titles'],[s['title'] for s in PLAN['slides']]);self.assertEqual(body['cost'],20)
+  self.assertNotIn('Internal outline point',json.dumps(body));self.submit.assert_not_awaited();self.send.assert_not_awaited()
+  again=await self.client.post('/studio/outline',json=PAYLOAD,headers=HEADERS);self.assertEqual((await again.json())['id'],token);self.planner.assert_awaited_once()
+ async def test_confirmation_uses_server_plan_and_cannot_repeat(self):
+  token=await self.create();url='/studio/outline/'+token+'/confirm'
+  for _ in range(2):
+   r=await self.client.post(url,json={'cost':0,'recipient':123,'pres_plan':{}},headers=HEADERS);self.assertEqual(r.status,200);self.assertEqual((await r.json())['status'],'submitted')
+  self.submit.assert_awaited_once();user,data=self.submit.call_args.args;self.assertEqual(user['id'],PILOT_UID);self.assertEqual(data,DATA)
+ async def test_inflight_double_confirm_does_not_resubmit(self):
+  token=await self.create();entered=asyncio.Event();release=asyncio.Event()
+  async def slow(*args):entered.set();await release.wait()
+  self.submit.side_effect=slow;url='/studio/outline/'+token+'/confirm'
+  first=asyncio.create_task(self.client.post(url,json={},headers=HEADERS));await entered.wait()
+  r=await self.client.post(url,json={},headers=HEADERS);self.assertEqual(r.status,409);release.set();self.assertEqual((await first).status,200);self.submit.assert_awaited_once()
+ async def test_balance_failure_retriable_and_expiry(self):
+  token=await self.create();url='/studio/outline/'+token
+  self.submit.side_effect=web.HTTPPaymentRequired(text='Недостаточно кредитов')
+  self.assertEqual((await self.client.post(url+'/confirm',json={},headers=HEADERS)).status,402)
+  self.assertEqual(self.studio.outline.rows[token]['status'],'ready');self.submit.side_effect=None
+  self.studio.outline.rows[token]['expires']=0
+  self.assertEqual((await self.client.post(url+'/confirm',json={},headers=HEADERS)).status,404)
+ async def test_auth_origin_validation_and_no_client_price(self):
+  token=await self.create()
+  self.assertEqual((await self.client.post('/studio/outline/'+token+'/confirm',json={},headers={'Origin':'https://evil.test','X-Studio-Request':'1'})).status,403)
+  for change in [{'kind':'designer'},{'slides':True},{'key':'not-a-template'},{'topic':''}]:
+   self.assertEqual((await self.client.post('/studio/outline',json={**PAYLOAD,**change},headers=HEADERS)).status,400)
+  self.studio.sessions['owner']['user']['id']=123
+  self.assertEqual((await self.client.get('/studio/outline/'+token)).status,404)
+  self.client.session.cookie_jar.clear()
+  self.assertEqual((await self.client.post('/studio/outline',json=PAYLOAD,headers=HEADERS)).status,401)
+  self.assertEqual((await self.client.get('/studio/outline/'+token)).status,401)
+ async def test_failed_planner_no_content_or_submission(self):
+  self.planner.side_effect=ValueError('private provider diagnostic')
+  token=await self.create();r=await self.client.get('/studio/outline/'+token);body=await r.json()
+  self.assertEqual(body['status'],'failed');self.assertNotIn('private provider',json.dumps(body));self.submit.assert_not_awaited()
+
+class AdapterTests(unittest.IsolatedAsyncioTestCase):
+ async def test_real_builder_receives_saved_outline_without_replanning(self):
+  state=SimpleNamespace(set_data=AsyncMock(),set_state=AsyncMock());builder=AsyncMock();tasks={PILOT_UID:object()}
+  env={'miniapp_user_record':Mock(),'FSMContext':Mock(return_value=state),'StorageKey':Mock(),'dp':SimpleNamespace(storage=object()),'bot':SimpleNamespace(id=1,send_message=AsyncMock()),'Form':SimpleNamespace(waiting_confirm='confirmed'),'_build_presentation':builder,'ensure_answerable':lambda m:m,'_FakeMessageForApi':lambda uid,name:SimpleNamespace(from_user=SimpleNamespace(id=uid)),'_miniapp_action_tasks':tasks}
+  run=load_functions(['run_studio_preview'],env)['run_studio_preview'];await run({'id':PILOT_UID},DATA)
+  state.set_data.assert_awaited_once_with(DATA);builder.assert_awaited_once();self.assertFalse(tasks)
+ async def test_submit_rechecks_balance_and_existing_job_before_start(self):
+  job=AsyncMock();tasks={};user={'id':PILOT_UID};afford=Mock(return_value=False)
+  env={'get_user':lambda uid:{},'_miniapp_action_tasks':tasks,'MAX_CONCURRENT_GENERATIONS':2,'can_afford':afford,'presentation_cost':presentation_cost,'_aiohttp_web':web,'asyncio':asyncio,'run_studio_preview':job}
+  submit=load_functions(['studio_submit_preview'],env)['studio_submit_preview']
+  with self.assertRaises(web.HTTPPaymentRequired):await submit(user,DATA)
+  self.assertFalse(tasks);afford.return_value=True;tasks[PILOT_UID]=object()
+  with self.assertRaises(web.HTTPConflict):await submit(user,DATA)
+  job.assert_not_awaited()
+ async def test_planner_only_creates_plan_and_binds_settings(self):
+  import uuid
+  creator=AsyncMock(return_value=PLAN);color={'bg':(73,54,43),'ink':(242,227,206)}
+  env={'get_user':lambda uid:{},'_miniapp_action_tasks':{},'user_lang':lambda uid:'ru','uuid':uuid,'can_afford':lambda *a:True,'presentation_cost':presentation_cost,'_create_presentation_plan':creator,'plan_key':plan_key,'format_plan':lambda *a:'summary','apply_design':lambda color,plan:color,'THEMES':{'coffee':color,'default':color}}
+  fn=load_functions(['studio_plan_preview'],env)['studio_plan_preview'];data,palette=await fn({'id':PILOT_UID},PAYLOAD)
+  self.assertEqual(data['pres_plan'],PLAN);self.assertEqual(data['pres_plan_key'],plan_key(data));self.assertEqual(data['theme_name'],'coffee');self.assertEqual(palette['bg'],'#49362b');creator.assert_awaited_once()

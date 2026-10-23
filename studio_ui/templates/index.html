@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1,viewport-fit=cover"><title>AlixDoc · Реальные оформления</title><link rel="stylesheet" href="fonts.css"><link rel="stylesheet" href="style.css"><script src="/telegram-web-app.js"></script><link rel="stylesheet" href="/studio/shared/mobile.css"><script defer src="/studio/shared/mobile.js"></script></head><body><a class="studio-return" href="/studio/home/" style="display:block;padding:10px 20px;color:#c4aa7d;font:14px system-ui">← Главное меню · Word, Excel и профиль</a>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1,viewport-fit=cover"><title>AlixDoc · Реальные оформления</title><link rel="stylesheet" href="fonts.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="outline.css"><script src="/telegram-web-app.js"></script><link rel="stylesheet" href="/studio/shared/mobile.css"><script defer src="/studio/shared/mobile.js"></script></head><body><a class="studio-return" href="/studio/home/" style="display:block;padding:10px 20px;color:#c4aa7d;font:14px system-ui">← Главное меню · Word, Excel и профиль</a>
 <div id="alix-real-catalog" class="viz-dotted-background">
  <div class="rc-app">
   <header><div class="rc-logo">Alix<span>Doc</span></div><small>Личный тест · AlixDoc</small></header>
@@ -39,7 +39,7 @@
      <label for="rc-slides">Слайдов <select id="rc-slides"><option>4</option><option selected>6</option><option>8</option><option>10</option><option>12</option><option>16</option></select></label>
      <div class="rc-total"><strong id="rc-price"></strong><small>Обложка, PPTX и PDF включены</small></div>
     </div>
-    <label for="rc-topic">Тема презентации</label><textarea id="rc-topic" maxlength="500" rows="3" placeholder="О чём сделать презентацию?" style="width:100%;box-sizing:border-box;background:#202630;color:#eee3d2;border:1px solid #655c50;border-radius:12px;padding:12px;margin:12px 0;font:16px system-ui"></textarea><button type="button" class="rc-primary cursor-interaction" id="rc-confirm">Показать план в Telegram</button><p>Сначала бот покажет план. Полная сборка и списание — после подтверждения в чате.</p>
+    <label for="rc-topic">Тема презентации</label><textarea id="rc-topic" maxlength="500" rows="3" placeholder="О чём сделать презентацию?" style="width:100%;box-sizing:border-box;background:#202630;color:#eee3d2;border:1px solid #655c50;border-radius:12px;padding:12px;margin:12px 0;font:16px system-ui"></textarea><button type="button" class="rc-primary cursor-interaction" id="rc-confirm">Показать план в Telegram</button><p id="rc-plan-hint">Сначала покажем короткий план.</p>
     <p class="rc-status" id="rc-status" aria-live="polite"></p>
    </div>
   </main>

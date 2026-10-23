@@ -10502,6 +10502,56 @@ async def _miniapp_static_handler(request):
     return _aiohttp_web.FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
 
 
+async def studio_plan_preview(user, payload):
+    uid = user['id']
+    if get_user(uid).get('busy') or uid in _miniapp_action_tasks:
+        raise _aiohttp_web.HTTPConflict(text='Предыдущая работа ещё выполняется.')
+    lang = user_lang(uid)
+    data = {'topic': payload['topic'], 'pres_topic': payload['topic'],
+            'theme_name': payload['key'], 'slides': payload['slides'],
+            'mode': 'ai', 'photo_mode': 'ai', 'content_lang': lang,
+            'user_text': '', 'extra': '', 'extra_used': 0, 'custom_colors': None,
+            'user_photos': [], 'pres_photo_captions': {}, 'pres_photo_context': None,
+            'photo_album_only': False, 'pres_request_id': str(uuid.uuid4())}
+    if not can_afford(uid, presentation_cost(data['slides'], data)):
+        raise _aiohttp_web.HTTPPaymentRequired(text='Недостаточно кредитов. Пополните баланс в профиле.')
+    plan = await _create_presentation_plan(data, lang)
+    data.update(pres_plan=plan, pres_plan_key=plan_key(data), sample=format_plan(plan, lang))
+    colors = apply_design(THEMES.get(data['theme_name'], THEMES['default']), plan)
+    palette = {k: '#%02x%02x%02x' % tuple(colors[k]) for k in ('bg', 'ink')}
+    palette['font'] = colors.get('heading_font', 'Calibri')
+    return data, palette
+
+
+async def studio_submit_preview(user, data):
+    uid = user['id']
+    if get_user(uid).get('busy') or uid in _miniapp_action_tasks or len(_miniapp_action_tasks) >= MAX_CONCURRENT_GENERATIONS:
+        raise _aiohttp_web.HTTPConflict(text='Предыдущая работа ещё выполняется. Попробуйте позже.')
+    if not can_afford(uid, presentation_cost(data['slides'], data)):
+        raise _aiohttp_web.HTTPPaymentRequired(text='Недостаточно кредитов. Пополните баланс в профиле.')
+    # Reserve the existing per-user Mini App slot before yielding. The builder
+    # retains the shared generation limit, image checks and post-delivery billing.
+    _miniapp_action_tasks[uid] = asyncio.create_task(run_studio_preview(user, data))
+
+
+async def run_studio_preview(user, data):
+    uid = user['id']
+    try:
+        miniapp_user_record(user)
+        state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, chat_id=uid, user_id=uid))
+        await state.set_data(data)
+        await state.set_state(Form.waiting_confirm)
+        await _build_presentation(ensure_answerable(_FakeMessageForApi(uid, user.get('first_name', ''))), state)
+    except Exception as error:
+        print('studio_preview_build_error', type(error).__name__, flush=True)
+        try:
+            await bot.send_message(uid, 'Не удалось завершить сборку из меню. Проверьте чат перед повторной попыткой.')
+        except Exception:
+            pass
+    finally:
+        _miniapp_action_tasks.pop(uid, None)
+
+
 async def start_web_server():
     """Веб-сервер на aiohttp, работающий в том же asyncio event loop, что и сам бот
     (long-polling для Telegram по-прежнему делает всю основную работу - см. main(),
@@ -10526,7 +10576,8 @@ async def start_web_server():
                 "history": [str(h)[:200] for h in (u.get("history") or [])[-30:]],
                 "payments": await asyncio.to_thread(recent_payments, PAYMENTS_LOG_FILE, user["id"])}
     Studio(miniapp_verified_user, studio_send_file, studio_action, WEB_BASE_URL,
-           profile=studio_profile, menu_action=accept_miniapp_action).register(app)
+           profile=studio_profile, menu_action=accept_miniapp_action,
+           outline_planner=studio_plan_preview, outline_submit=studio_submit_preview).register(app)
     app.router.add_get("/", _health_handler)
     app.router.add_get("/health", _health_handler)
     app.router.add_get("/index.html", _miniapp_static_handler)
