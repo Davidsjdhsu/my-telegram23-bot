@@ -82,6 +82,18 @@ class OutlineTests(unittest.IsolatedAsyncioTestCase):
   self.client.session.cookie_jar.clear()
   self.assertEqual((await self.client.post('/studio/outline',json=PAYLOAD,headers=HEADERS)).status,401)
   self.assertEqual((await self.client.get('/studio/outline/'+token)).status,401)
+ async def test_tester_plans_and_confirmation_are_isolated(self):
+  owner_token=await self.create()
+  self.studio.sessions['tester']={'user':{'id':909828109},'expires':time.monotonic()+600}
+  self.client.session.cookie_jar.update_cookies({COOKIE:'tester'})
+  self.assertEqual((await self.client.get('/studio/outline/'+owner_token)).status,404)
+  self.assertEqual((await self.client.post('/studio/outline/'+owner_token+'/confirm',json={},headers=HEADERS)).status,404)
+  tester_token=await self.create();self.assertNotEqual(tester_token,owner_token)
+  self.assertEqual(self.planner.call_args.args[0]['id'],909828109)
+  r=await self.client.post('/studio/outline/'+tester_token+'/confirm',json={},headers=HEADERS)
+  self.assertEqual(r.status,200);self.assertEqual(self.submit.call_args.args[0]['id'],909828109)
+  self.client.session.cookie_jar.update_cookies({COOKIE:'owner'})
+  self.assertEqual((await self.client.get('/studio/outline/'+tester_token)).status,404)
  async def test_failed_planner_no_content_or_submission(self):
   self.planner.side_effect=ValueError('private provider diagnostic')
   token=await self.create();r=await self.client.get('/studio/outline/'+token);body=await r.json()

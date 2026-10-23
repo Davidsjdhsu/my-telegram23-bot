@@ -9523,6 +9523,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         return
 
     if action == "gen_presentation":
+        from studio_private import is_pilot_user
         topic = _clip_text(payload.get("topic"), 500)
         if not topic:
             await bot.send_message(m.from_user.id, "Не вижу тему презентации. Напиши её в чат или открой меню с клавиатуры «Открыть меню».")
@@ -9542,7 +9543,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
             "mode": "user" if user_text else "ai", "content_lang": lang,
             "photo_mode": payload.get("photo_mode") or "ai",
             **({"extra": "Шаблон №" + payload["studio_template"][1:]}
-               if m.from_user.id == 465823470 and re.fullmatch(r"d(?:0?[1-9]|[1-4][0-9]|50)", str(payload.get("studio_template", ""))) else {}),
+               if is_pilot_user(m.from_user.id) and re.fullmatch(r"d(?:0?[1-9]|[1-4][0-9]|50)", str(payload.get("studio_template", ""))) else {}),
         })
         return
 
@@ -10607,7 +10608,9 @@ async def main():
     print("REPLICATE TOKEN:", "YES" if REPLICATE_API_TOKEN else "NO")
     await start_web_server()
     await sync_menu_button(None, {}, "ru")
-    await sync_menu_button(465823470, {}, "ru")
+    from studio_private import PILOT_UIDS
+    for pilot_uid in sorted(PILOT_UIDS):
+        await sync_menu_button(pilot_uid, {}, "ru")
     # Текст на экране бота ДО нажатия Start (карточка профиля бота в Telegram) -
     # выставляется один раз при каждом запуске, обёрнуто в try/except, потому что
     # это не критичная для работы бота вещь: если Telegram сейчас недоступен для

@@ -1,4 +1,4 @@
-"""Owner-only Mini App pilot. No credit mutations and no public feature switch."""
+"""Allowlisted Mini App pilot. No credit mutations and no public feature switch."""
 import asyncio
 import hashlib
 import json
@@ -13,17 +13,22 @@ from urllib.parse import parse_qsl
 from aiohttp import web
 
 PILOT_UID = 465823470
+PILOT_UIDS = frozenset({PILOT_UID, 909828109})
 VERSION = "studio-mobile-pilot-3"
 COOKIE = "alix_studio"
 BASE = Path(__file__).resolve().parent
 
 
+def is_pilot_user(uid):
+    return type(uid) is int and uid in PILOT_UIDS
+
+
 def menu_url(base, uid, fallback):
-    return base.rstrip('/') + '/studio/' if uid == PILOT_UID and base.startswith('https://') else fallback
+    return base.rstrip('/') + '/studio/' if is_pilot_user(uid) and base.startswith('https://') else fallback
 
 
 # Only the generic entry shell is public. Account data, forms, catalog and
-# generation endpoints retain the signed Telegram owner session requirement.
+# generation endpoints retain the signed Telegram tester session requirement.
 PUBLIC_SHELL = {
     'home/style.css', 'home/app.js', 'shared/mobile.css', 'shared/mobile.js',
     'templates/fonts.css',
@@ -90,7 +95,7 @@ class Studio:
         except (ValueError, TypeError):
             raise web.HTTPForbidden()
         user = self.verify(init)
-        if not user or user.get('id') != PILOT_UID or not -30 <= age <= 3600:
+        if not user or not is_pilot_user(user.get('id')) or not -30 <= age <= 3600:
             raise web.HTTPForbidden()
         now = time.monotonic()
         self.sessions = {k: v for k, v in self.sessions.items() if v['expires'] > now}
@@ -173,7 +178,7 @@ class Studio:
         return await self.action(s['user'], payload, body.get('requestId'))
 
     async def export(self, request):
-        self.authorized(request)
+        uid = self.authorized(request)['user']['id']
         self.check_write(request)
         if self.busy:
             return web.json_response({'ok':False,'error':'Предыдущий файл ещё готовится.'},status=409)
@@ -181,13 +186,13 @@ class Studio:
         try:
             async with asyncio.timeout(90):
                 body = await self.body(request, 16_000_000)
-                fingerprint = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+                fingerprint = (uid, hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest())
                 if self.receipts.get(fingerprint, 0) > time.monotonic()-600:
                     return web.json_response({'ok':True,'duplicate':True})
                 from studio_export import build_pptx
                 data = await asyncio.to_thread(build_pptx, body)
-                # Only the fixed authenticated owner receives files. No client chat_id.
-                await self.send_file(PILOT_UID, data)
+                # Only the authenticated tester receives files. No client chat_id.
+                await self.send_file(uid, data)
                 self.receipts = {k:v for k,v in self.receipts.items() if v>time.monotonic()-600}
                 self.receipts[fingerprint] = time.monotonic()
                 return web.json_response({'ok':True})

@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock,patch
 from urllib.parse import urlencode,parse_qsl
 from aiohttp import web,CookieJar
 from aiohttp.test_utils import TestClient,TestServer
-from studio_private import Studio,PILOT_UID,COOKIE,menu_url
+from studio_private import Studio,PILOT_UID,PILOT_UIDS,COOKIE,menu_url
 from studio_export import build_pptx
 from pptx import Presentation
 from test_presentation_support import load_functions
@@ -24,8 +24,8 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
   secret=hmac.new(b'WebAppData',b'test-token',hashlib.sha256).digest()
   p['hash']=hmac.new(secret,'\n'.join(f'{k}={v}' for k,v in sorted(p.items())).encode(),hashlib.sha256).hexdigest()
   return urlencode(p)
- async def login(self):
-  r=await self.client.post('/studio/session',json={'initData':self.signed()},headers=HEADERS);self.assertEqual(r.status,200)
+ async def login(self,uid=PILOT_UID):
+  r=await self.client.post('/studio/session',json={'initData':self.signed(uid)},headers=HEADERS);self.assertEqual(r.status,200)
   c=r.cookies[COOKIE];self.assertTrue(c['httponly']);self.assertTrue(c['secure']);self.assertEqual(c['samesite'],'Strict')
   self.client.session.cookie_jar.update_cookies({COOKIE:c.value})
  async def test_auth_rejects_unsigned_other_user_expired_future_missing_date(self):
@@ -85,6 +85,23 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
    r=await self.client.post('/studio/export',headers=HEADERS,json=self.deck());self.assertEqual(r.status,200,await r.text())
   self.send.assert_awaited_once();uid,data=self.send.call_args.args;self.assertEqual(uid,PILOT_UID)
   p=Presentation(io.BytesIO(data));self.assertEqual(p.slides[0].shapes[0].text,'Проверка')
+ async def test_both_testers_receive_own_identical_export_and_own_profile(self):
+  self.studio.profile_callback=AsyncMock(side_effect=lambda user:{'name':str(user['id'])})
+  for uid in sorted(PILOT_UIDS):
+   await self.login(uid)
+   r=await self.client.get('/studio/profile');self.assertEqual((await r.json())['profile']['name'],str(uid))
+   self.assertEqual((await self.client.get('/studio/constructor/')).status,200)
+   for _ in range(2):
+    r=await self.client.post('/studio/export',headers=HEADERS,json=self.deck());self.assertEqual(r.status,200)
+   self.assertEqual(self.send.call_args.args[0],uid)
+  self.assertEqual([call.args[0] for call in self.send.await_args_list],sorted(PILOT_UIDS))
+ async def test_second_tester_generation_and_actions_use_own_identity(self):
+  await self.login(909828109)
+  r=await self.client.post('/studio/generate',headers=HEADERS,json={'kind':'designer','style':'soft','key':'d16','slides':6,'topic':'Киты','chat_id':PILOT_UID})
+  self.assertEqual(r.status,202);self.assertEqual(self.action.call_args.args[0]['id'],909828109)
+  self.studio.menu_action=AsyncMock(return_value=web.json_response({'ok':True}))
+  r=await self.client.post('/studio/action',headers=HEADERS,json={'action':'history','payload':{'user_id':PILOT_UID}})
+  self.assertEqual(r.status,200);self.assertEqual(self.studio.menu_action.call_args.args[0]['id'],909828109)
  async def test_failed_delivery_retriable_and_busy(self):
   await self.login();self.studio.busy=True
   self.assertEqual((await self.client.post('/studio/export',headers=HEADERS,json={})).status,409)
@@ -94,7 +111,7 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
   self.assertEqual((await self.client.post('/studio/export',headers=HEADERS,json=self.deck())).status,200)
  def test_menu_target_only_owner(self):
   for uid in [None,123,str(PILOT_UID)]:self.assertEqual(menu_url(ORIGIN,uid,'old'),'old')
-  self.assertEqual(menu_url(ORIGIN,PILOT_UID,'old'),ORIGIN+'/studio/')
+  for uid in PILOT_UIDS:self.assertEqual(menu_url(ORIGIN,uid,'old'),ORIGIN+'/studio/')
  def test_export_rejects_external_image_and_nonfinite_geometry(self):
   d=self.deck();d['slides'][0]['elements'][0].update(type='photo',raster='https://example.test/file')
   with self.assertRaises(ValueError):build_pptx(d)
@@ -110,13 +127,14 @@ class StudioTemplateIntegration(unittest.IsolatedAsyncioTestCase):
   from presentation_profiles import choose_design
   start=AsyncMock();balance=Mock(return_value=True)
   fn=load_functions(['_handle_miniapp_payload'],{'ensure_answerable':lambda m:m,'user_lang':lambda uid:'ru','get_user':lambda uid:{},'_clip_text':lambda v,n:(v or '')[:n],'can_afford':balance,'presentation_cost':presentation_cost,'_start_presentation_request':start,'send_no_credits_notice':AsyncMock(),'re':re})['_handle_miniapp_payload']
-  for n in range(1,51):
-   for style in ('designer_soft','designer_strict'):
-    key=f'd{n:02d}'
-    await fn(SimpleNamespace(from_user=SimpleNamespace(id=PILOT_UID)),object(),{'topic':'Кофейня','style':style,'slides':6,'studio_template':key},'gen_presentation')
-    settings=start.call_args.kwargs['settings']
-    self.assertEqual(choose_design({'topic':'Кофейня',**settings})['template_id'],key)
-    self.assertEqual(balance.call_args.args,(PILOT_UID,60))
+  for uid in sorted(PILOT_UIDS):
+   for n in range(1,51):
+    for style in ('designer_soft','designer_strict'):
+     key=f'd{n:02d}'
+     await fn(SimpleNamespace(from_user=SimpleNamespace(id=uid)),object(),{'topic':'Кофейня','style':style,'slides':6,'studio_template':key},'gen_presentation')
+     settings=start.call_args.kwargs['settings']
+     self.assertEqual(choose_design({'topic':'Кофейня',**settings})['template_id'],key)
+     self.assertEqual(balance.call_args.args,(uid,60))
   await fn(SimpleNamespace(from_user=SimpleNamespace(id=123)),object(),{'topic':'Кофейня','style':'designer_soft','slides':6,'studio_template':'d01'},'gen_presentation')
   self.assertNotIn('extra',start.call_args.kwargs['settings'])
 
