@@ -16,7 +16,7 @@ class OutlinePreview:
 
     def response(self, row):
         value = {'ok': True, 'id': row['id'], 'status': row['status'], 'cost': row['cost']}
-        if row['status'] in ('ready', 'submitted'):
+        if row['status'] in ('ready', 'building', 'completed', 'build_failed'):
             plan = row['data']['pres_plan']
             value.update(title=plan['title'], audience=plan['audience'],
                          titles=[s['title'] for s in plan['slides']], palette=row['palette'])
@@ -43,7 +43,7 @@ class OutlinePreview:
             if row['uid'] == user['id']:
                 if row['fingerprint'] == fingerprint and row['status'] != 'failed':
                     return self.response(row)
-                if row['status'] in ('planning', 'submitting'):
+                if row['status'] in ('planning', 'submitting', 'building'):
                     return web.json_response({'ok': False, 'error': 'Дождитесь текущего плана.'}, status=409)
                 if now - row['created'] < 15:
                     return web.json_response({'ok': False, 'error': 'Подождите несколько секунд перед новым планом.'}, status=429)
@@ -82,14 +82,19 @@ class OutlinePreview:
         user, row = self.get_row(request)
         self.studio.check_write(request)
         # The client cannot override the confirmed plan, recipient, settings or cost.
-        if row['status'] == 'submitted':
+        if row['status'] in ('building', 'completed', 'build_failed'):
             return self.response(row)
         if row['status'] != 'ready':
             return web.json_response({'ok': False, 'error': 'Дождитесь готового плана.'}, status=409)
         row['status'] = 'submitting'
         try:
-            await self.submit(user, copy.deepcopy(row['data']))
-            row.update(status='submitted', error=None)
+            task = await self.submit(user, copy.deepcopy(row['data']))
+            row.update(status='building', error=None, expires=time.monotonic()+7200)
+            if isinstance(task, asyncio.Future):
+                task.add_done_callback(lambda done: self.build_finished(row, done))
+            else:
+                # Do not claim readiness when an adapter has no completion signal.
+                row.update(status='build_failed', error='Не удалось получить статус сборки. Проверьте сообщения бота.')
         except web.HTTPException:
             row['status'] = 'ready'
             raise
@@ -97,6 +102,15 @@ class OutlinePreview:
             row['status'] = 'ready'
             return web.json_response({'ok': False, 'error': 'Не удалось запустить сборку. Повторите попытку.'}, status=503)
         return self.response(row)
+
+    def build_finished(self, row, task):
+        try:
+            result = task.result()
+            success = isinstance(result, dict) and result.get('delivered') is True
+        except (Exception, asyncio.CancelledError):
+            success = False
+        row.update(status='completed' if success else 'build_failed', expires=time.monotonic()+7200,
+                   error=None if success else 'Сборка не завершилась успешно. Подробности и доступные действия — в чате бота. Проверьте полученные файлы перед повторной попыткой.')
 
     async def cleanup(self, app):
         tasks = [r['task'] for r in self.rows.values() if not r['task'].done()]

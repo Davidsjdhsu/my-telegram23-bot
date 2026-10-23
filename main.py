@@ -5914,6 +5914,9 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
             # Both files are delivered and billed. A failed courtesy message must
             # not report generation failure or leave a paid draft ready to rebuild.
             print("Не удалось отправить уведомление о готовой презентации:", type(notice_error).__name__)
+        # Explicit success only after both documents were sent and accounting
+        # completed. Handled errors below return None, never a successful result.
+        return {"delivered": True}
     except PresentationPDFError as error:
         print("presentation_pdf failure=" + str(error), flush=True)
         await state.set_state(Form.waiting_confirm)
@@ -10532,6 +10535,7 @@ async def studio_submit_preview(user, data):
     # Reserve the existing per-user Mini App slot before yielding. The builder
     # retains the shared generation limit, image checks and post-delivery billing.
     _miniapp_action_tasks[uid] = asyncio.create_task(run_studio_preview(user, data))
+    return _miniapp_action_tasks[uid]
 
 
 async def run_studio_preview(user, data):
@@ -10541,7 +10545,7 @@ async def run_studio_preview(user, data):
         state = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, chat_id=uid, user_id=uid))
         await state.set_data(data)
         await state.set_state(Form.waiting_confirm)
-        await _build_presentation(ensure_answerable(_FakeMessageForApi(uid, user.get('first_name', ''))), state)
+        return await _build_presentation(ensure_answerable(_FakeMessageForApi(uid, user.get('first_name', ''))), state)
     except Exception as error:
         print('studio_preview_build_error', type(error).__name__, flush=True)
         try:

@@ -44,12 +44,27 @@ class PresentationPricingTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(user['credits'], 100)
                     return await original(*a, **kw)
                 env['bot'].send_document = send
-                await env['_build_presentation'](SimpleNamespace(from_user=SimpleNamespace(id=-987654321)), state)
+                result = await env['_build_presentation'](SimpleNamespace(from_user=SimpleNamespace(id=-987654321)), state)
+                self.assertEqual(result, {'delivered': True})
                 self.assertEqual(len(sent), 2)
                 self.assertEqual(user['credits'], 100-amount)
                 env['spend_credits'].assert_called_once_with(-987654321, 'presentation', amount=amount)
                 ledger['save_users'].assert_called_once()
                 self.assertIn(str(amount)+' кредитов', env['bot'].send_message.await_args_list[0].args[1])
+
+    async def test_second_file_delivery_failure_has_no_success_signal_or_charge(self):
+        env, state, sent, user, ledger = self.priced_order('minimal')
+        original = env['bot'].send_document
+        async def send(*a, **kw):
+            if sent:
+                raise RuntimeError('test PDF send failure')
+            return await original(*a, **kw)
+        env['bot'].send_document = send
+        result = await env['_build_presentation'](SimpleNamespace(from_user=SimpleNamespace(id=-987654321)), state)
+        self.assertIsNone(result)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(user['credits'], 100)
+        env['spend_credits'].assert_not_called()
 
     async def test_designer_insufficient_balance_stops_before_generation(self):
         for style in ('designer_soft', 'designer_strict'):

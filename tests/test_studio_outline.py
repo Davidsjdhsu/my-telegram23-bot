@@ -19,7 +19,7 @@ DATA={'slides':4,'topic':'Как работает кофе','theme_name':'coffee
 
 class OutlineTests(unittest.IsolatedAsyncioTestCase):
  async def asyncSetUp(self):
-  self.planner=AsyncMock(return_value=(copy.deepcopy(DATA),{'bg':'#49362b','ink':'#f2e3ce'}));self.submit=AsyncMock();self.send=AsyncMock()
+  self.planner=AsyncMock(return_value=(copy.deepcopy(DATA),{'bg':'#49362b','ink':'#f2e3ce'}));self.build=asyncio.get_running_loop().create_future();self.submit=AsyncMock(return_value=self.build);self.send=AsyncMock()
   self.studio=Studio(lambda _:None,self.send,AsyncMock(),'https://example.test',outline_planner=self.planner,outline_submit=self.submit)
   self.studio.sessions['owner']={'user':{'id':PILOT_UID},'expires':time.monotonic()+600}
   app=web.Application();self.studio.register(app);self.client=TestClient(TestServer(app),cookie_jar=CookieJar(unsafe=True));await self.client.start_server()
@@ -37,7 +37,7 @@ class OutlineTests(unittest.IsolatedAsyncioTestCase):
  async def test_confirmation_uses_server_plan_and_cannot_repeat(self):
   token=await self.create();url='/studio/outline/'+token+'/confirm'
   for _ in range(2):
-   r=await self.client.post(url,json={'cost':0,'recipient':123,'pres_plan':{}},headers=HEADERS);self.assertEqual(r.status,200);self.assertEqual((await r.json())['status'],'submitted')
+   r=await self.client.post(url,json={'cost':0,'recipient':123,'pres_plan':{}},headers=HEADERS);self.assertEqual(r.status,200);self.assertEqual((await r.json())['status'],'building')
   self.submit.assert_awaited_once();user,data=self.submit.call_args.args;self.assertEqual(user['id'],PILOT_UID);self.assertEqual(data,DATA)
  async def test_inflight_double_confirm_does_not_resubmit(self):
   token=await self.create();entered=asyncio.Event();release=asyncio.Event()
@@ -45,6 +45,26 @@ class OutlineTests(unittest.IsolatedAsyncioTestCase):
   self.submit.side_effect=slow;url='/studio/outline/'+token+'/confirm'
   first=asyncio.create_task(self.client.post(url,json={},headers=HEADERS));await entered.wait()
   r=await self.client.post(url,json={},headers=HEADERS);self.assertEqual(r.status,409);release.set();self.assertEqual((await first).status,200);self.submit.assert_awaited_once()
+ async def test_build_completion_is_observed_and_duplicate_confirm_never_restarts(self):
+  token=await self.create();url='/studio/outline/'+token
+  await self.client.post(url+'/confirm',json={},headers=HEADERS)
+  self.assertEqual((await (await self.client.get(url)).json())['status'],'building')
+  self.build.set_result({'delivered':True});await asyncio.sleep(0)
+  done=await (await self.client.get(url)).json();self.assertEqual(done['status'],'completed');self.assertEqual(len(done['titles']),4)
+  again=await self.client.post(url+'/confirm',json={},headers=HEADERS);self.assertEqual((await again.json())['status'],'completed');self.submit.assert_awaited_once()
+ async def test_handled_build_failure_never_looks_successful(self):
+  token=await self.create();url='/studio/outline/'+token
+  await self.client.post(url+'/confirm',json={},headers=HEADERS)
+  self.build.set_result(None);await asyncio.sleep(0)
+  result=await (await self.client.get(url)).json();self.assertEqual(result['status'],'build_failed');self.assertTrue(result['error'])
+  await self.client.post(url+'/confirm',json={},headers=HEADERS);self.submit.assert_awaited_once()
+ async def test_exception_and_cancelled_build_are_not_success(self):
+  token=await self.create();row=self.studio.outline.rows[token]
+  for cancelled in [False,True]:
+   future=asyncio.get_running_loop().create_future()
+   if cancelled:future.cancel()
+   else:future.set_exception(RuntimeError('private details'))
+   self.studio.outline.build_finished(row,future);self.assertEqual(row['status'],'build_failed');self.assertNotIn('private details',row['error'])
  async def test_balance_failure_retriable_and_expiry(self):
   token=await self.create();url='/studio/outline/'+token
   self.submit.side_effect=web.HTTPPaymentRequired(text='Недостаточно кредитов')
@@ -69,9 +89,9 @@ class OutlineTests(unittest.IsolatedAsyncioTestCase):
 
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
  async def test_real_builder_receives_saved_outline_without_replanning(self):
-  state=SimpleNamespace(set_data=AsyncMock(),set_state=AsyncMock());builder=AsyncMock();tasks={PILOT_UID:object()}
+  state=SimpleNamespace(set_data=AsyncMock(),set_state=AsyncMock());builder=AsyncMock(return_value={'delivered':True});tasks={PILOT_UID:object()}
   env={'miniapp_user_record':Mock(),'FSMContext':Mock(return_value=state),'StorageKey':Mock(),'dp':SimpleNamespace(storage=object()),'bot':SimpleNamespace(id=1,send_message=AsyncMock()),'Form':SimpleNamespace(waiting_confirm='confirmed'),'_build_presentation':builder,'ensure_answerable':lambda m:m,'_FakeMessageForApi':lambda uid,name:SimpleNamespace(from_user=SimpleNamespace(id=uid)),'_miniapp_action_tasks':tasks}
-  run=load_functions(['run_studio_preview'],env)['run_studio_preview'];await run({'id':PILOT_UID},DATA)
+  run=load_functions(['run_studio_preview'],env)['run_studio_preview'];result=await run({'id':PILOT_UID},DATA);self.assertEqual(result,{'delivered':True})
   state.set_data.assert_awaited_once_with(DATA);builder.assert_awaited_once();self.assertFalse(tasks)
  async def test_submit_rechecks_balance_and_existing_job_before_start(self):
   job=AsyncMock();tasks={};user={'id':PILOT_UID};afford=Mock(return_value=False)
