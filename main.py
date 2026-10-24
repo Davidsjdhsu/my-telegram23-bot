@@ -2919,6 +2919,7 @@ def can_afford(uid, cost):
     u = get_user(uid)
     held = sum(r.get("cost", 0) for r in u.get("constructor_orders", {}).values() if r.get("status") == "pending")
     held += sum(r.get("charged", 0) for r in u.get("studio_word_payments", {}).values() if r.get("status") == "pending")
+    held += sum(r.get("charged", 0) for r in u.get("studio_excel_payments", {}).values() if r.get("status") == "pending")
     return u.get("credits", 0) - held >= cost
 
 
@@ -10623,6 +10624,8 @@ async def start_web_server():
            outline_planner=studio_plan_preview, outline_submit=studio_submit_preview)
     from studio_word_runtime import attach as attach_studio_word
     attach_studio_word(studio, app, globals())
+    from studio_excel_runtime import attach as attach_studio_excel
+    attach_studio_excel(studio, app, globals())
     studio.register(app)
     app.router.add_get("/", _health_handler)
     app.router.add_get("/health", _health_handler)
