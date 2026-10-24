@@ -2918,6 +2918,7 @@ def can_afford(uid, cost):
         return True
     u = get_user(uid)
     held = sum(r.get("cost", 0) for r in u.get("constructor_orders", {}).values() if r.get("status") == "pending")
+    held += sum(r.get("charged", 0) for r in u.get("studio_word_payments", {}).values() if r.get("status") == "pending")
     return u.get("credits", 0) - held >= cost
 
 
@@ -8646,7 +8647,7 @@ async def word_quality_choice(m: Message, state: FSMContext):
 
 
 @dp.message(Form.waiting_word_confirm, F.text.in_(ALL_BTN_BUILD_DOC_LABELS))
-async def word_build(m: Message, state: FSMContext, quality_action=None):
+async def word_build(m: Message, state: FSMContext, quality_action=None, studio_job=None):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
     from fixed_word_templates import applies as fixed_template_applies
@@ -8762,7 +8763,7 @@ async def word_build(m: Message, state: FSMContext, quality_action=None):
                 "подписью «Условный пример, не результаты исследования». Не выдавай выдуманный опрос за реальный."
             )
         from academic_templates import KINDS as ACADEMIC_KINDS, guidance as academic_guidance, META_LABELS
-        academic = kind in ACADEMIC_KINDS and (content_gen_lang(data, lang) or "ru") == "ru"
+        academic = kind in ACADEMIC_KINDS and (studio_job is not None or (content_gen_lang(data, lang) or "ru") == "ru")
         from academic_reference import reference_guidance
         topic_reference_hint = reference_guidance(data) if academic else ""
         if academic:
@@ -8791,6 +8792,8 @@ async def word_build(m: Message, state: FSMContext, quality_action=None):
                 json_example = json_example.replace('"Введение"', '"Ключевые понятия"')
         if quality_action and pending:
             raw = json.dumps(pending["content"], ensure_ascii=False)
+        elif studio_job and data.get("studio_word_content"):
+            raw = json.dumps(data["studio_word_content"], ensure_ascii=False)
         else:
             raw = await ask_grok(f"""Собери Word: {kind_name}.
         Данные: {data.get('topic')}
@@ -8827,8 +8830,12 @@ async def word_build(m: Message, state: FSMContext, quality_action=None):
             if academic:
                 from academic_templates import request_meta
                 content["meta"] = request_meta(data)
+            if studio_job:
+                content["meta"] = dict(data.get("studio_word_fields") or {})
+                content["title"] = data["topic"]
             if not isinstance(content.get("sections"), list) or not content["sections"]:
                 raise ValueError("В ответе модели нет разделов документа")
+            if studio_job: await state.update_data(studio_word_content=content)
         except Exception as e:
             print("Word JSON parse error:", e)
             await m.answer(tr("msg_no_text", lang, btn=WORD_KIND_LABELS.get(kind, {}).get(lang) or tr("msg_which_doc", lang)), reply_markup=main_kb(lang, uid=m.from_user.id))
@@ -8840,6 +8847,7 @@ async def word_build(m: Message, state: FSMContext, quality_action=None):
             pdf_path = f"/tmp/doc_{uid}.pdf"
 
             async def render_content(value, path):
+                if studio_job: studio_job.stage("Оформляем и проверяем документ")
                 await run_heavy(build_word, path, value.get("title", "Документ"),
                     value.get("sections", []), kind, value.get("meta") or {},
                     extra_data={"skills": value.get("skills"), "languages": value.get("languages"),
@@ -8955,6 +8963,7 @@ section_index — index из задания, after_paragraph — номер су
                 expand=expand_content if kind in INFORMATIONAL_WORD_KINDS and quality_action != "accept" else None,
                 inspect=inspect_pages if kind in INFORMATIONAL_WORD_KINDS else None,
                 max_revisions=2 if academic else 1)
+            if studio_job: await state.update_data(studio_word_content=content)
             actual_body_pages = max(0, actual_pages - front_pages)
             if academic and actual_body_pages < 1:
                 raise ValueError("academic_document_has_no_body_pages")
@@ -8970,6 +8979,9 @@ section_index — index из задания, after_paragraph — номер су
                         "request_key": title_request_key(data), "content": content,
                         "actual_body_pages": actual_body_pages, "actual_pages": actual_pages})
                     await state.set_state(Form.waiting_word_quality)
+                    if studio_job:
+                        studio_job.choice(word_cost(charged_pages), word_quality_choice_notice(pages, actual_body_pages, word_cost(charged_pages), any(x < .5 for x in (layout or {}).get("body_page_fills", []))))
+                        return
                     await m.answer(word_quality_choice_notice(pages, actual_body_pages,
                         word_cost(charged_pages), any(x < .5 for x in (layout or {}).get('body_page_fills', []))),
                         reply_markup=word_quality_keyboard(KeyboardButton, ReplyKeyboardMarkup,
@@ -8982,6 +8994,9 @@ section_index — index из задания, after_paragraph — номер су
                 await m.answer(delivery_notice(kind, pages, actual_body_pages, actual_pages, word_cost(charged_pages)))
             elif actual_pages != pages:
                 await m.answer(word_page_notice(lang, pages, actual_pages, word_cost(charged_pages)))
+
+            if studio_job:
+                return await studio_job.deliver(docx_path, pdf_path, word_cost(charged_pages), content.get("title") or "Документ")
 
             fname = safe_filename(content.get("title"), fallback=WORD_KIND_DESC.get(kind, "Документ"), author=(content.get("meta") or {}).get("author"))
             await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
@@ -10603,9 +10618,12 @@ async def start_web_server():
         save_users()
     from constructor_billing import ConstructorBilling
     constructor_billing = ConstructorBilling(get_user, save_users_now, start_job, finish_job, ADMIN_IDS)
-    Studio(miniapp_verified_user, studio_send_file, studio_action, WEB_BASE_URL, billing=constructor_billing,
+    studio = Studio(miniapp_verified_user, studio_send_file, studio_action, WEB_BASE_URL, billing=constructor_billing,
            profile=studio_profile, settings=studio_settings, menu_action=accept_miniapp_action,
-           outline_planner=studio_plan_preview, outline_submit=studio_submit_preview).register(app)
+           outline_planner=studio_plan_preview, outline_submit=studio_submit_preview)
+    from studio_word_runtime import attach as attach_studio_word
+    attach_studio_word(studio, app, globals())
+    studio.register(app)
     app.router.add_get("/", _health_handler)
     app.router.add_get("/health", _health_handler)
     app.router.add_get("/index.html", _miniapp_static_handler)
