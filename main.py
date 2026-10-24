@@ -2086,13 +2086,13 @@ TR = {
                              "zh": "没能理解。请用下方按钮选择操作，或输入 /cancel 重新开始。",
                              "es": "No entendí. Elige una acción con el botón de abajo, o escribe /cancel para empezar de nuevo.",
                              "fr": "Je n'ai pas compris. Choisis une action avec le bouton ci-dessous, ou tape /cancel pour recommencer."},
-    "msg_plan_info": {"ru": "💳 Баланс: {credits} кредитов\nОбычная презентация — 5 кр./слайд · Дизайнерская — 10 кр./слайд · Word — 5 кр./страница · Excel — 5 кр. · распознавание фото — 3 кр. · шаблон бесплатно",
-                      "en": "💳 Balance: {credits} credits\nStandard presentation — 5 cr./slide · Designer — 10 cr./slide · Word/Excel — 5 cr. · photo recognition — 3 cr. · template is free",
-                      "de": "💳 Guthaben: {credits} Credits\nStandardpräsentation — 5 Cr./Folie · Design — 10 Cr./Folie · Word/Excel — 5 Cr. · Fotoerkennung — 3 Cr. · Vorlage kostenlos",
-                      "ar": "💳 الرصيد: {credits} كريدت\nعرض عادي — 5 لكل شريحة · عرض مصمم — 10 لكل شريحة · وورد/إكسل — 5 · التعرف على الصور — 3 · القالب مجاني",
-                      "zh": "💳 余额：{credits} 积分\n普通演示文稿 — 每页5积分 · 设计版 — 每页10积分 · Word/Excel — 5 积分 · 图片识别 — 3 积分 · 模板免费",
-                      "es": "💳 Saldo: {credits} créditos\nPresentación normal — 5 cr./diapositiva · De diseño — 10 cr./diapositiva · Word/Excel — 5 cr. · reconocimiento de fotos — 3 cr. · plantilla gratis",
-                      "fr": "💳 Solde : {credits} crédits\nPrésentation standard — 5 cr./diapositive · Design — 10 cr./diapositive · Word/Excel — 5 cr. · reconnaissance photo — 3 cr. · modèle gratuit"},
+    "msg_plan_info": {"ru": "💳 Баланс: {credits} кредитов\nОбычная презентация — 16 кр./слайд · Дизайнерская — 32 кр./слайд · Конструктор — 16–32 кр./слайд (фото сверх первого +5, узор +2) · Word — 5 кр./страница · Excel — 5 кр. · распознавание фото — 3 кр. · шаблон бесплатно",
+                      "en": "💳 Balance: {credits} credits\nStandard presentation — 16 cr./slide · Designer — 32 cr./slide · Constructor — 16–32 cr./slide (extra photo +5, pattern +2) · Word/Excel — 5 cr. · photo recognition — 3 cr. · template is free",
+                      "de": "💳 Guthaben: {credits} Credits\nStandardpräsentation — 16 Cr./Folie · Design — 32 Cr./Folie · Word/Excel — 5 Cr. · Fotoerkennung — 3 Cr. · Vorlage kostenlos",
+                      "ar": "💳 الرصيد: {credits} كريدت\nعرض عادي — 16 لكل شريحة · عرض مصمم — 32 لكل شريحة · وورد/إكسل — 5 · التعرف على الصور — 3 · القالب مجاني",
+                      "zh": "💳 余额：{credits} 积分\n普通演示文稿 — 每页16积分 · 设计版 — 每页32积分 · Word/Excel — 5 积分 · 图片识别 — 3 积分 · 模板免费",
+                      "es": "💳 Saldo: {credits} créditos\nPresentación normal — 16 cr./diapositiva · De diseño — 32 cr./diapositiva · Word/Excel — 5 cr. · reconocimiento de fotos — 3 cr. · plantilla gratis",
+                      "fr": "💳 Solde : {credits} crédits\nPrésentation standard — 16 cr./diapositive · Design — 32 cr./diapositive · Word/Excel — 5 cr. · reconnaissance photo — 3 cr. · modèle gratuit"},
     "msg_pptx_ready": {
         "ru": "Готово ✅\n\nPDF — для просмотра: все слайды с фотографиями и оформлением. Открывай его прямо в Telegram. PPTX — для редактирования в PowerPoint, Keynote или Google Презентациях.",
         "en": "Done ✅\n\nPDF contains all slides, photographs and design for viewing in Telegram. Use PPTX for editing in PowerPoint, Keynote or Google Slides.",
@@ -2916,7 +2916,9 @@ def can_afford(uid, cost):
     у них безлимитный доступ, баланс на них не действует."""
     if uid in ADMIN_IDS:
         return True
-    return get_user(uid).get("credits", 0) >= cost
+    u = get_user(uid)
+    held = sum(r.get("cost", 0) for r in u.get("constructor_orders", {}).values() if r.get("status") == "pending")
+    return u.get("credits", 0) - held >= cost
 
 
 def spend_credits(uid, action, amount=None):
@@ -10581,7 +10583,7 @@ async def start_web_server():
     from studio_private import Studio
     async def studio_send_file(uid, data):
         await bot.send_document(uid, BufferedInputFile(data, filename="AlixDoc-constructor.pptx"),
-            caption="Конструктор: ваш редактируемый PPTX. Закрытый тест, кредиты не списаны.")
+            caption="Конструктор: ваш редактируемый PPTX. Цена подтверждена перед сборкой.")
     async def studio_action(user, payload, request_id):
         return await accept_miniapp_action(user, "gen_presentation", payload, request_id)
     async def studio_profile(user):
@@ -10599,7 +10601,9 @@ async def start_web_server():
         u['studio_ui_lang'] = values['ui_lang']
         u['studio_content_lang'] = values['content_lang']
         save_users()
-    Studio(miniapp_verified_user, studio_send_file, studio_action, WEB_BASE_URL,
+    from constructor_billing import ConstructorBilling
+    constructor_billing = ConstructorBilling(get_user, save_users_now, start_job, finish_job, ADMIN_IDS)
+    Studio(miniapp_verified_user, studio_send_file, studio_action, WEB_BASE_URL, billing=constructor_billing,
            profile=studio_profile, settings=studio_settings, menu_action=accept_miniapp_action,
            outline_planner=studio_plan_preview, outline_submit=studio_submit_preview).register(app)
     app.router.add_get("/", _health_handler)
