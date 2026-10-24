@@ -5,7 +5,7 @@ ENV PYTHONUNBUFFERED=1 \
     OMP_NUM_THREADS=1
 # Render saved office documents locally with compatible fonts.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libreoffice-impress libreoffice-writer \
+    libreoffice-impress libreoffice-writer poppler-utils \
     fonts-dejavu-core fonts-liberation2 \
     fonts-crosextra-carlito fonts-crosextra-caladea \
     fonts-noto-core fonts-noto-cjk \

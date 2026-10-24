@@ -12,7 +12,7 @@ def office_env():
     for n in tree.body:
         if isinstance(n,ast.ImportFrom) and (n.module or '').split('.')[0] in ('docx','openpyxl','word_quality'):nodes.append(n)
         elif isinstance(n,ast.Import) and any(x.name=='openpyxl' for x in n.names):nodes.append(n)
-        elif isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and (n.name.startswith('_xl_') or n.name in ('_run','_p','_vspace','_set_cell_borders','_student_title_page','_tabbed_line','_add_table','_parse_markdown_table','_body','build_word','build_excel_items','build_excel_startup','word_build','build_word_from_upload','safe_filename')):
+        elif isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and (n.name.startswith('_xl_') or n.name in ('_run','_p','_vspace','_set_cell_borders','_set_cell_margins','_shade_cell','_cell_p','_student_title_page','_tabbed_line','_add_table','_parse_markdown_table','_body','build_word','build_excel_items','build_excel_startup','word_build','build_word_from_upload','safe_filename')):
             n.decorator_list=[];nodes.append(n)
         elif isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('CONTRACT_FAMILY','ACT_FAMILY','STATEMENT_FAMILY','UNILATERAL_FAMILY','DECLARATION_FAMILY') for t in n.targets):nodes.append(n)
     exec(compile(ast.fix_missing_locations(ast.Module(body=nodes,type_ignores=[])),str(ROOT/'main.py'),'exec'),ns);return ns
