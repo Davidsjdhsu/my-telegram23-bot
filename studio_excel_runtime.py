@@ -3,6 +3,7 @@ from pathlib import Path
 from aiohttp import web
 from openpyxl import load_workbook
 from studio_excel import ExcelWorkflow
+from excel_calculations import calculate, formula
 
 def validate_file(path, payload):
     wb=load_workbook(path); cached=load_workbook(path,data_only=True)
@@ -10,12 +11,16 @@ def validate_file(path, payload):
         ws, values=wb.active,cached.active
         first=9 if payload['style']=='designer' else 5
         total=first+len(payload['rows'])+(1 if payload['style']=='designer' else 0)
-        expected=sum(row['qty']*row['price'] for row in payload['rows'])
+        expected=sum(calculate(row, payload.get('calculation')) for row in payload['rows'])
         if ws.protection.sheet or wb.calculation.calcMode!='auto': raise ValueError('Не удалось проверить редактирование таблицы.')
         for i,row in enumerate(payload['rows'],first):
-            if ws.cell(i,2).value!=row['name'] or ws.cell(i,4).value!=row['qty'] or ws.cell(i,5).value!=row['price'] or ws.cell(i,6).value!=f'=D{i}*E{i}':
+            if ws.cell(i,2).value!=row['name'] or ws.cell(i,4).value!=row['qty'] or ws.cell(i,5).value!=row['price'] or ws.cell(i,6).value!=formula(i, payload.get('calculation')):
                 raise ValueError('Не удалось проверить строки и формулы сметы.')
-        if ws.cell(total,6).value!=f'=SUM(F{first}:F{first+len(payload["rows"])-1})' or abs(values.cell(total,6).value-expected)>max(.00001,abs(expected)*1e-12):
+        last=first+len(payload['rows'])-1
+        total_formula=f'=SUM(F{first}:F{last})'
+        if payload.get('calculation', {}).get('mode')=='custom':
+            total_formula=f'=IF(COUNT(F{first}:F{last})={len(payload["rows"])},SUM(F{first}:F{last}),"")'
+        if ws.cell(total,6).value!=total_formula or abs(values.cell(total,6).value-expected)>max(.00001,abs(expected)*1e-12):
             raise ValueError('Итог сметы не прошёл проверку.')
     finally: wb.close(); cached.close()
 
@@ -30,7 +35,7 @@ def attach(studio,app,api):
             if not path.exists():
                 pending=job.directory/'building.xlsx'
                 await api['run_heavy'](api['build_excel_items'],str(pending),payload['title'],'expense_estimate',{},payload['rows'],
-                    subtitle=payload['subtitle'] or 'Суммы в рублях',excel_style=payload['style'],excel_palette=payload['palette'],excel_protect=False)
+                    subtitle=payload['subtitle'] or 'Суммы в рублях',excel_style=payload['style'],excel_palette=payload['palette'],excel_protect=False,excel_calculation=payload.get('calculation'))
                 await api['run_heavy'](validate_file,pending,payload)
                 pending.replace(path)
             else: await api['run_heavy'](validate_file,path,payload)

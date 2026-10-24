@@ -24,8 +24,12 @@ def normalize_excel_appearance(style=None, palette=None):
     return style, palette if style == 'designer' and isinstance(palette, str) and palette in PALETTES else 'green'
 
 
-def build_estimate(path, title, rows, *, style='standard', palette='green', subtitle=None, number=None, protect=False):
+def build_estimate(path, title, rows, *, style='standard', palette='green', subtitle=None, number=None, protect=False, calculation=None):
     """Save a real XLSX and return caches for the existing preview-cache writer."""
+    from excel_calculations import normalize_calculation, calculate, formula, description
+    calculation = normalize_calculation(calculation)
+    custom = calculation['mode'] == 'custom'
+    adjusted = calculation['mode'] != 'cost'
     if not rows:
         raise ValueError('В смете нет позиций')
     number = number or (lambda value, default=0: default if value is None else float(value))
@@ -69,6 +73,7 @@ def build_estimate(path, title, rows, *, style='standard', palette='green', subt
     band(title_row + 1, first_col, 7, 'FFFFFF', '66726B', 10)
     ws.row_dimensions[title_row + 1].height = max(22, math.ceil(len(str(subtitle or '')) / 110) * 16)
     headers = ['Позиция', 'Ед.', 'Кол-во', 'Цена, ₽', 'Сумма, ₽', 'Раздел']
+    if custom: headers[4] = 'Результат'
     if not designer:
         headers.insert(0, '№')
     for col, label in enumerate(headers, first_col):
@@ -92,8 +97,8 @@ def build_estimate(path, title, rows, *, style='standard', palette='green', subt
             ws.cell(r, 1, i + 1)
         text(r, 2, name); text(r, 3, unit); text(r, 7, category)
         ws.cell(r, 4, qty); ws.cell(r, 5, price)
-        ws.cell(r, 6, f'=D{r}*E{r}')
-        value = qty * price
+        ws.cell(r, 6, formula(r, calculation))
+        value = calculate({'qty': qty, 'price': price}, calculation)
         if not math.isfinite(value):
             raise ValueError('Слишком большая сумма в смете')
         cache[f'F{r}'] = value
@@ -118,17 +123,18 @@ def build_estimate(path, title, rows, *, style='standard', palette='green', subt
     last = first + len(rows) - 1
     total_row = last + (2 if designer else 1)
     band(total_row, first_col, 7, soft if designer else dark, dark if designer else 'FFFFFF', 12 if designer else 11, True)
-    text(total_row, 2, 'Итого по смете')
-    ws.cell(total_row, 6, f'=SUM(F{first}:F{last})')
+    text(total_row, 2, 'Сумма результатов' if custom else 'Итого по смете')
+    guard = f'COUNT(F{first}:F{last})={len(rows)}'
+    ws.cell(total_row, 6, f'=IF({guard},SUM(F{first}:F{last}),"")' if custom else f'=SUM(F{first}:F{last})')
     ws.cell(total_row, 6).number_format = '#,##0.00" ₽"'
     ws.cell(total_row, 6).alignment = Alignment(horizontal='right', vertical='center')
     cache[f'F{total_row}'] = total
     ws.row_dimensions[total_row].height = 35 if designer else 25
     if designer:
         ws.merge_cells(f'F{total_row}:G{total_row}')
-        text(5, 2, 'Общая стоимость')
+        text(5, 2, 'Сумма результатов' if custom else 'Общая стоимость')
         ws.merge_cells('F5:G5')
-        ws.cell(5, 6, f'=F{total_row}')
+        ws.cell(5, 6, f'=IF(ISNUMBER(F{total_row}),F{total_row},"")' if custom else f'=F{total_row}')
         cache['F5'] = total
         band(5, 2, 7, 'FFFFFF', dark, 17, True)
         ws['B5'].font = Font(name='Arial', size=12, color=dark)
@@ -145,7 +151,8 @@ def build_estimate(path, title, rows, *, style='standard', palette='green', subt
         # SUMIF interprets *, ? and ~ as patterns; categories are literal labels.
         criterion = '=' + category.replace('~', '~~').replace('*', '~*').replace('?', '~?')
         criterion = criterion.replace('"', '""')
-        ws.cell(r, 6, f'=SUMIF(G{first}:G{last},"{criterion}",F{first}:F{last})')
+        expression = f'SUMIF(G{first}:G{last},"{criterion}",F{first}:F{last})'
+        ws.cell(r, 6, f'=IF({guard},{expression},"")' if custom else '=' + expression)
         cache[f'F{r}'] = value
         band(r, 2, 7, 'FFFFFF', dark if designer else '000000', 11, designer)
         ws['F' + str(r)].number_format = '#,##0.00" ₽"'
@@ -179,6 +186,54 @@ def build_estimate(path, title, rows, *, style='standard', palette='green', subt
     ws.print_options.horizontalCentered = True
     ws.print_title_rows = f'{header}:{header}'
     ws.print_area = f'A1:G{note_row}'
+    if adjusted:
+        # Keep the approved main-sheet geometry; editable drivers get their own sheet.
+        settings = wb.create_sheet('Расчёт')
+        settings.column_dimensions['A'].width = 34
+        settings.column_dimensions['B'].width = 75
+        if calculation['mode'] in ('discount', 'markup'):
+            sign, label = ('−', 'Скидка') if calculation['mode']=='discount' else ('+', 'Наценка')
+            expression_label = f'Количество × Цена × (1 {sign} {label} / 100)'
+        else:
+            from excel_calculations import LABELS, SYMBOLS
+            left = 'Первое число' if calculation['left']=='number' else LABELS[calculation['left']]
+            right = 'Второе число' if calculation['right']=='number' else LABELS[calculation['right']]
+            expression_label = f'{left} {SYMBOLS[calculation["op"]]} {right}'
+        settings.append(['Расчёт для всех строк', expression_label])
+        settings.append(['Результат', 'Число без единицы; проверьте смысл выбранных величин.' if custom else 'Сумма в рублях'])
+        if calculation['mode'] in ('discount', 'markup'):
+            settings.cell(3, 1, 'Скидка, %' if calculation['mode'] == 'discount' else 'Наценка, %')
+            settings.cell(3, 2, calculation['percent'])
+            check = DataValidation(type='decimal', operator='between', formula1=0,
+                formula2=100 if calculation['mode']=='discount' else 1000, showErrorMessage=True,
+                error='Проверьте допустимый процент.', allow_blank=False)
+            settings.add_data_validation(check); check.add('B3')
+        for side, r in [('left', 4), ('right', 5)]:
+            if calculation.get(side) == 'number':
+                settings.cell(r, 1, 'Первое число' if side == 'left' else 'Второе число')
+                settings.cell(r, 2, calculation[side + '_value'])
+        settings.cell(7, 1, 'Как пользоваться')
+        settings.cell(7, 2, 'Меняйте числа в цветных ячейках. Расчёт применяется ко всем строкам сметы. Пустой результат при делении означает нулевой делитель; исправьте его, чтобы появился итог.')
+        for row in settings:
+            for cell in row:
+                cell.font = Font(name='Arial', size=11, color='000000')
+                cell.alignment = Alignment(wrap_text=True, vertical='center')
+                if cell.row in (3, 4, 5) and cell.column == 2 and cell.value is not None:
+                    cell.fill = PatternFill('solid', fgColor=soft)
+        settings.row_dimensions[1].height = 36
+        settings.row_dimensions[2].height = 36
+        settings.row_dimensions[7].height = 72
+        settings.print_area = 'A1:B7'
+        settings.sheet_properties.pageSetUpPr.fitToPage = True
+        settings.page_setup.fitToWidth = 1
+        settings.page_setup.fitToHeight = 1
+        # Keep the expression beside the main table as well.
+        ws.cell(note_row, first_col, 'Расчёт: ' + expression_label + '. Настройки — на листе «Расчёт».')
+        ws.row_dimensions[note_row].height = 42
+    if custom:
+        for row in ws:
+            for cell in row:
+                if cell.column == 6: cell.number_format = '#,##0.###;(#,##0.###);"0"'
     apply_formula_protection(wb, protect)
     wb.save(path)
     return cache

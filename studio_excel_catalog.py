@@ -2,6 +2,8 @@
 from decimal import Decimal, InvalidOperation
 from excel_styles import PALETTES, PALETTE_LABELS, STYLE_LABELS
 
+from excel_calculations import normalize_calculation, calculate
+
 MAX_ROWS = 60
 
 def text(value, limit, label):
@@ -28,6 +30,7 @@ def normalize(body, draft=False):
     style, palette = body.get('style', 'standard'), body.get('palette', 'green')
     if not isinstance(style, str) or style not in STYLE_LABELS or not isinstance(palette, str) or palette not in PALETTES:
         raise ValueError('Выберите оформление сметы.')
+    calculation = normalize_calculation(body.get('calculation'))
     rows = body.get('rows', [])
     if not isinstance(rows, list) or len(rows) > MAX_ROWS or (not draft and not rows):
         raise ValueError(f'Добавьте от 1 до {MAX_ROWS} позиций.')
@@ -41,10 +44,15 @@ def normalize(body, draft=False):
             value = row.get(key, '')
             item[key] = '' if draft and value == '' else number(value, f'Строка {i}, {label}', maximum)
         result.append(item)
-    total = sum(Decimal(str(r['qty'] or 0)) * Decimal(str(r['price'] or 0)) for r in result)
-    if total > Decimal('999999999999'): raise ValueError('Общая сумма слишком велика: максимум 999 999 999 999 ₽.')
+    values = []
+    for i, row in enumerate(result, 1):
+        try: values.append(calculate(row, calculation) or 0)
+        except ValueError as e:
+            if not draft: raise ValueError(f'Строка {i}: {e}')
+    total = sum(Decimal(str(v)) for v in values)
+    if abs(total) > Decimal('999999999999'): raise ValueError('Общая сумма слишком велика: максимум 999 999 999 999 ₽.')
     return dict(kind='expense_estimate', title=title, subtitle=text(body.get('subtitle', ''), 300, 'Примечание'),
-                style=style, palette=palette if style == 'designer' else 'green', rows=result,
+                style=style, palette=palette if style == 'designer' else 'green', rows=result, calculation=calculation,
                 source=text(body.get('source', ''), 6000, 'Исходные данные'))
 
 def catalog(cost):

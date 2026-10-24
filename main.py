@@ -7077,7 +7077,7 @@ EXCEL_MIN_ROWS_AI = {
 }
 
 
-def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_style='standard', excel_palette='green', excel_protect=False):
+def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_style='standard', excel_palette='green', excel_protect=False, excel_calculation=None):
     """Собирает смету/бюджет/прайс/расчётную таблицу с реальными формулами Excel.
     rows - список dict по схеме EXCEL_ROW_SCHEMA[kind]. Если хотя бы у одной строки заполнено
     поле category - добавляется колонка "Категория" и блок промежуточных итогов по ней (реальные
@@ -7085,7 +7085,7 @@ def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_styl
     if kind == 'expense_estimate':
         from excel_styles import build_estimate
         cache = build_estimate(path, title, rows, style=excel_style, palette=excel_palette,
-                               subtitle=subtitle, number=_xl_num, protect=excel_protect)
+                               subtitle=subtitle, number=_xl_num, protect=excel_protect, calculation=excel_calculation)
         _xl_inject_cached_values(path, cache)
         return
     if kind in ('family_budget', 'project_budget'):
