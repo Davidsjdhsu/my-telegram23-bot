@@ -40,6 +40,15 @@ class OutlinePreview:
         payload = {'topic': topic.strip(), 'key': key, 'slides': count, 'kind': kind}
         if kind == 'designer':
             payload['style'] = style
+        from studio_settings import CONTENT_LANGUAGES, PALETTES
+        if 'content_lang' in body:
+            if not isinstance(body['content_lang'], str) or body['content_lang'] not in CONTENT_LANGUAGES:
+                raise web.HTTPBadRequest()
+            payload['content_lang'] = body['content_lang']
+        if body.get('palette') is not None:
+            if kind != 'designer' or not isinstance(body['palette'], str) or body['palette'] not in PALETTES:
+                raise web.HTTPBadRequest()
+            payload['palette'] = body['palette']
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         now = time.monotonic()
         self.rows = {k: r for k, r in self.rows.items() if r['expires'] > now}

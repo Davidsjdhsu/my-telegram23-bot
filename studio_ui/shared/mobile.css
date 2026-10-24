@@ -49,3 +49,14 @@ body:has(#alix-studio-mixed){height:var(--app-height);overflow:hidden}
 #alix-real-catalog #rc-zoom{max-height:calc(var(--app-height) - 24px)}
 #alix-real-catalog #rc-zoom-image{max-height:calc(var(--app-height) - 160px)}
 .studio-return{padding-top:max(12px,env(safe-area-inset-top),var(--app-safe-top))!important}
+
+.as-nav svg,.studio-bottom-nav svg{width:21px;height:21px;flex:none}
+#alix-studio-mixed .as-nav button{display:flex;flex-direction:column;gap:4px;font-size:11px}
+.studio-bottom-nav{display:flex;justify-content:space-around;background:#1c1f25;border-top:1px solid #36373d;padding:7px 8px max(7px,env(safe-area-inset-bottom));box-sizing:border-box;z-index:25}
+.studio-bottom-nav a{display:flex;flex:1;align-items:center;flex-direction:column;gap:3px;color:#c4b699;text-decoration:none;font:11px/1.4 Manrope,system-ui;min-height:40px}
+.with-studio-nav:not(.studio-editor){padding-bottom:76px!important}
+.with-studio-nav:not(.studio-editor)>.studio-bottom-nav{position:fixed;bottom:0;left:0;right:0}
+.studio-editor>.studio-bottom-nav{flex:none}
+.studio-language-field{display:block;margin:15px 0;font:14px/1.6 Manrope,system-ui;color:#d6c6ab}
+.studio-language-field select{display:block;width:100%;padding:11px;margin:6px 0;border:1px solid #514b45;border-radius:10px;background:#252830;color:#eee3d2}
+.studio-language-field small{display:block;color:#b7b3ad;font-size:12px}

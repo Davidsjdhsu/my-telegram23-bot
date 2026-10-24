@@ -4,10 +4,12 @@ const response=await fetch('catalog.json',{cache:'no-cache'});
 if(!response.ok)throw new Error('Catalog unavailable');
 const data=await response.json();
 const $=s=>root.querySelector(s), $$=s=>Array.from(root.querySelectorAll(s));
-const initial={version:3,kind:'standard',style:'strict',ordinary:'coffee',designer:'d16',page:0,slides:6,confirmed:false};
+const palettes=await (await fetch('palettes.json')).json();
+const initial={version:3,palette:'',kind:'standard',style:'strict',ordinary:'coffee',designer:'d16',page:0,slides:6,confirmed:false};
 function normalize(s){
  s=s&&s.version===3?s:{};
  const n={...initial,...s};
+ n.palette=palettes.some(p=>p.key===n.palette)?n.palette:'';
  n.kind=n.kind==='designer'?'designer':'standard';n.style=n.style==='soft'?'soft':'strict';
  if(!data.some(r=>r.group==='standard'&&r.key===n.ordinary))n.ordinary='coffee';
  if(!data.some(r=>r.group==='strict'&&r.key===n.designer))n.designer='d16';
@@ -63,6 +65,9 @@ function render(scrollToChoice=false){
  let rebuilt=false;
  $$('.rc-kinds button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.kind===state.kind)));
  $('.rc-style').hidden=state.kind==='standard';
+ $('#rc-palette-field').hidden=state.kind==='standard';
+ $('#rc-palette').value=state.palette;
+ const chosen=palettes.find(p=>p.key===state.palette),sample=$('#rc-palette-sample');sample.hidden=!chosen;if(chosen){sample.style.background=chosen.bg;sample.style.color=chosen.ink;sample.style.border='1px solid '+chosen.line;sample.textContent=chosen.name+' · Aa Бб 123';}
  $('#rc-diagrams').hidden=state.kind==='standard';
  $$('.rc-style button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.style===state.style)));
  if(groupRendered!==group()){
@@ -102,11 +107,13 @@ root.addEventListener('click',async e=>{
  else if(b.id==='rc-confirm'){
  const topic=$('#rc-topic').value.trim();if(!topic){$('#rc-status').textContent='Напишите тему презентации.';return;}
  if(b.disabled)return;
- b.disabled=true;try{outlineModule??=await import('./outline.js');await outlineModule.open({topic,kind:state.kind,style:state.style,key:selected().key,slides:state.slides},b);}catch(e){$('#rc-status').textContent='Не удалось открыть план. Повторите попытку.';}finally{b.disabled=false;}
+ b.disabled=true;try{outlineModule??=await import('./outline.js');await outlineModule.open({topic,kind:state.kind,style:state.style,key:selected().key,slides:state.slides,content_lang:window.AlixPreferences.content(),...(state.kind==='designer'&&state.palette?{palette:state.palette}:{})},b);}catch(e){$('#rc-status').textContent='Не удалось открыть план. Повторите попытку.';}finally{b.disabled=false;}
  }
  else if(b.id==='rc-zoom-open')$('#rc-zoom').showModal();
  else if(b.id==='rc-zoom-close')$('#rc-zoom').close();
 });
+for(const p of palettes){const o=document.createElement('option');o.value=p.key;o.textContent=p.name;$('#rc-palette').append(o)}
+$('#rc-palette').addEventListener('change',e=>change(()=>{state.palette=e.target.value;state.confirmed=false}));
 $('#rc-templates').addEventListener('change',e=>choose(e.target.value));
 $('#rc-slides').addEventListener('change',e=>change(()=>{state.slides=+e.target.value;state.confirmed=false;}));
 $('.rc-stage').addEventListener('pointerdown',e=>{touchStart={x:e.clientX,y:e.clientY};});

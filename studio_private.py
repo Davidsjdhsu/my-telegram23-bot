@@ -31,7 +31,7 @@ def menu_url(base, uid, fallback):
 # generation endpoints retain the signed Telegram tester session requirement.
 PUBLIC_SHELL = {
     'home/style.css', 'home/app.js', 'shared/mobile.css', 'shared/mobile.js',
-    'templates/fonts.css',
+    'templates/fonts.css', 'shared/preferences.js', 'shared/en.json',
 }
 PUBLIC_SHELL.update('templates/' + name for name in re.findall(
     r'url\((fonts/[a-f0-9]+\.woff2)\)',
@@ -40,9 +40,10 @@ PUBLIC_SHELL.update('templates/' + name for name in re.findall(
 
 
 class Studio:
-    def __init__(self, verify, send_file, action, origin, profile=None, menu_action=None, outline_planner=None, outline_submit=None):
+    def __init__(self, verify, send_file, action, origin, profile=None, menu_action=None, outline_planner=None, outline_submit=None, settings=None):
         self.verify, self.send_file, self.action = verify, send_file, action
         self.profile_callback, self.menu_action = profile, menu_action
+        self.settings_callback = settings
         self.forms_cache = None
         self.outline = None
         if outline_planner and outline_submit:
@@ -124,6 +125,19 @@ class Studio:
         if not self.menu_action:
             raise web.HTTPServiceUnavailable()
         return await self.menu_action(s['user'], action, payload, body.get('requestId'))
+
+    async def settings(self, request):
+        user = self.authorized(request)['user']
+        self.check_write(request)
+        from studio_settings import preferences
+        try:
+            values = preferences(await self.body(request, 1024))
+        except ValueError:
+            raise web.HTTPBadRequest()
+        if not self.settings_callback:
+            raise web.HTTPServiceUnavailable()
+        await self.settings_callback(user, values)
+        return web.json_response({'ok': True, **values}, headers={'Cache-Control': 'no-store'})
 
     async def forms(self, request):
         self.authorized(request)
@@ -216,6 +230,7 @@ class Studio:
         app.router.add_post('/studio/generate', self.generate)
         app.router.add_post('/studio/export', self.export)
         app.router.add_get('/studio/profile', self.profile)
+        app.router.add_post('/studio/settings', self.settings)
         app.router.add_post('/studio/action', self.menu_request)
         app.router.add_get('/studio/forms/', self.forms)
         app.router.add_get('/studio/{path:.*}', self.static)

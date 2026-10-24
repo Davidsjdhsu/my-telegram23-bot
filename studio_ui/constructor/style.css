@@ -67,3 +67,15 @@
 
 .project-menu>div{width:230px}.project-menu small{display:block;padding:6px;font-size:11px;line-height:1.5;color:var(--muted)}#open-ready{background:var(--gold);color:#211e19;white-space:nowrap}#open-ready[hidden]{display:none}
 @media(max-width:740px){.studio-editor footer:has(#open-ready:not([hidden])){display:grid;grid-template-columns:auto 1fr;gap:8px}.studio-editor footer:has(#open-ready:not([hidden])) #status{grid-column:1/-1;max-width:none;font-size:13px}.studio-editor footer:has(#open-ready:not([hidden]))>span:last-of-type{display:none}.studio-editor footer:has(#open-ready:not([hidden])) #mobile-preview{grid-row:2}.studio-editor #open-ready{grid-row:2;min-height:40px}}
+
+.studio-editor .top .studio-return{color:var(--gold);padding:10px!important;white-space:nowrap;text-decoration:none;font:14px Manrope,system-ui}
+#text-dialog,#saved-dialog{width:min(540px,calc(100vw - 24px));padding:20px;border:1px solid #615340;border-radius:18px;color:#eee3d2;background:#202329;overflow:auto}
+#text-dialog::backdrop,#saved-dialog::backdrop{background:#0009}
+#text-dialog h2,#saved-dialog h2{font:28px Georgia;margin:0}
+#text-dialog p,#saved-dialog p{font-size:14px;line-height:1.6}
+#text-input{width:100%;box-sizing:border-box;resize:vertical;min-height:130px;max-height:35dvh;font:16px/1.5 Manrope,system-ui;padding:12px;background:#15181e;color:#eee3d2;border:1px solid #615340;border-radius:10px}
+#text-form>button,#saved-dialog>button{width:100%;min-height:44px}
+#text-counter{color:#b7b3ad;text-align:right}
+@media(max-width:740px){.studio-editor .canvas-foot{flex-wrap:wrap}.studio-editor .canvas-foot>span:nth-child(2){display:none}.studio-editor .canvas-foot button{min-height:36px;padding:5px 9px}#edit-text{color:#d5b675}.studio-editor .project-menu small{line-height:1.5}.studio-editor>.studio-bottom-nav{padding:4px 8px max(4px,env(safe-area-inset-bottom))}.studio-editor>.studio-bottom-nav a{min-height:36px}}
+
+@media(max-width:740px){.studio-editor footer{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 10px}.studio-editor footer>span:nth-of-type(2){display:none}.studio-editor footer #status{font-size:11px;line-height:1.4;min-width:0}.studio-editor footer #open-ready:not([hidden]){grid-column:1/-1}}

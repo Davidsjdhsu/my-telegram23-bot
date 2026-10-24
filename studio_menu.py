@@ -26,7 +26,7 @@ def forms_html(base):
     source=source.replace("const miniSession = createMiniAppSession({ getTg, apiBase });",'''const miniSession = (()=>{
       let pending=false,retry=null;
       async function request(path,body){const r=await fetch('/studio/'+path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json','X-Studio-Request':'1'}:{},body:body?JSON.stringify(body):undefined,cache:'no-store'});const b=await r.json();if(!r.ok||!b.ok)throw Error(b.error||'request_failed');return b}
-      return {loadProfile:()=>request('profile'),async send(action,payload={}){if(pending)return false;pending=true;const key=JSON.stringify({action,payload});if(!retry||retry.key!==key)retry={key,id:crypto.randomUUID()};try{await request('action',{action,payload,requestId:retry.id});retry=null;return true}finally{pending=false}}};
+      return {loadProfile:()=>request('profile'),async send(action,payload={}){if(pending)return false;pending=true;if(action==='gen_word'||action==='gen_excel'){const field=document.querySelector('.screen.active [data-content-language]');payload={...payload,content_lang:field?.value||window.AlixPreferences?.content()||'ru'}}const key=JSON.stringify({action,payload});if(!retry||retry.key!==key)retry={key,id:crypto.randomUUID()};try{await request('action',{action,payload,requestId:retry.id});retry=null;return true}finally{pending=false}}};
     })();''')
     source=source.replace('new URL(relativePath, window.location.href)', "new URL(relativePath, window.location.origin + '/')")
     source=source.replace('if (tg.initData) {','if (true) {').replace("if (!getTg()?.initData) return;",'')
@@ -34,7 +34,7 @@ def forms_html(base):
     theme='''<link rel="stylesheet" href="/studio/templates/fonts.css"><style>
     html,body{background:#191b20!important;color:#e7e2d9;font-family:Manrope,sans-serif!important}.display{font-family:'Cormorant Garamond',Georgia,serif!important}.orb,.glow,.glow-1,.glow-2,.bg-glow{display:none!important}input,textarea,select{background:#252830!important;color:#e7e2d9!important;border-color:#514b45!important}.btn-primary,.form-submit,.field-chip.active,.credits-topup,.gauge-topup{background:linear-gradient(110deg,#b59a6b,#d1bb93)!important;color:#211e19!important;box-shadow:none!important}.tabs,.tabbar-float{display:none!important}.form-label,.form-hint,.form-cost{color:#b7b3ad!important}.wrap{max-width:600px;padding-bottom:30px}.studio-return{display:block;padding:18px 22px;color:#c4aa7d;text-decoration:none;font:14px Manrope,sans-serif}body{padding-bottom:24px!important}</style>'''
     theme += '''<link rel="stylesheet" href="/studio/shared/mobile.css"><script defer src="/studio/shared/mobile.js"></script><style>body{padding-bottom:0!important}.bg-root{min-height:0}.wrap{padding-bottom:max(24px,env(safe-area-inset-bottom),var(--app-safe-bottom))}.studio-return{position:sticky;top:0;background:#191b20;z-index:20}input,textarea,select{font-size:16px!important}</style>'''
-    source=source.replace('</head>',theme+'</head>').replace('<body>','<body><a class="studio-return" href="/studio/home/">← Меню AlixDoc</a>')
+    source=source.replace('</head>',theme+'</head>').replace('<body>','<body><a class="studio-return" href="/studio/home/">← Назад</a>')
     initialization='''
     const studioScreen=new URLSearchParams(location.search).get('screen');
     if(['form-word','form-excel','form-resume','form-dkp-car','form-dkp-realty','topup','profile','create'].includes(studioScreen))showScreen(studioScreen);
@@ -43,8 +43,28 @@ def forms_html(base):
     document.querySelector('.studio-return').href=studioScreen==='topup'||studioScreen==='profile'?'/studio/home/?screen=profile':'/studio/home/';
     document.addEventListener('click',e=>{const b=e.target.closest('#topupBackBtn,#legalBackBtn,[data-back-to],.tab-item');if(b){e.preventDefault();e.stopImmediatePropagation();studioReturn()}},true);
     const studioBack=window.Telegram?.WebApp?.BackButton;
-    studioBack?.onClick(studioReturn);studioBack?.show();
+    
     window.addEventListener('pagehide',()=>{studioBack?.offClick(studioReturn);studioBack?.hide()});
+    '''
+    source=source.replace('</head>', '<script defer src="/studio/shared/preferences.js"></script></head>')
+    initialization += '''
+    for(const id of ['form-word','form-excel','form-resume']){
+        const screen=document.getElementById('screen-'+id);if(!screen)continue;
+        const area=screen.querySelector('textarea');if(!area)continue;
+        const field=document.createElement('label');field.className='studio-language-field';field.innerHTML='Язык файла<select data-content-language></select>';area.closest('.field-block,.form-group,.field')?.before(field);
+        if(!field.isConnected)area.before(field);
+    }
+    '''
+    initialization += '''
+    const fixedLanguage=()=>{
+        const select=document.querySelector('#screen-form-word [data-content-language]');if(!select)return;
+        const fixed=['services_ru','services_act_ru','rent_flat_ru','claim_replace_ru'].includes(document.getElementById('wordKind').value);
+        select.disabled=fixed;
+        let note=document.getElementById('studio-fixed-lang');if(!note){note=document.createElement('small');note.id='studio-fixed-lang';note.textContent='Шаблоны РФ заполняются на русском языке.';select.after(note)}note.hidden=!fixed;
+        if(fixed)select.value='ru';
+    };
+    document.getElementById('wordKind')?.addEventListener('change',fixedLanguage);
+    document.addEventListener('alix-preferences',fixedLanguage);
     '''
     at=source.rfind('</script>');source=source[:at]+initialization+source[at:]
     return source

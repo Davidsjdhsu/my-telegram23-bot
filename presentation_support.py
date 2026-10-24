@@ -62,6 +62,8 @@ def total_slides(value):
 def plan_key(data):
     fields = {k: data.get(k) for k in ('topic', 'user_text', 'extra', 'slides', 'mode',
                                       'content_lang', 'theme_name', 'custom_colors')}
+    if data.get('studio_palette'):
+        fields['studio_palette'] = data['studio_palette']
     if data.get('theme_name') in ('designer_soft','designer_strict'):
         fields['catalog_version']=CATALOG_VERSION
     return hashlib.sha256(json.dumps(fields, ensure_ascii=False, sort_keys=True).encode()).hexdigest()

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1,viewport-fit=cover"><title>AlixDoc · Реальные оформления</title><link rel="stylesheet" href="fonts.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="outline.css"><script src="/telegram-web-app.js"></script><link rel="stylesheet" href="/studio/shared/mobile.css"><script defer src="/studio/shared/mobile.js"></script></head><body><a class="studio-return" href="/studio/home/" style="display:block;padding:10px 20px;color:#c4aa7d;font:14px system-ui">← Главное меню · Word, Excel и профиль</a>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1,viewport-fit=cover"><title>AlixDoc · Реальные оформления</title><link rel="stylesheet" href="fonts.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="outline.css"><script src="/telegram-web-app.js"></script><link rel="stylesheet" href="/studio/shared/mobile.css"><script defer src="/studio/shared/mobile.js"></script><script defer src="/studio/shared/preferences.js"></script></head><body><a class="studio-return" href="/studio/home/" style="display:block;padding:10px 20px;color:#c4aa7d;font:14px system-ui">← Назад</a>
 <div id="alix-real-catalog" class="viz-dotted-background">
  <div class="rc-app">
   <header><div class="rc-logo">Alix<span>Doc</span></div><small>Личный тест · AlixDoc</small></header>
@@ -34,12 +34,12 @@
    <div class="rc-rail" aria-label="Каталог оформлений"></div>
    <p id="rc-pattern"></p>
    <dialog id="rc-zoom"><div class="rc-zoom-bar"><span id="rc-zoom-title"></span><button type="button" id="rc-zoom-close">Закрыть ×</button></div><img id="rc-zoom-image" alt=""><div class="rc-zoom-controls"><button type="button" data-page-move="-1">← Предыдущий</button><button type="button" data-page-move="1">Следующий →</button></div></dialog>
-   <div class="rc-footer">
+   <div id="rc-palette-field"><label class="studio-language-field">Палитра дизайнерской презентации<select id="rc-palette"><option value="">Цвета выбранного шаблона</option></select><small>Цвета меняются, шрифты и узоры выбранного шаблона сохраняются.</small></label><div id="rc-palette-sample" data-no-translate style="padding:20px;border-radius:12px" hidden></div><p class="rc-status">Выше показан исходный шаблон; выбранные цвета — в образце ниже.</p></div><div class="rc-footer"><label class="studio-language-field">Язык презентации<select data-content-language></select></label>
     <div class="rc-price-row">
      <label for="rc-slides">Слайдов <select id="rc-slides"><option>4</option><option selected>6</option><option>8</option><option>10</option><option>12</option><option>16</option></select></label>
      <div class="rc-total"><strong id="rc-price"></strong><small>Обложка, PPTX и PDF включены</small></div>
     </div>
-    <label for="rc-topic">Тема презентации</label><textarea id="rc-topic" maxlength="500" rows="3" placeholder="О чём сделать презентацию?" style="width:100%;box-sizing:border-box;background:#202630;color:#eee3d2;border:1px solid #655c50;border-radius:12px;padding:12px;margin:12px 0;font:16px system-ui"></textarea><button type="button" class="rc-primary cursor-interaction" id="rc-confirm">Показать план в Telegram</button><p id="rc-plan-hint">Сначала покажем короткий план.</p>
+    <label for="rc-topic">Тема презентации</label><textarea id="rc-topic" maxlength="500" rows="3" placeholder="О чём сделать презентацию?" style="width:100%;box-sizing:border-box;background:#202630;color:#eee3d2;border:1px solid #655c50;border-radius:12px;padding:12px;margin:12px 0;font:16px system-ui"></textarea><button type="button" class="rc-primary cursor-interaction" id="rc-confirm">Посмотреть план</button><p id="rc-plan-hint">Сначала покажем короткий план.</p>
     <p class="rc-status" id="rc-status" aria-live="polite"></p>
    </div>
   </main>

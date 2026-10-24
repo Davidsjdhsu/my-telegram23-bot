@@ -9504,6 +9504,9 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
     m = ensure_answerable(m)
     lang = user_lang(m.from_user.id)
     u = get_user(m.from_user.id)
+    from studio_private import is_pilot_user
+    from studio_settings import content_language
+    output_lang = content_language(payload.get('content_lang'), content_language(u.get('studio_content_lang'), lang)) if is_pilot_user(m.from_user.id) else lang
 
     if action in ("mode_buttons", "mode_voice"):
         u["control_mode"] = "voice" if action == "mode_voice" else "buttons"
@@ -9540,7 +9543,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         await _start_presentation_request(m, state, topic, lang, settings={
             "user_text": user_text,
             "theme_name": payload.get("style") or "default", "slides": slides,
-            "mode": "user" if user_text else "ai", "content_lang": lang,
+            "mode": "user" if user_text else "ai", "content_lang": output_lang,
             "photo_mode": payload.get("photo_mode") or "ai",
             **({"extra": "Шаблон №" + payload["studio_template"][1:]}
                if is_pilot_user(m.from_user.id) and re.fullmatch(r"d(?:0?[1-9]|[1-4][0-9]|50)", str(payload.get("studio_template", ""))) else {}),
@@ -9568,7 +9571,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
             word_kind=kind,
             word_size="short" if pages <= 3 else "long",
             word_pages=pages,
-            topic=content, user_text="", extra=extra, car_sale=None, fixed_word=None, content_lang=lang, extra_used=0, academic_cover_allow_blanks=None,
+            topic=content, user_text="", extra=extra, car_sale=None, fixed_word=None, content_lang=output_lang, extra_used=0, academic_cover_allow_blanks=None,
         )
         warning = thin_long_doc_warning(pages, f"{content} {extra}".strip(), lang)
         if warning:
@@ -9587,7 +9590,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         await state.update_data(
             excel_kind=payload.get("kind") or "calc_table", excel_topic=content,
             extra=_clip_text(payload.get("extra"), 800), excel_mode="user" if payload.get("kind") == "startup_model" else (payload.get("mode") or "ai"),
-            excel_style=excel_style, excel_palette=excel_palette, excel_protect=payload.get('excel_protect') is True,
+            excel_style=excel_style, excel_palette=excel_palette, excel_protect=payload.get('excel_protect') is True, content_lang=output_lang,
         )
         await excel_build(m, state)
         return
@@ -10511,20 +10514,27 @@ async def studio_plan_preview(user, payload):
     if get_user(uid).get('busy') or uid in _miniapp_action_tasks:
         raise _aiohttp_web.HTTPConflict(text='Предыдущая работа ещё выполняется.')
     lang = user_lang(uid)
+    from studio_settings import content_language, PALETTES
+    output_lang = content_language(payload.get('content_lang'), content_language(get_user(uid).get('studio_content_lang'), lang))
     designer = payload.get('kind') == 'designer'
     theme = 'designer_' + payload['style'] if designer else payload['key']
     data = {'topic': payload['topic'], 'pres_topic': payload['topic'],
             'theme_name': theme, 'slides': payload['slides'],
-            'mode': 'ai', 'photo_mode': 'ai', 'content_lang': lang,
+            'mode': 'ai', 'photo_mode': 'ai', 'content_lang': output_lang,
             'user_text': '', 'extra': ('Шаблон №' + payload['key'][1:]) if designer else '', 'extra_used': 0, 'custom_colors': None,
             'user_photos': [], 'pres_photo_captions': {}, 'pres_photo_context': None,
             'photo_album_only': False, 'pres_request_id': str(uuid.uuid4())}
+    if designer and payload.get('palette') in PALETTES:
+        data['studio_palette'] = payload['palette']
     if not can_afford(uid, presentation_cost(data['slides'], data)):
         raise _aiohttp_web.HTTPPaymentRequired(text='Недостаточно кредитов. Пополните баланс в профиле.')
     plan = await _create_presentation_plan(data, lang)
     data.update(pres_plan=plan, pres_plan_key=plan_key(data), sample=format_plan(plan, lang))
     colors = apply_design(THEMES.get(data['theme_name'], THEMES['default']), plan)
     palette = {k: '#%02x%02x%02x' % tuple(colors[k]) for k in ('bg', 'ink')}
+    if data.get('studio_palette'):
+        chosen = PALETTES[data['studio_palette']]
+        palette.update(bg=chosen['bg'], ink=chosen['ink'])
     palette['font'] = colors.get('heading_font', 'Calibri')
     return data, palette
 
@@ -10578,12 +10588,19 @@ async def start_web_server():
         from studio_menu import recent_payments
         u = miniapp_user_record(user)
         return {"name": u.get("name") or "", "credits": u.get("credits", 0),
-                "unlimited": user["id"] in ADMIN_IDS, "lang": user_lang(user["id"]),
+                "unlimited": user["id"] in ADMIN_IDS, "lang": u.get('studio_ui_lang', 'ru'),
+                "ui_lang": u.get('studio_ui_lang', 'ru'),
+                "content_lang": u.get('studio_content_lang', user_lang(user['id'])),
                 "mode": u.get("control_mode", "buttons"),
                 "history": [str(h)[:200] for h in (u.get("history") or [])[-30:]],
                 "payments": await asyncio.to_thread(recent_payments, PAYMENTS_LOG_FILE, user["id"])}
+    async def studio_settings(user, values):
+        u = miniapp_user_record(user)
+        u['studio_ui_lang'] = values['ui_lang']
+        u['studio_content_lang'] = values['content_lang']
+        save_users()
     Studio(miniapp_verified_user, studio_send_file, studio_action, WEB_BASE_URL,
-           profile=studio_profile, menu_action=accept_miniapp_action,
+           profile=studio_profile, settings=studio_settings, menu_action=accept_miniapp_action,
            outline_planner=studio_plan_preview, outline_submit=studio_submit_preview).register(app)
     app.router.add_get("/", _health_handler)
     app.router.add_get("/health", _health_handler)

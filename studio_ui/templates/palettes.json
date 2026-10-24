@@ -1,0 +1,326 @@
+[
+  {
+    "key": "nature",
+    "name": "Природа",
+    "bg": "#233C32",
+    "ink": "#F4F1E7",
+    "mid": "#F4F1E7",
+    "mute": "#DBDBD1",
+    "line": "#D5D6CC"
+  },
+  {
+    "key": "business",
+    "name": "Бизнес",
+    "bg": "#242832",
+    "ink": "#F3F4F7",
+    "mid": "#F3F4F7",
+    "mute": "#DADCDF",
+    "line": "#D4AF5A"
+  },
+  {
+    "key": "tech",
+    "name": "Технологии",
+    "bg": "#102238",
+    "ink": "#EAF2FC",
+    "mid": "#EAF2FC",
+    "mute": "#D0D9E4",
+    "line": "#5AAAE6"
+  },
+  {
+    "key": "school",
+    "name": "Учёба",
+    "bg": "#DBE6F1",
+    "ink": "#24364B",
+    "mid": "#24364B",
+    "mute": "#3A4B5F",
+    "line": "#285AB4"
+  },
+  {
+    "key": "fashion",
+    "name": "Мода",
+    "bg": "#E8D5CE",
+    "ink": "#362B30",
+    "mid": "#362B30",
+    "mute": "#4B3F43",
+    "line": "#121212"
+  },
+  {
+    "key": "history",
+    "name": "История",
+    "bg": "#E4D1AF",
+    "ink": "#443021",
+    "mid": "#443021",
+    "mute": "#574332",
+    "line": "#8C5A28"
+  },
+  {
+    "key": "science",
+    "name": "Наука",
+    "bg": "#D3E5E8",
+    "ink": "#163E49",
+    "mid": "#163E49",
+    "mute": "#2D525C",
+    "line": "#145AA0"
+  },
+  {
+    "key": "sport",
+    "name": "Спорт",
+    "bg": "#29322D",
+    "ink": "#F3F5E9",
+    "mid": "#F3F5E9",
+    "mute": "#DBDED2",
+    "line": "#E64628"
+  },
+  {
+    "key": "travel",
+    "name": "Путешествия",
+    "bg": "#E6CFAD",
+    "ink": "#40382D",
+    "mid": "#40382D",
+    "mute": "#544A3C",
+    "line": "#594F40"
+  },
+  {
+    "key": "food",
+    "name": "Еда",
+    "bg": "#EED4BC",
+    "ink": "#4B2F24",
+    "mid": "#4B2F24",
+    "mute": "#5F4336",
+    "line": "#B45028"
+  },
+  {
+    "key": "art",
+    "name": "Искусство",
+    "bg": "#3E3043",
+    "ink": "#F4EAF0",
+    "mid": "#F4EAF0",
+    "mute": "#DED4DB",
+    "line": "#DCB478"
+  },
+  {
+    "key": "eco",
+    "name": "Экология",
+    "bg": "#D5E3CA",
+    "ink": "#294432",
+    "mid": "#294432",
+    "mute": "#3E5744",
+    "line": "#286E3C"
+  },
+  {
+    "key": "minimal",
+    "name": "Минимализм",
+    "bg": "#E5E3DF",
+    "ink": "#292A2D",
+    "mid": "#292A2D",
+    "mute": "#404042",
+    "line": "#121212"
+  },
+  {
+    "key": "default",
+    "name": "Универсальный",
+    "bg": "#253448",
+    "ink": "#EFF2F6",
+    "mid": "#EFF2F6",
+    "mute": "#D7DBE1",
+    "line": "#D1D6DC"
+  },
+  {
+    "key": "ocean",
+    "name": "Океан",
+    "bg": "#124451",
+    "ink": "#EAF5F4",
+    "mid": "#EAF5F4",
+    "mute": "#D0E0E0",
+    "line": "#CADADC"
+  },
+  {
+    "key": "space",
+    "name": "Космос",
+    "bg": "#211B3C",
+    "ink": "#F1ECFF",
+    "mid": "#F1ECFF",
+    "mute": "#D8D3E8",
+    "line": "#8C5AE6"
+  },
+  {
+    "key": "medicine",
+    "name": "Медицина",
+    "bg": "#D7EAE4",
+    "ink": "#24453F",
+    "mid": "#24453F",
+    "mute": "#395953",
+    "line": "#3F5E58"
+  },
+  {
+    "key": "finance",
+    "name": "Финансы",
+    "bg": "#193D36",
+    "ink": "#F0F1E5",
+    "mid": "#F0F1E5",
+    "mute": "#D6DBD0",
+    "line": "#C8A550"
+  },
+  {
+    "key": "luxury",
+    "name": "Люкс",
+    "bg": "#302820",
+    "ink": "#EFE1C1",
+    "mid": "#EFE1C1",
+    "mute": "#D8CBAE",
+    "line": "#D4AF5A"
+  },
+  {
+    "key": "pastel",
+    "name": "Пастель",
+    "bg": "#E8DDF0",
+    "ink": "#44364F",
+    "mid": "#44364F",
+    "mute": "#584A62",
+    "line": "#5D4F67"
+  },
+  {
+    "key": "neon",
+    "name": "Неон",
+    "bg": "#14282B",
+    "ink": "#B6F4DF",
+    "mid": "#B6F4DF",
+    "mute": "#A3DCC9",
+    "line": "#3CF0C8"
+  },
+  {
+    "key": "monochrome",
+    "name": "Монохром",
+    "bg": "#242424",
+    "ink": "#F2F2F2",
+    "mid": "#F2F2F2",
+    "mute": "#D9D9D9",
+    "line": "#D3D3D3"
+  },
+  {
+    "key": "autumn",
+    "name": "Осень",
+    "bg": "#70402F",
+    "ink": "#FFF0DF",
+    "mid": "#FFF0DF",
+    "mute": "#EEDBCA",
+    "line": "#EAD6C5"
+  },
+  {
+    "key": "winter",
+    "name": "Зима",
+    "bg": "#D7E2EE",
+    "ink": "#2A3E57",
+    "mid": "#2A3E57",
+    "mute": "#3F5269",
+    "line": "#4682BE"
+  },
+  {
+    "key": "spring",
+    "name": "Весна",
+    "bg": "#E0E8C4",
+    "ink": "#354627",
+    "mid": "#354627",
+    "mute": "#4A593A",
+    "line": "#4F5E3F"
+  },
+  {
+    "key": "coffee",
+    "name": "Кофе",
+    "bg": "#49362B",
+    "ink": "#F2E3CE",
+    "mid": "#F2E3CE",
+    "mute": "#DECEBA",
+    "line": "#D9C9B6"
+  },
+  {
+    "key": "wine",
+    "name": "Вино",
+    "bg": "#582B3A",
+    "ink": "#F7E8E9",
+    "mid": "#F7E8E9",
+    "mute": "#E4D1D4",
+    "line": "#DFCCCF"
+  },
+  {
+    "key": "forest_dark",
+    "name": "Тёмный лес",
+    "bg": "#162D25",
+    "ink": "#E7EFE2",
+    "mid": "#E7EFE2",
+    "mute": "#CED8CB",
+    "line": "#3C965A"
+  },
+  {
+    "key": "sunset",
+    "name": "Закат",
+    "bg": "#EEC2A8",
+    "ink": "#593429",
+    "mid": "#593429",
+    "mute": "#6B4538",
+    "line": "#6F493C"
+  },
+  {
+    "key": "arctic",
+    "name": "Арктика",
+    "bg": "#D2E5EA",
+    "ink": "#264653",
+    "mid": "#264653",
+    "mute": "#3B5965",
+    "line": "#405E6A"
+  },
+  {
+    "key": "urban",
+    "name": "Урбан",
+    "bg": "#3C4148",
+    "ink": "#F0F1F3",
+    "mid": "#F0F1F3",
+    "mute": "#DADCDE",
+    "line": "#D5D7D9"
+  },
+  {
+    "key": "vintage",
+    "name": "Винтаж",
+    "bg": "#D9C4A2",
+    "ink": "#493927",
+    "mid": "#493927",
+    "mute": "#5A4A36",
+    "line": "#8C6437"
+  },
+  {
+    "key": "cyberpunk",
+    "name": "Киберпанк",
+    "bg": "#321E42",
+    "ink": "#F8DEFA",
+    "mid": "#F8DEFA",
+    "mute": "#E0C7E4",
+    "line": "#DC28C8"
+  },
+  {
+    "key": "floral",
+    "name": "Цветы",
+    "bg": "#E8CED5",
+    "ink": "#503540",
+    "mid": "#503540",
+    "mute": "#624752",
+    "line": "#674C56"
+  },
+  {
+    "key": "royal",
+    "name": "Королевский",
+    "bg": "#39285C",
+    "ink": "#F4E8CD",
+    "mid": "#F4E8CD",
+    "mute": "#DED1BF",
+    "line": "#BE9B3C"
+  },
+  {
+    "key": "desert",
+    "name": "Пустыня",
+    "bg": "#E1BD88",
+    "ink": "#4A3522",
+    "mid": "#4A3522",
+    "mute": "#5C452E",
+    "line": "#614931"
+  }
+]

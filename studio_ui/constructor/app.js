@@ -19,6 +19,7 @@ function update(inspector=true){
  const overflow=current().elements.filter(hasOverflow);
  $('#warning').textContent=overflow.length?'Текст не помещается в рамку. Увеличьте рамку или уменьшите шрифт.':'';
  $('#delete-slide').disabled=deck.slides.length===1;$('#slide-up').disabled=slideIndex===0;$('#slide-down').disabled=slideIndex===deck.slides.length-1;$('#add-slide').disabled=deck.slides.length>=20;
+ $('#edit-text').hidden=element()?.type!=='text';
  if(inspector)properties();layers();historyButtons();clearTimeout(thumbTimer);thumbTimer=setTimeout(thumbnails,120);
  if($('#preview-dialog').open)renderPreview();
 }
@@ -101,7 +102,10 @@ document.addEventListener('click',ev=>{
  case 'close-inspector':setInspector(false);break;
  case 'add-diagram':$('#diagram-options').innerHTML=Object.entries(D.NAMES).map(([k,v])=>`<button data-diagram="${k}"><svg viewBox="0 0 1060 400">${D.markup(D.create(k))}</svg><strong>${v}</strong></button>`).join('');$('#diagram-dialog').showModal();break;
  case 'close-diagram':$('#diagram-dialog').close();break;
- case 'add-text':add(S.text('Ваш текст',100,100,600,150,42));setInspector(true);break;
+ case 'add-text':editText(true);break;
+ case 'edit-text':editText(false);break;
+ case 'cancel-text':$('#text-dialog').close();break;
+ case 'close-saved':$('#saved-dialog').close();break;
  case 'add-pattern':add(S.pattern(800,310,310,280));setInspector(true);break;
  case 'add-photo':photoMode='add';$('#photo-file').click();break;
  case 'replace-photo':photoMode='replace';$('#photo-file').click();break;
@@ -113,7 +117,7 @@ document.addEventListener('click',ev=>{
  case 'duplicate-slide':if(deck.slides.length<20)mutate(()=>{const s=structuredClone(current());s.id=S.uid();s.elements.forEach(e=>e.id=S.uid());deck.slides.splice(slideIndex+1,0,s);slideIndex++;selected=null;});break;
  case 'delete-slide':if(deck.slides.length>1)mutate(()=>{deck.slides.splice(slideIndex,1);slideIndex=Math.min(slideIndex,deck.slides.length-1);selected=null;});break;
  case 'slide-up':case 'slide-down':{const j=slideIndex+(b.id==='slide-up'?-1:1);if(j>=0&&j<deck.slides.length)mutate(()=>{[deck.slides[j],deck.slides[slideIndex]]=[deck.slides[slideIndex],deck.slides[j]];slideIndex=j;});break;}
- case 'save-project':try{deck.name=$('#deck-name').value.slice(0,80);clearTimeout(saveTimer);localStorage.setItem(storageKey,JSON.stringify(deck));status('Проект сохранён на этом устройстве. Можно закрыть меню и продолжить позже.');}catch{status('Не удалось сохранить. Скачайте копию через меню «Проект».');}break;
+ case 'save-project':try{deck.name=$('#deck-name').value.slice(0,80);clearTimeout(saveTimer);localStorage.setItem(storageKey,JSON.stringify(deck));status('Проект сохранён на этом устройстве. Можно закрыть меню и продолжить позже.');$('#saved-dialog').showModal();}catch{status('Не удалось сохранить. Скачайте копию через меню «Проект».');}break;
  case 'backup-project':download(new Blob([JSON.stringify(deck)],{type:'application/octet-stream'}),'AlixDoc-project.alixdoc');status('Копия проекта скачана. Для редактирования выберите «Открыть копию проекта».');break;
  case 'open-ready':window.AlixMobile.openFiles();break;
  case 'open-project':$('#project-file').click();break;
@@ -123,6 +127,21 @@ document.addEventListener('click',ev=>{
  case 'export':exportDeck();break;
  }
 });
+let textTarget=null;
+function editText(isNew){
+ const e=element();if(!isNew&&e?.type!=='text')return;
+ textTarget=isNew?null:e.id;
+ $('#text-input').value=isNew?'':e.text;$('#text-counter').textContent=$('#text-input').value.length+' / 3000';
+ $('#text-dialog').showModal();$('#text-input').focus();
+}
+$('#text-input').addEventListener('input',()=>$('#text-counter').textContent=$('#text-input').value.length+' / 3000');
+$('#text-form').addEventListener('submit',event=>{
+ event.preventDefault();const value=$('#text-input').value;if(!value.trim()){ $('#text-input').focus();return; }
+ if(textTarget){const target=current().elements.find(e=>e.id===textTarget&&e.type==='text');if(target)mutate(()=>target.text=value);}
+ else{const t=S.text(value,100,180,900,350,32);while(hasOverflow(t)&&t.size>16)t.size-=2;add(t);}
+ $('#text-dialog').close();status('Текст добавлен. Цвет, шрифт и положение можно изменить в настройках.');
+});
+canvas.addEventListener('dblclick',()=>editText(false));
 function insertDiagram(kind,palette='strict'){if(deck.slides.length>=20){status('В примере можно создать до 20 слайдов.');return;}mutate(()=>{const p=D.PALETTES[palette]||D.PALETTES.strict,d=D.create(kind,palette);deck.slides.push({id:S.uid(),background:{type:'solid',color:p.bg,second:p.bg,angle:0},elements:[S.text('Схема: '+D.NAMES[kind],70,60,1060,90,48,p.color,'Georgia'),d]});slideIndex=deck.slides.length-1;selected=d.id;});}
 function renderPreview(){$('#preview-canvas').innerHTML=S.svg(current(),{prefix:'present',measure});$('#preview-name').textContent=`${deck.name} · ${slideIndex+1} / ${deck.slides.length}`;}
 $('#deck-name').value=deck.name;$('#deck-name').addEventListener('input',e=>mutate(()=>deck.name=e.target.value.slice(0,80),false));

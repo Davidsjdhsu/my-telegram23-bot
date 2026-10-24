@@ -72,8 +72,16 @@ def choose_design(data):
     colors = [v for _,v in sorted(colors)]
     accent = colors[-1] if colors else profile['bright' if background=='dark' else 'accent']
     secondary = colors[-2] if len(colors)>1 else profile['secondary']
-    return {'family':family,'background':background,'accent':accent,'secondary':secondary,
+    design = {'family':family,'background':background,'accent':accent,'secondary':secondary,
             'template_id':template['id'],'variant':fingerprint(str(data.get('topic') or data.get('user_text') or ''))}
+    if data.get('studio_palette'):
+        from studio_settings import PALETTES
+        if data['studio_palette'] in PALETTES:
+            chosen = PALETTES[data['studio_palette']]
+            design.update(studio_palette=data['studio_palette'],
+                          background='dark' if relative_luminance(chosen['bg']) < .3 else 'light',
+                          accent=chosen['line'], secondary=chosen['mute'])
+    return design
 
 
 def profile_summary(design, lang='ru'):
@@ -110,4 +118,12 @@ def resolved_profile(design):
     p['accent']=readable_color(design['accent'],p['bg'])
     p['secondary_ink']=readable_color(design['secondary'],p['bg'])
     p['secondary']=design['secondary'];p['muted']=readable_color('#7D827D',p['bg'])
+    if design.get('studio_palette'):
+        from studio_settings import PALETTES
+        chosen = PALETTES.get(design['studio_palette'])
+        if chosen:
+            p.update(bg=chosen['bg'], ink=chosen['ink'], body=chosen['mid'],
+                     muted=chosen['mute'], secondary=chosen['mute'],
+                     secondary_ink=readable_color(chosen['mute'], chosen['bg']),
+                     accent=readable_color(chosen['line'], chosen['bg']))
     return p

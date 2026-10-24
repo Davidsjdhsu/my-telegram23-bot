@@ -43,6 +43,8 @@ def user_frame_note(scene, asset):
 
 
 def has_custom_palette(design):
+    if design.get('studio_palette'):
+        return True
     kit=TEMPLATES[design['template_id']];p=template_palette(kit)
     background='dark' if int(kit['paper'][1:3],16)<80 else 'light'
     return (design['background']!=background or
