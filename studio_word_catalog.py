@@ -2,7 +2,7 @@
 import re
 from academic_templates import KINDS, META_LABELS, render as academic_render
 from fixed_word_templates import CATALOG, render as fixed_render, scope_issue
-from car_sale_template import FIELDS, render as car_render
+from car_sale_template import LABELS as CAR_FIELDS, render as car_render
 
 STUDY = {'referat':'Реферат','coursework':'Курсовая работа','report':'Доклад','essay':'Эссе','notes':'Конспект'}
 # Only slots present in each approved cover are exposed.
@@ -26,7 +26,7 @@ def catalog():
             category='physical' if kind in PHYSICAL else 'entity',cover=False,fixed=True,
             fields=spec['fields'],notice=spec['scope']+' '+spec.get('notice','')))
     out.append(dict(kind='dkp_car',title='Купля-продажа автомобиля',category='physical',cover=False,fixed=True,
-        fields=FIELDS,notice='Договор РФ между физическими лицами. Неизвестные поля остаются незаполненными.'))
+        fields=CAR_FIELDS,notice='Договор РФ между физическими лицами. Неизвестные поля остаются незаполненными.'))
     out.append(dict(kind='doc',title='Обычный документ',category='study',cover=False,fixed=False,
         fields={'org':'Организация','sign':'Подпись / автор'},notice='Первая страница показывает оформление. Основной текст появится после сборки.'))
     out.append(dict(kind='resume',title='Резюме',category='physical',cover=False,fixed=False,
@@ -45,7 +45,7 @@ def normalize(body, *, preview=False):
     if not isinstance(fields,dict) or set(fields)-set(spec['fields']):raise ValueError('Поля не соответствуют типу документа.')
     clean={}
     for k,v in fields.items():
-        limit=200 if spec['cover'] else 1500
+        limit=200 if spec['cover'] else (1200 if kind=='dkp_car' else 1500)
         if not isinstance(v,str) or len(v)>limit or re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f]',v):raise ValueError('Слишком длинное или некорректное поле.')
         if spec['fixed'] and ('[' in v or ']' in v):raise ValueError('Уберите квадратные скобки из заполненных полей.')
         clean[k]=v.strip()

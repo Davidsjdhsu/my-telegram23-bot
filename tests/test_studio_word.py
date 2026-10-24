@@ -14,6 +14,19 @@ from test_office import office_env
 from studio_word_runtime import attach
 
 class CatalogTests(unittest.TestCase):
+ def test_all_blank_form_slots_render_and_car_signatures_derive_from_names(self):
+  from docx import Document
+  with tempfile.TemporaryDirectory() as d:
+   for kind,spec in SPECS.items():
+    payload=normalize(dict(kind=kind,topic='Тема',fields={k:'' for k in spec['fields']},pages=6))
+    render_preview(Path(d)/(kind+'.docx'),payload,office_env()['build_word'])
+   self.assertNotIn('seller_sign',SPECS['dkp_car']['fields'])
+   p=normalize(dict(kind='dkp_car',fields={'seller_name':'Тестов Иван Сергеевич'}))
+   path=Path(d)/'filled.docx';render_preview(path,p)
+   doc=Document(path)
+   text='\n'.join(x.text for x in doc.paragraphs)+'\n'+'\n'.join(c.text for t in doc.tables for r in t.rows for c in r.cells)
+   self.assertGreaterEqual(text.count('Тестов Иван Сергеевич'),2)
+   with self.assertRaises(ValueError):normalize(dict(kind='dkp_car',fields={'extra':'а'*1201}))
  def test_slots_prices_and_scope(self):
   self.assertEqual(len(catalog()),36)
   self.assertIn('record_book',SPECS['notes']['fields']);self.assertNotIn('record_book',SPECS['essay']['fields'])
