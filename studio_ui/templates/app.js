@@ -58,7 +58,7 @@ function save(){
  lastSaved=snapshot;sent.add(snapshot);if(sent.size>32)sent.delete(sent.values().next().value);
  try{localStorage.setItem('alix-hd-preview',snapshot);}catch{}
  const r=selected();
- window.openai?.setWidgetState?.({modelContent:{preview:'Реальные шаблоны AlixDoc',template:r.name,template_id:r.id,slide_count:state.slides,price:state.slides*(state.kind==='standard'?5:10),confirmed:state.confirmed},privateContent:JSON.parse(snapshot)})?.catch(()=>{});
+ window.openai?.setWidgetState?.({modelContent:{preview:'Реальные шаблоны AlixDoc',template:r.name,template_id:r.id,slide_count:state.slides,price:state.slides*(state.kind==='standard'?16:32),confirmed:state.confirmed},privateContent:JSON.parse(snapshot)})?.catch(()=>{});
 }
 function render(scrollToChoice=false){
  const list=entries(),r=selected(),idx=list.indexOf(r);
@@ -89,7 +89,7 @@ function render(scrollToChoice=false){
  if(scrollToChoice){const rail=$('.rc-rail'),b=$$('.rc-thumb')[idx];rail.scrollLeft=Math.max(0,b.offsetLeft-rail.offsetLeft-(rail.clientWidth-b.clientWidth)/2);}
  if(rebuilt)observeThumbnails();
  $('#rc-pattern').textContent=state.kind==='standard'?'Единый фон на всех слайдах · без узоров':'Узор этого оформления · '+(state.style==='strict'?'строгий':'мягкий');
- $('#rc-slides').value=String(state.slides);$('#rc-price').textContent=state.slides*(state.kind==='standard'?5:10)+' кредитов';
+ $('#rc-slides').value=String(state.slides);$('#rc-price').textContent=state.slides*(state.kind==='standard'?16:32)+' кредитов';
  $('#rc-confirm').textContent='Посмотреть план';
  $('#rc-plan-hint').textContent='Заголовки и примерное расположение текста — в меню. Полный текст и картинки создадим после подтверждения.';
  $('#rc-status').textContent=state.confirmed?'Выбрано: '+r.name+'. Это просмотр — создание файла не запускается.':'';

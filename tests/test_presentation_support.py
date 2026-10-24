@@ -297,7 +297,7 @@ class BuildTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(pptx.slides),count)
                 for slide in pptx.slides:
                     self.assertEqual(tuple(slide.background.fill.fore_color.rgb),(250,252,250))
-                env['spend_credits'].assert_called_once_with(-987654321,'presentation',amount=count*5)
+                env['spend_credits'].assert_called_once_with(-987654321,'presentation',amount=count*16)
                 env['finish_job'].assert_called_once()
                 env['_create_presentation_plan'].assert_not_awaited()
                 self.assertEqual(state.data,{})

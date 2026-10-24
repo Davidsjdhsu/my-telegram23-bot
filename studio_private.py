@@ -1,4 +1,4 @@
-"""Allowlisted Mini App pilot. No credit mutations and no public feature switch."""
+"""Allowlisted Mini App pilot. Paid constructor; no public feature switch."""
 import asyncio
 import hashlib
 import json
@@ -40,10 +40,11 @@ PUBLIC_SHELL.update('templates/' + name for name in re.findall(
 
 
 class Studio:
-    def __init__(self, verify, send_file, action, origin, profile=None, menu_action=None, outline_planner=None, outline_submit=None, settings=None):
+    def __init__(self, verify, send_file, action, origin, profile=None, menu_action=None, outline_planner=None, outline_submit=None, settings=None, billing=None):
         self.verify, self.send_file, self.action = verify, send_file, action
         self.profile_callback, self.menu_action = profile, menu_action
         self.settings_callback = settings
+        self.billing = billing
         self.forms_cache = None
         self.outline = None
         if outline_planner and outline_submit:
@@ -200,22 +201,29 @@ class Studio:
         try:
             async with asyncio.timeout(90):
                 body = await self.body(request, 16_000_000)
-                fingerprint = (uid, hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest())
-                if self.receipts.get(fingerprint, 0) > time.monotonic()-600:
-                    return web.json_response({'ok':True,'duplicate':True})
+                from constructor_pricing import quote, VERSION
+                price = quote(body)
+                if body.get('pricingVersion') != VERSION or type(body.get('confirmedCost')) is not int or body['confirmedCost'] != price['cost']:
+                    return web.json_response({'ok':False,'error':'Цена изменилась. Обновите меню и подтвердите новую стоимость.', **price},status=409)
+                if not self.billing:
+                    raise web.HTTPServiceUnavailable(text='Оплата конструктора временно недоступна.')
                 from studio_export import build_pptx
                 data = await asyncio.to_thread(build_pptx, body)
-                # Only the authenticated tester receives files. No client chat_id.
-                await self.send_file(uid, data)
-                self.receipts = {k:v for k,v in self.receipts.items() if v>time.monotonic()-600}
-                self.receipts[fingerprint] = time.monotonic()
-                return web.json_response({'ok':True})
+                def canonical(value):
+                    if isinstance(value, dict):
+                        return {k: canonical(v) for k,v in value.items() if k not in ('id','name','confirmedCost','pricingVersion')}
+                    if isinstance(value, list):
+                        return [canonical(v) for v in value]
+                    return value
+                fingerprint = hashlib.sha256(json.dumps(canonical(body), sort_keys=True).encode()).hexdigest()
+                result = await self.billing.deliver(uid, fingerprint, price['cost'], data, self.send_file)
+                return web.json_response(result)
         except (ValueError, TypeError, KeyError):
             return web.json_response({'ok':False,'error':'Проверьте проект: неверный элемент или слишком большой файл.'},status=400)
         except TimeoutError:
             return web.json_response({'ok':False,'error':'Истекло время ожидания. Проверьте чат перед повторной отправкой.'},status=504)
-        except web.HTTPException:
-            raise
+        except web.HTTPException as exc:
+            return web.json_response({"ok":False,"error":exc.text}, status=exc.status)
         except Exception as exc:
             print('studio_export_error', type(exc).__name__, flush=True)
             return web.json_response({'ok':False,'error':'Не удалось отправить файл. Проверьте чат и попробуйте снова.'},status=503)

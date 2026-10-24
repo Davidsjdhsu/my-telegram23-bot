@@ -5,6 +5,8 @@ from aiohttp import web,CookieJar
 from aiohttp.test_utils import TestClient,TestServer
 from studio_private import Studio,PILOT_UID,PILOT_UIDS,COOKIE,menu_url
 from studio_export import build_pptx
+from constructor_billing import ConstructorBilling
+from constructor_pricing import VERSION
 from pptx import Presentation
 from test_presentation_support import load_functions
 ORIGIN='https://example.test'
@@ -13,7 +15,9 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
  async def asyncSetUp(self):
   self.send=AsyncMock();self.action=AsyncMock(side_effect=lambda *a: web.json_response({'ok':True},status=202))
   verify=load_functions(['verify_telegram_init_data','miniapp_verified_user'],{'BOT_TOKEN':'test-token','INIT_DATA_MAX_AGE_SECONDS':604800,'parse_qsl':parse_qsl,'hmac':hmac,'hashlib':hashlib,'json':json,'time':time})['miniapp_verified_user']
-  self.studio=Studio(verify,self.send,self.action,ORIGIN)
+  self.users={uid:{"credits":1000} for uid in PILOT_UIDS}
+  billing=ConstructorBilling(lambda uid:self.users[uid],AsyncMock(return_value=True),lambda uid:(True,""),lambda uid:None,set())
+  self.studio=Studio(verify,self.send,self.action,ORIGIN,billing=billing)
   app=web.Application();self.studio.register(app)
   self.client=TestClient(TestServer(app),cookie_jar=CookieJar(unsafe=True));await self.client.start_server()
  async def asyncTearDown(self):
@@ -78,11 +82,12 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
    user,payload,rid=self.action.call_args.args;self.assertEqual(user['id'],PILOT_UID);self.assertEqual(payload['style'],expected)
    if kind=='designer':self.assertEqual(payload['studio_template'],'d16')
   r=await self.client.post('/studio/generate',headers=HEADERS,json={'kind':'designer','style':'soft','key':'d999','slides':6,'topic':'Киты'});self.assertEqual(r.status,400)
- def deck(self):return {'version':1,'chat_id':123,'slides':[{'background':{'type':'solid','color':'#14293b'},'elements':[{'type':'text','text':'Проверка','x':40,'y':50,'w':900,'h':90,'size':40,'font':'Arial','color':'#e8dfcf'}]}]}
+ def deck(self):return {'version':1,'confirmedCost':16,'pricingVersion':VERSION,'chat_id':123,'slides':[{'background':{'type':'solid','color':'#14293b'},'elements':[{'type':'text','text':'Проверка','x':40,'y':50,'w':900,'h':90,'size':40,'font':'Arial','color':'#e8dfcf'}]}]}
  async def test_export_delivery_deduplication_and_fixed_recipient(self):
   await self.login()
   for _ in range(2):
    r=await self.client.post('/studio/export',headers=HEADERS,json=self.deck());self.assertEqual(r.status,200,await r.text())
+  self.assertEqual(self.users[PILOT_UID]['credits'],984)
   self.send.assert_awaited_once();uid,data=self.send.call_args.args;self.assertEqual(uid,PILOT_UID)
   p=Presentation(io.BytesIO(data));self.assertEqual(p.slides[0].shapes[0].text,'Проверка')
  async def test_both_testers_receive_own_identical_export_and_own_profile(self):
@@ -107,8 +112,21 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
   self.assertEqual((await self.client.post('/studio/export',headers=HEADERS,json={})).status,409)
   self.studio.busy=False;self.send.side_effect=RuntimeError('delivery')
   self.assertEqual((await self.client.post('/studio/export',headers=HEADERS,json=self.deck())).status,503)
-  self.assertFalse(self.studio.receipts);self.assertFalse(self.studio.busy);self.send.side_effect=None
-  self.assertEqual((await self.client.post('/studio/export',headers=HEADERS,json=self.deck())).status,200)
+  self.assertFalse(self.studio.busy);self.send.side_effect=None
+  self.assertEqual(self.users[PILOT_UID]['credits'],1000)
+  self.assertEqual((await self.client.post('/studio/export',headers=HEADERS,json=self.deck())).status,409)
+ async def test_export_requires_exact_confirmed_price_and_version(self):
+  await self.login()
+  for changes in [{'confirmedCost':0},{'confirmedCost':15},{'confirmedCost':True},{'pricingVersion':'old'}]:
+   r=await self.client.post('/studio/export',headers=HEADERS,json=self.deck()|changes)
+   self.assertEqual(r.status,409)
+  self.send.assert_not_awaited();self.assertEqual(self.users[PILOT_UID]['credits'],1000)
+ async def test_export_over_limit_and_insufficient_balance(self):
+  await self.login();d=self.deck();d['slides'][0]['elements']*=7
+  self.assertEqual((await self.client.post('/studio/export',headers=HEADERS,json=d)).status,400)
+  self.users[PILOT_UID]['credits']=15
+  self.assertEqual((await self.client.post('/studio/export',headers=HEADERS,json=self.deck())).status,402)
+  self.send.assert_not_awaited()
  def test_menu_target_only_owner(self):
   for uid in [None,123,str(PILOT_UID)]:self.assertEqual(menu_url(ORIGIN,uid,'old'),'old')
   for uid in PILOT_UIDS:self.assertEqual(menu_url(ORIGIN,uid,'old'),ORIGIN+'/studio/')
@@ -134,7 +152,7 @@ class StudioTemplateIntegration(unittest.IsolatedAsyncioTestCase):
      await fn(SimpleNamespace(from_user=SimpleNamespace(id=uid)),object(),{'topic':'Кофейня','style':style,'slides':6,'studio_template':key},'gen_presentation')
      settings=start.call_args.kwargs['settings']
      self.assertEqual(choose_design({'topic':'Кофейня',**settings})['template_id'],key)
-     self.assertEqual(balance.call_args.args,(uid,60))
+     self.assertEqual(balance.call_args.args,(uid,192))
   await fn(SimpleNamespace(from_user=SimpleNamespace(id=123)),object(),{'topic':'Кофейня','style':'designer_soft','slides':6,'studio_template':'d01'},'gen_presentation')
   self.assertNotIn('extra',start.call_args.kwargs['settings'])
 

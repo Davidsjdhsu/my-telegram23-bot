@@ -32,7 +32,7 @@ class UniformBackgroundTests(unittest.IsolatedAsyncioTestCase):
         env['ask_grok'].return_value = json.dumps(content)
         await env['_build_presentation'](SimpleNamespace(from_user=SimpleNamespace(id=-987654321)), state)
         self.assertEqual(len(sent), 2)
-        env['spend_credits'].assert_called_once_with(-987654321, 'presentation', amount=20)
+        env['spend_credits'].assert_called_once_with(-987654321, 'presentation', amount=64)
         return Presentation(io.BytesIO(sent[0][1]))
 
     async def test_all_36_themes_keep_color_on_cover_photo_diagram_and_final(self):

@@ -31,7 +31,7 @@ class OutlineTests(unittest.IsolatedAsyncioTestCase):
   r=await self.client.post('/studio/outline',json=PAYLOAD,headers=HEADERS);self.assertEqual(r.status,200);row=await r.json();await self.studio.outline.rows[row['id']]['task'];return row['id']
  async def test_preview_only_titles_and_reuses_same_outline(self):
   token=await self.create();r=await self.client.get('/studio/outline/'+token);body=await r.json()
-  self.assertEqual(body['titles'],[s['title'] for s in PLAN['slides']]);self.assertEqual(body['cost'],20)
+  self.assertEqual(body['titles'],[s['title'] for s in PLAN['slides']]);self.assertEqual(body['cost'],64)
   self.assertNotIn('Internal outline point',json.dumps(body));self.submit.assert_not_awaited();self.send.assert_not_awaited()
   again=await self.client.post('/studio/outline',json=PAYLOAD,headers=HEADERS);self.assertEqual((await again.json())['id'],token);self.planner.assert_awaited_once()
  async def test_confirmation_uses_server_plan_and_cannot_repeat(self):
@@ -87,11 +87,11 @@ class OutlineTests(unittest.IsolatedAsyncioTestCase):
    self.studio.outline.rows.clear()
    payload={**PAYLOAD,'kind':'designer','style':style,'key':'d16','slides':6}
    r=await self.client.post('/studio/outline',json=payload,headers=HEADERS);self.assertEqual(r.status,200)
-   body=await r.json();self.assertEqual(body['cost'],60)
+   body=await r.json();self.assertEqual(body['cost'],192)
    row=self.studio.outline.rows[body['id']];await row['task']
    self.assertEqual(self.planner.call_args.args[1],payload)
    r=await self.client.post('/studio/outline/'+body['id']+'/confirm',json={'cost':0},headers=HEADERS)
-   self.assertEqual((await r.json())['cost'],60)
+   self.assertEqual((await r.json())['cost'],192)
   for change in [{'style':'invalid'},{'key':'coffee'},{'key':'d999'}]:
    r=await self.client.post('/studio/outline',json={**payload,**change},headers=HEADERS);self.assertEqual(r.status,400)
  async def test_tester_plans_and_confirmation_are_isolated(self):
@@ -142,4 +142,4 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
    fn=load_functions(['studio_plan_preview'],env)['studio_plan_preview']
    data,palette=await fn({'id':909828109},{**PAYLOAD,'kind':'designer','style':style,'key':'d16','slides':6})
    self.assertEqual(data['theme_name'],'designer_'+style);self.assertEqual(choose_design(data)['template_id'],'d16')
-   afford.assert_called_once_with(909828109,60);self.assertEqual(data['pres_plan_key'],plan_key(data))
+   afford.assert_called_once_with(909828109,192);self.assertEqual(data['pres_plan_key'],plan_key(data))

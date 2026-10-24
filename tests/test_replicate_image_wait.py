@@ -200,7 +200,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sent), 2)
         self.assertEqual(len(calls), 2)
         self.assertEqual(env['ask_grok'].await_count, 1)
-        env['spend_credits'].assert_called_once_with(message.from_user.id, 'presentation', amount=15)
+        env['spend_credits'].assert_called_once_with(message.from_user.id, 'presentation', amount=48)
         self.assertNotIn('без фото', env['bot'].send_message.await_args.args[1])
 
     async def test_rejected_replacement_keeps_prompt_and_attempt_on_resume(self):

@@ -15,7 +15,10 @@ const diagramMeasure=(t,size)=>measure(t,{size,font:'Arial'});
 function hasOverflow(e){return e.type==='diagram'?D.overflow(e,diagramMeasure):e.type==='text'&&S.wrap(e,measure).length*e.size*1.22>e.h+5;}
 function update(inspector=true){
  canvas.innerHTML=S.inner(current(),{prefix:'main',selected,measure});
- $('#slide-label').textContent=`Слайд ${slideIndex+1} из ${deck.slides.length}`;
+ let bill;try{bill=S.quote(deck);}catch(error){bill={slides:deck.slides.map(()=> '—'),cost:'—'};status(error.message);}
+ $('#slide-label').textContent=`Слайд ${slideIndex+1} из ${deck.slides.length} · ${bill.slides[slideIndex]} кредитов`;
+ $('#total-price').textContent=`Всего: ${bill.cost} кредитов`;
+ $('#export').textContent=`Получить · ${bill.cost} кредитов`;
  const overflow=current().elements.filter(hasOverflow);
  $('#warning').textContent=overflow.length?'Текст не помещается в рамку. Увеличьте рамку или уменьшите шрифт.':'';
  $('#delete-slide').disabled=deck.slides.length===1;$('#slide-up').disabled=slideIndex===0;$('#slide-down').disabled=slideIndex===deck.slides.length-1;$('#add-slide').disabled=deck.slides.length>=20;
@@ -82,7 +85,7 @@ function applyProperty(input){
 }
 $('#properties').addEventListener('input',e=>{if(e.target.dataset.prop||e.target.dataset.hex)applyProperty(e.target);});
 $('#properties').addEventListener('change',e=>{if(e.target.dataset.bg)mutate(()=>current().background[e.target.dataset.bg]=e.target.value);});
-function add(el){mutate(()=>{current().elements.push(el);selected=el.id;});}
+function add(el){try{S.quote({version:1,slides:[{elements:[...current().elements,el]}]});}catch(e){status(e.message);return;}mutate(()=>{current().elements.push(el);selected=el.id;});}
 function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);}
 function undoRedo(from,to){if(!from.length)return;to.push(snapshot());const old=JSON.parse(from.pop());deck=old.deck;slideIndex=old.slideIndex;selected=old.selected;$('#deck-name').value=deck.name;update();save();}
 document.querySelector('.mode-switch').addEventListener('click',()=>{try{localStorage.setItem(storageKey,JSON.stringify(deck));}catch{}});
@@ -185,9 +188,11 @@ async function rasterElement(e){
 }
 async function exportDeck(){
  if(exporting)return;if($('#properties textarea:invalid')){status('Сначала исправьте количество блоков схемы: от 2 до 7.');return;}const bad=deck.slides.findIndex(s=>s.elements.some(hasOverflow));if(bad>=0){slideIndex=bad;selected=current().elements.find(hasOverflow).id;update();status('Сначала поправьте текст, который не помещается в рамку.');return;}
+ let bill;try{bill=S.quote(deck);}catch(e){status(e.message);return;}
+ if(!window.confirm(`Стоимость каждого слайда: ${bill.slides.join(' + ')} кредитов.\nВсего: ${bill.cost} кредитов.\nОснова — 16, фото сверх первого — +5, узор — +2.\nСписание после отправки PPTX. Для администратора действует безлимит.\nСобрать презентацию?`))return;
  exporting=true;$('#export').disabled=true;$('#open-ready').hidden=true;status('Готовлю PPTX с вашими настройками…');
- try{const payload=structuredClone(deck);for(const s of payload.slides)for(const e of s.elements){if(e.type==='text')e.lines=S.wrap(e,measure);else if(e.type==='diagram')e.parts=D.parts(e,diagramMeasure);else e.raster=await rasterElement(e);}
- const response=await fetch('/studio/export',{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Request':'1'},body:JSON.stringify(payload)});if(!response.ok)throw Error((await response.json()).error||'Не удалось собрать PPTX');await response.json();clearTimeout(saveTimer);status('Готово. Презентация отправлена в чат бота.');$('#open-ready').hidden=false;}catch(e){status('Не удалось получить презентацию: '+e.message);}finally{exporting=false;$('#export').disabled=false;}
+ try{const payload=structuredClone(deck);payload.confirmedCost=bill.cost;payload.pricingVersion=bill.version;for(const s of payload.slides)for(const e of s.elements){if(e.type==='text')e.lines=S.wrap(e,measure);else if(e.type==='diagram')e.parts=D.parts(e,diagramMeasure);else e.raster=await rasterElement(e);}
+ const response=await fetch('/studio/export',{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Request':'1'},body:JSON.stringify(payload)});if(!response.ok)throw Error((await response.json()).error||'Не удалось собрать PPTX');const receipt=await response.json();clearTimeout(saveTimer);status(receipt.duplicate?'Этот файл уже отправлен в чат. Повторного списания нет.':`Готово. Презентация в чате. Списано ${receipt.charged} кредитов.`);$('#open-ready').hidden=false;}catch(e){status('Не удалось получить презентацию: '+e.message);}finally{exporting=false;$('#export').disabled=false;}
 }
 window.addEventListener('beforeunload',()=>{try{localStorage.setItem(storageKey,JSON.stringify(deck));}catch{}});
 const params=new URLSearchParams(location.search),incoming=params.get('diagram');if(Object.keys(D.NAMES).includes(incoming)){insertDiagram(incoming,params.get('palette')||'strict');params.delete('diagram');params.delete('palette');history.replaceState(null,'',location.pathname+(params.size?'?'+params:'')+location.hash);}
