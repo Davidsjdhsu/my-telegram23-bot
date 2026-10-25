@@ -3,6 +3,8 @@ import asyncio
 import copy
 import math
 import re
+import tempfile
+import zipfile
 from functools import lru_cache
 from pathlib import Path
 from xml.etree.ElementTree import Element, SubElement, tostring
@@ -17,13 +19,40 @@ ITEMS = [
  {'title':'Путь заказа','content':'Выбор напитка, приготовление и выдача гостю.','designer':{'layout':'auto','blocks':[]},'diagram':{'kind':'sequence','nodes':[{'label':'Выбор','text':'Гость выбирает напиток.'},{'label':'Приготовление','text':'Бариста выполняет заказ.'},{'label':'Выдача','text':'Гость получает напиток.'}]}}
 ]
 
+
+# The deployed menu ships photographs inside studio-assets-*.zip. Scene builders
+# need a real path, unlike the static HTTP handler, which can read ZIP entries.
+_photo_directory = None
+
+@lru_cache(maxsize=1)
+def preview_photo():
+    global _photo_directory
+    direct = BASE/'studio_ui/constructor/coffee.jpg'
+    if direct.is_file():
+        return direct
+    for archive in sorted(BASE.glob('studio-assets-*.zip')):
+        with zipfile.ZipFile(archive) as bundle:
+            try:
+                info = bundle.getinfo('constructor/coffee.jpg')
+            except KeyError:
+                continue
+            if info.file_size > 2_000_000:
+                raise ValueError('Preview photograph exceeds size limit')
+            data = bundle.read(info)
+        if _photo_directory is None:
+            _photo_directory = tempfile.TemporaryDirectory(prefix='alix-palette-preview-')
+        target = Path(_photo_directory.name)/'coffee.jpg'
+        target.write_bytes(data)
+        return target
+    raise FileNotFoundError('Bundled preview photograph is missing')
+
 def scene_for(style, key, palette, page):
     from presentation_profiles import choose_design
     from presentation_designer import build_scene
     design = choose_design({'topic':'Работа кофейни','extra':f'Шаблон №{int(key[1:])}', 'studio_palette':palette})
     item = copy.deepcopy(ITEMS[page])
     item.update(_designer_style='designer_'+style, _designer_design=design)
-    asset = {'path':str(BASE/'studio_ui/constructor/coffee.jpg'),'width':1344,'height':768,'origin':'user'} if page in (0,2) else None
+    asset = {'path':str(preview_photo()),'width':1344,'height':768,'origin':'user'} if page in (0,2) else None
     return build_scene(item, asset, page+1, 4, 'ru', 'designer_'+style)
 
 def el(parent, tag, **attrs):
@@ -61,7 +90,7 @@ def svg_for(scene, prefix):
             p=Path(n['path'])
             if p.parent == BASE/'assets/patterns' and re.fullmatch(r'(strict|soft)-d\d{2}\.jpg',p.name):
                 url='/studio/templates/preview-pattern/'+p.name
-            elif p == BASE/'studio_ui/constructor/coffee.jpg': url='/studio/constructor/coffee.jpg'
+            elif p == preview_photo(): url='/studio/constructor/coffee.jpg'
             else: raise ValueError('Unexpected preview asset')
             clip=el(defs,'clipPath',id=ident);geometry(clip,n)
             group=el(svg,'g',clip_path=f'url(#{ident})')

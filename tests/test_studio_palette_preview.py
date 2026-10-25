@@ -1,13 +1,41 @@
 import time
+import tempfile
+import zipfile
+from pathlib import Path
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from xml.etree import ElementTree as ET
 from aiohttp import web, CookieJar
 from aiohttp.test_utils import TestClient, TestServer
 from studio_private import Studio, COOKIE
-from studio_palette_preview import render_preview, scene_for, svg_for, PALETTES, BASE
+from studio_palette_preview import render_preview, scene_for, svg_for, PALETTES, BASE, preview_photo
 
 class PreviewSceneTests(unittest.TestCase):
+ def test_deployed_archive_only_photograph(self):
+  # No loose studio_ui photograph exists in the actual Git checkout.
+  with tempfile.TemporaryDirectory() as directory:
+   root=Path(directory)
+   with zipfile.ZipFile(BASE/'studio-assets-1.zip') as source:
+    photograph=source.read('constructor/coffee.jpg')
+   with zipfile.ZipFile(root/'studio-assets-1.zip','w') as target:
+    target.writestr('constructor/coffee.jpg',photograph)
+   preview_photo.cache_clear();render_preview.cache_clear()
+   try:
+    with patch('studio_palette_preview.BASE',root):
+     self.assertFalse((root/'studio_ui/constructor/coffee.jpg').exists())
+     self.assertEqual(preview_photo().read_bytes(),photograph)
+     for style in ('strict','soft'):
+      for page in (0,2):
+       scene=scene_for(style,'d42','wine',page)
+       photos=[n for n in scene['nodes'] if n['type']=='image']
+       self.assertTrue(photos)
+       for photo in photos:self.assertTrue(Path(photo['path']).is_file())
+       # Artwork belongs to the module root; isolate the photo URL adapter.
+       scene['nodes']=[n for n in scene['nodes'] if n['type']!='background_image']
+       self.assertIn('/studio/constructor/coffee.jpg',svg_for(scene,'archive'))
+     self.assertEqual(preview_photo.cache_info().misses,1)
+   finally:
+    preview_photo.cache_clear();render_preview.cache_clear()
  def test_all_templates_light_dark_all_pages(self):
   for style in ('strict','soft'):
    for number in range(1,51):
