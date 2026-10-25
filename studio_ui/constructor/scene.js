@@ -61,8 +61,8 @@ function validate(raw){
  const clean=JSON.parse(JSON.stringify(raw));clean.name=String(raw.name||'Моя презентация').slice(0,80);
  for(const s of clean.slides){s.id=uid();const b=s.background;if(!b||!/^#[\da-f]{6}$/i.test(b.color)||!/^#[\da-f]{6}$/i.test(b.second))throw Error('Некорректный цвет фона.');b.type=b.type==='gradient'?'gradient':'solid';b.angle=clamp(b.angle,0,360);
   if(!Array.isArray(s.elements)||s.elements.length>50)throw Error('Слишком много элементов.');
-  for(const e of s.elements){e.id=uid();if(!['text','photo','pattern','diagram'].includes(e.type))throw Error('Неизвестный элемент.');e.w=clamp(e.w,40,W);e.h=clamp(e.h,30,H);e.x=clamp(e.x,0,W-e.w);e.y=clamp(e.y,0,H-e.h);e.rotation=clamp(e.rotation,-180,180);e.opacity=clamp(e.opacity,0,1);
-   if(e.type==='text'){e.text=String(e.text||'').slice(0,3000);e.font=FONTS.includes(e.font)?e.font:'Arial';e.size=clamp(e.size,12,120);e.bold=!!e.bold;e.italic=!!e.italic;e.align=['left','center','right'].includes(e.align)?e.align:'left';}
+  for(const e of s.elements){e.id=uid();if(!['text','photo','pattern','diagram'].includes(e.type))throw Error('Неизвестный элемент.');e.w=clamp(e.w,1,W);e.h=clamp(e.h,1,H);e.x=clamp(e.x,0,W-e.w);e.y=clamp(e.y,0,H-e.h);e.rotation=clamp(e.rotation,-180,180);e.opacity=clamp(e.opacity,0,1);
+   if(e.type==='text'){e.text=String(e.text||'').slice(0,3000);e.font=FONTS.includes(e.font)?e.font:'Arial';e.size=clamp(e.size,1,200);e.bold=!!e.bold;e.italic=!!e.italic;e.align=['left','center','right'].includes(e.align)?e.align:'left';}
    if(e.type==='diagram'){if(!Array.isArray(e.labels)||e.labels.length<2||e.labels.length>7)throw Error('В схеме нужно от 2 до 7 блоков.');e.labels=e.labels.map(x=>String(x).slice(0,160));e.kind=Object.keys(D.NAMES).includes(e.kind)?e.kind:'cards';e.size=clamp(e.size,16,42);e.rotation=0;for(const key of ['fill','accent'])if(!/^#[\da-f]{6}$/i.test(e[key]))throw Error('Некорректный цвет схемы.');}
    if(e.type==='pattern'){e.kind=['rings','lines','dots','frame'].includes(e.kind)?e.kind:'rings';e.weight=clamp(e.weight,1,12);}
    if(e.type!=='photo'&&!/^#[\da-f]{6}$/i.test(e.color))throw Error('Некорректный цвет элемента.');

@@ -2,8 +2,8 @@
 const cache=new Map();
 let controller;
 export function cancel(){controller?.abort();controller=null;}
-export async function load(style,key,palette,page){
- const query=new URLSearchParams({style,key,palette,page});const id=query.toString();
+export async function load(style,key,palette,page,background_mode='solid',diagram_layout='classic'){
+ const query=new URLSearchParams({style,key,palette,page,background_mode,diagram_layout});const id=query.toString();
  cancel();
  if(cache.has(id)){const value=cache.get(id);cache.delete(id);cache.set(id,value);return value;}
  const active=new AbortController();controller=active;

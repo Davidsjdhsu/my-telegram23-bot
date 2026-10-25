@@ -53,6 +53,7 @@ class Studio:
         self.origin = origin.rstrip('/')
         self.sessions = {}
         self.busy = False
+        self.import_busy = False
         self.receipts = {}
         self.archives = [zipfile.ZipFile(p) for p in sorted(BASE.glob('studio-assets-*.zip'))]
 
@@ -192,6 +193,31 @@ class Studio:
         # Existing action endpoint owns concurrency and request-id deduplication.
         return await self.action(s['user'], payload, body.get('requestId'))
 
+    async def import_presentation(self, request):
+        self.authorized(request)
+        self.check_write(request)
+        if self.import_busy:
+            return web.json_response({'ok':False,'error':'Другой файл ещё открывается. Повторите через несколько секунд.'},status=409)
+        self.import_busy = True
+        try:
+            from studio_import import MAX_UPLOAD, import_pptx
+            raw = bytearray()
+            async for chunk in request.content.iter_chunked(65536):
+                raw.extend(chunk)
+                if len(raw) > MAX_UPLOAD:
+                    raise ValueError('Выберите PPTX до 10 МБ.')
+            from urllib.parse import unquote
+            name = unquote(request.headers.get('X-Presentation-Name', 'Презентация.pptx'))[:180]
+            result = await asyncio.to_thread(import_pptx, bytes(raw), name)
+            return web.json_response(result, headers={'Cache-Control':'no-store'})
+        except ValueError as error:
+            return web.json_response({'ok':False,'error':str(error)}, status=400)
+        except Exception as error:
+            print('studio_import_error', type(error).__name__, flush=True)
+            return web.json_response({'ok':False,'error':'Не удалось открыть этот PPTX. Исходный файл и текущий проект не изменены.'},status=400)
+        finally:
+            self.import_busy = False
+
     async def export(self, request):
         uid = self.authorized(request)['user']['id']
         self.check_write(request)
@@ -239,6 +265,7 @@ class Studio:
         app.router.add_post('/studio/session', self.session)
         app.router.add_post('/studio/generate', self.generate)
         app.router.add_post('/studio/export', self.export)
+        app.router.add_post('/studio/import-pptx', self.import_presentation)
         app.router.add_get('/studio/profile', self.profile)
         app.router.add_post('/studio/settings', self.settings)
         app.router.add_post('/studio/action', self.menu_request)

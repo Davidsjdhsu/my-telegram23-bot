@@ -64,6 +64,8 @@ def plan_key(data):
                                       'content_lang', 'theme_name', 'custom_colors')}
     if data.get('studio_palette'):
         fields['studio_palette'] = data['studio_palette']
+    if data.get('studio_design_options'):
+        fields['studio_design_options'] = data['studio_design_options']
     if data.get('theme_name') in ('designer_soft','designer_strict'):
         fields['catalog_version']=CATALOG_VERSION
     return hashlib.sha256(json.dumps(fields, ensure_ascii=False, sort_keys=True).encode()).hexdigest()

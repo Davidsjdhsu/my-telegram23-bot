@@ -5,10 +5,12 @@ if(!response.ok)throw new Error('Catalog unavailable');
 const data=await response.json();
 const $=s=>root.querySelector(s), $$=s=>Array.from(root.querySelectorAll(s));
 const palettes=await (await fetch('palettes.json')).json();
-const initial={version:3,palette:'',kind:'standard',style:'strict',ordinary:'coffee',designer:'d16',page:0,slides:6,confirmed:false};
+const initial={version:3,palette:'',background_mode:'solid',diagram_layout:'classic',kind:'standard',style:'strict',ordinary:'coffee',designer:'d16',page:0,slides:6,confirmed:false};
 function normalize(s){
  s=s&&s.version===3?s:{};
  const n={...initial,...s};
+ n.background_mode=n.background_mode==='gradient'?'gradient':'solid';
+ n.diagram_layout=['classic','cards','steps'].includes(n.diagram_layout)?n.diagram_layout:'classic';
  n.palette=palettes.some(p=>p.key===n.palette)?n.palette:'';
  n.kind=n.kind==='designer'?'designer':'standard';n.style=n.style==='soft'?'soft':'strict';
  if(!data.some(r=>r.group==='standard'&&r.key===n.ordinary))n.ordinary='coffee';
@@ -30,7 +32,7 @@ function paletteAPI(){return paletteImport??=import('./palette-preview.js').then
 function liveMode(on){$('#rc-slide').hidden=on;$('#rc-zoom-image').hidden=on;$('#rc-live-slide').hidden=!on;$('#rc-live-zoom').hidden=!on;}
 function paint(url){$('#rc-slide').src=url;$('#rc-zoom-image').src=url;}
 function showSlide(r){
- if(state.kind==='designer'&&state.palette){showPalette(r);return;}
+ if(state.kind==='designer'&&(state.palette||state.background_mode==='gradient'||state.diagram_layout!=='classic')){showPalette(r);return;}
  const url=r.images[state.page];if(shownURL===url)return;
  paletteModule?.cancel();liveMode(false);
  shownURL=url;const ticket=++requestID;clearTimeout(idleTimer);
@@ -49,15 +51,15 @@ function showSlide(r){
  });
 }
 async function showPalette(r){
- const {style,palette,page}=state,key=r.key;
- const id=[style,key,palette,page].join(':');if(shownURL===id)return;
+ const {style,palette,page,background_mode,diagram_layout}=state,key=r.key;
+ const id=[style,key,palette,page,background_mode,diagram_layout].join(':');if(shownURL===id)return;
  shownURL=id;const ticket=++requestID;clearTimeout(idleTimer);paletteModule?.cancel();
  // Never display the old palette as though it were the newly selected one.
- liveMode(true);for(const host of [$('#rc-live-slide'),$('#rc-live-zoom')]){host.replaceChildren();host.style.background=palettes.find(p=>p.key===palette).bg;host.setAttribute('aria-busy','true');}
+ liveMode(true);for(const host of [$('#rc-live-slide'),$('#rc-live-zoom')]){host.replaceChildren();host.style.background=(palettes.find(p=>p.key===palette)?.bg||'#1a1b20');host.setAttribute('aria-busy','true');}
  $('#rc-quality').hidden=false;$('#rc-quality').textContent='Обновляю пример…';
  try{
   const api=await paletteAPI();if(ticket!==requestID)return;
-  const svg=await api.load(style,key,palette,page);if(ticket!==requestID)return;
+  const svg=await api.load(style,key,palette,page,background_mode,diagram_layout);if(ticket!==requestID)return;
   api.paint(svg,[$('#rc-live-slide'),$('#rc-live-zoom')]);
   for(const host of [$('#rc-live-slide'),$('#rc-live-zoom')])host.setAttribute('aria-busy','false');
   $('#rc-quality').hidden=true;
@@ -91,6 +93,7 @@ function render(scrollToChoice=false){
  $('.rc-style').hidden=state.kind==='standard';
  $('#rc-palette-field').hidden=state.kind==='standard';
  $('#rc-palette').value=state.palette;
+ $('#rc-background-mode').value=state.background_mode;$('#rc-diagram-layout').value=state.diagram_layout;
  const chosen=palettes.find(p=>p.key===state.palette),sample=$('#rc-palette-sample');sample.hidden=!chosen;if(chosen){sample.style.background=chosen.bg;sample.style.color=chosen.ink;sample.style.border='1px solid '+chosen.line;sample.textContent=chosen.name+' · Aa Бб 123';}
  $('#rc-diagrams').hidden=state.kind==='standard';
  $$('.rc-style button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.style===state.style)));
@@ -131,12 +134,14 @@ root.addEventListener('click',async e=>{
  else if(b.id==='rc-confirm'){
  const topic=$('#rc-topic').value.trim();if(!topic){$('#rc-status').textContent='Напишите тему презентации.';return;}
  if(b.disabled)return;
- b.disabled=true;try{outlineModule??=await import('./outline.js');await outlineModule.open({topic,kind:state.kind,style:state.style,key:selected().key,slides:state.slides,content_lang:window.AlixPreferences.content(),...(state.kind==='designer'&&state.palette?{palette:state.palette}:{})},b);}catch(e){$('#rc-status').textContent='Не удалось открыть план. Повторите попытку.';}finally{b.disabled=false;}
+ b.disabled=true;try{outlineModule??=await import('./outline.js');await outlineModule.open({topic,kind:state.kind,style:state.style,key:selected().key,slides:state.slides,content_lang:window.AlixPreferences.content(),...(state.kind==='designer'?{background_mode:state.background_mode,diagram_layout:state.diagram_layout,...(state.palette?{palette:state.palette}:{})}:{})},b);}catch(e){$('#rc-status').textContent='Не удалось открыть план. Повторите попытку.';}finally{b.disabled=false;}
  }
  else if(b.id==='rc-zoom-open')$('#rc-zoom').showModal();
  else if(b.id==='rc-zoom-close')$('#rc-zoom').close();
 });
 for(const p of palettes){const o=document.createElement('option');o.value=p.key;o.textContent=p.name;$('#rc-palette').append(o)}
+$('#rc-background-mode').addEventListener('change',e=>change(()=>{state.background_mode=e.target.value;state.confirmed=false}));
+$('#rc-diagram-layout').addEventListener('change',e=>change(()=>{state.diagram_layout=e.target.value;state.page=3;state.confirmed=false}));
 $('#rc-palette').addEventListener('change',e=>change(()=>{state.palette=e.target.value;state.confirmed=false}));
 $('#rc-templates').addEventListener('change',e=>choose(e.target.value));
 $('#rc-slides').addEventListener('change',e=>change(()=>{state.slides=+e.target.value;state.confirmed=false;}));

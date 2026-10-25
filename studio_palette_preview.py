@@ -46,10 +46,10 @@ def preview_photo():
         return target
     raise FileNotFoundError('Bundled preview photograph is missing')
 
-def scene_for(style, key, palette, page):
+def scene_for(style, key, palette, page, background_mode='solid', diagram_layout='classic'):
     from presentation_profiles import choose_design
     from presentation_designer import build_scene
-    design = choose_design({'topic':'Работа кофейни','extra':f'Шаблон №{int(key[1:])}', 'studio_palette':palette})
+    design = choose_design({'topic':'Работа кофейни','extra':f'Шаблон №{int(key[1:])}', 'studio_palette':palette, 'studio_design_options':dict(background_mode=background_mode, diagram_layout=diagram_layout)})
     item = copy.deepcopy(ITEMS[page])
     item.update(_designer_style='designer_'+style, _designer_design=design)
     asset = {'path':str(preview_photo()),'width':1344,'height':768,'origin':'user'} if page in (0,2) else None
@@ -113,8 +113,8 @@ def svg_for(scene, prefix):
     return tostring(svg,encoding='unicode')
 
 @lru_cache(maxsize=128)
-def render_preview(style,key,palette,page):
-    return svg_for(scene_for(style,key,palette,page),f'p-{style}-{key}-{palette}-{page}')
+def render_preview(style,key,palette,page,background_mode='solid',diagram_layout='classic'):
+    return svg_for(scene_for(style,key,palette,page,background_mode,diagram_layout),f'p-{style}-{key}-{palette}-{page}')
 
 def register(studio,app):
     lock=asyncio.Lock()
@@ -122,10 +122,15 @@ def register(studio,app):
         studio.authorized(request)
         q=request.query
         style,key,palette,page=q.get('style'),q.get('key'),q.get('palette'),q.get('page')
-        if style not in ('strict','soft') or not isinstance(key,str) or not re.fullmatch(r'd(?:0[1-9]|[1-4][0-9]|50)',key) or palette not in PALETTES or page not in ('0','1','2','3'):
+        if style not in ('strict','soft') or not isinstance(key,str) or not re.fullmatch(r'd(?:0[1-9]|[1-4][0-9]|50)',key) or (palette != '' and palette not in PALETTES) or page not in ('0','1','2','3'):
             raise web.HTTPBadRequest(text='Неизвестный вариант оформления')
+        from presentation_options import options
+        try:
+            chosen=options(q)
+        except (ValueError, TypeError):
+            raise web.HTTPBadRequest()
         async with lock:
-            svg=await asyncio.to_thread(render_preview,style,key,palette,int(page))
+            svg=await asyncio.to_thread(render_preview,style,key,palette,int(page),**chosen)
         return web.json_response({'svg':svg},headers={'Cache-Control':'private, max-age=3600','X-Content-Type-Options':'nosniff'})
     async def pattern(request):
         studio.authorized(request)

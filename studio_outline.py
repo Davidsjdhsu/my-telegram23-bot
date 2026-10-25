@@ -49,6 +49,14 @@ class OutlinePreview:
             if kind != 'designer' or not isinstance(body['palette'], str) or body['palette'] not in PALETTES:
                 raise web.HTTPBadRequest()
             payload['palette'] = body['palette']
+        if kind == 'designer':
+            from presentation_options import options
+            try:
+                payload.update(options(body))
+            except (TypeError, ValueError):
+                raise web.HTTPBadRequest()
+        elif any(k in body for k in ('background_mode', 'diagram_layout')):
+            raise web.HTTPBadRequest()
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         now = time.monotonic()
         self.rows = {k: r for k, r in self.rows.items() if r['expires'] > now}
@@ -74,6 +82,14 @@ class OutlinePreview:
         try:
             async with asyncio.timeout(75):
                 data, palette = await self.planner(user, payload)
+            if payload['kind'] == 'designer':
+                from presentation_options import options
+                from presentation_support import plan_key
+                chosen = options(payload)
+                data['studio_design_options'] = chosen
+                data['pres_plan']['design'].update(chosen)
+                data['pres_plan_key'] = plan_key(data)
+                palette = {**palette, **chosen}
             row.update(data=copy.deepcopy(data), palette=palette, status='ready')
         except web.HTTPException as error:
             row.update(status='failed', error=error.text)

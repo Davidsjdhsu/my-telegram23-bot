@@ -39,6 +39,7 @@ function paint(row){
   const item=el('li','op-item'),card=el('div','op-slide'+(i===0?' op-cover':''));
   for(const k of ['bg','ink'])if(/^#[0-9a-f]{6}$/i.test(row.palette?.[k]||''))card.style.setProperty('--op-'+k,row.palette[k]);
   if(['Calibri','Georgia','Trebuchet MS'].includes(row.palette?.font))card.style.setProperty('--op-font','"'+row.palette.font+'", '+(row.palette.font==='Georgia'?'serif':'sans-serif'));
+  if(row.palette?.background_mode==='gradient'){const hex=row.palette?.bg||'#14293b',rgb=[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)/255),lum=rgb.map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((s,v,i)=>s+v*[.2126,.7152,.0722][i],0);card.style.backgroundImage=lum<.3?'linear-gradient(135deg, transparent, rgba(0,0,0,.42))':'linear-gradient(135deg, transparent, rgba(255,255,255,.42))';}
   card.append(el('h4','',title));
   const content=el('div','op-composition'),lines=el('div','op-lines');lines.setAttribute('aria-label','Место для основного текста');
   (i===0?[90,65]:[100,92,98,75,96,60]).forEach(w=>lines.append(wave(w)));

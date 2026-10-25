@@ -81,6 +81,8 @@ def choose_design(data):
             design.update(studio_palette=data['studio_palette'],
                           background='dark' if relative_luminance(chosen['bg']) < .3 else 'light',
                           accent=chosen['line'], secondary=chosen['mute'])
+    from presentation_options import options
+    design.update(options(data.get('studio_design_options') or {}))
     return design
 
 

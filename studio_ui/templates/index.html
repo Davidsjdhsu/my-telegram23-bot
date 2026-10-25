@@ -15,7 +15,13 @@
     <button type="button" class="cursor-interaction" data-style="strict">Строгое</button>
     <button type="button" class="cursor-interaction" data-style="soft">Мягкое</button>
    </div>
-   <a id="rc-diagrams" href="/studio/constructor/diagrams.html" hidden>Посмотреть новые варианты схем →</a>
+   <section id="rc-diagrams" hidden>
+<label for="rc-diagram-layout">Оформление схем</label>
+<select id="rc-diagram-layout"><option value="classic">Классическая</option><option value="cards">Карточки</option><option value="steps">Ступени</option></select>
+<small>Выбор применяется к схемам в этой презентации. Циклы и связи сохраняют свой смысл.</small>
+<label for="rc-background-mode">Заливка фона</label>
+<select id="rc-background-mode"><option value="solid">Один цвет</option><option value="gradient">Мягкий градиент</option></select>
+</section>
    <div class="rc-row"><label for="rc-templates">Все оформления</label><small id="rc-count"></small></div>
    <select id="rc-templates" aria-label="Выберите оформление"></select>
    <div class="rc-stage"><img id="rc-slide" alt="" draggable="false"><div id="rc-live-slide" class="rc-live-preview" hidden></div><span id="rc-quality" role="status"></span><button type="button" id="rc-zoom-open" aria-label="Увеличить слайд">Увеличить</button></div>

@@ -250,6 +250,11 @@ GRADIENT = {'angle': 0, 'stops': [(0, '#080B10', 1), (.45, '#14225B', 1),
 
 
 def build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
+    from presentation_options import finish_scene
+    return finish_scene(_build_scene(item, asset, number, total, lang, style), item.get('_designer_design', {}))
+
+
+def _build_scene(item, asset, number, total, lang='ru', style='designer_soft'):
     """Plan the complete slide before mutating a PPTX; never truncate content."""
     if effective_diagram(item):
         return build_diagram_scene(item,number,total,lang,style,asset=asset)

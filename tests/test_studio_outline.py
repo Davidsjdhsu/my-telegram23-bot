@@ -14,7 +14,7 @@ from presentation_pricing import presentation_cost
 
 HEADERS={'Origin':'https://example.test','X-Studio-Request':'1'}
 PAYLOAD={'topic':'Как работает кофе','kind':'standard','key':'coffee','slides':4}
-PLAN={'title':'Кофе','audience':'широкая аудитория','slides':[{'title':x,'number':i+1,'point':'Internal outline point'} for i,x in enumerate(['Кофе','Зачем пьют кофе','Где выращивают','Путь до чашки'])]}
+PLAN={'design':{},'title':'Кофе','audience':'широкая аудитория','slides':[{'title':x,'number':i+1,'point':'Internal outline point'} for i,x in enumerate(['Кофе','Зачем пьют кофе','Где выращивают','Путь до чашки'])]}
 DATA={'slides':4,'topic':'Как работает кофе','theme_name':'coffee','pres_plan':PLAN,'pres_plan_key':'saved-key'}
 
 class OutlineTests(unittest.IsolatedAsyncioTestCase):
@@ -89,7 +89,7 @@ class OutlineTests(unittest.IsolatedAsyncioTestCase):
    r=await self.client.post('/studio/outline',json=payload,headers=HEADERS);self.assertEqual(r.status,200)
    body=await r.json();self.assertEqual(body['cost'],192)
    row=self.studio.outline.rows[body['id']];await row['task']
-   self.assertEqual(self.planner.call_args.args[1],payload)
+   self.assertEqual(self.planner.call_args.args[1],{**payload,'background_mode':'solid','diagram_layout':'classic'})
    r=await self.client.post('/studio/outline/'+body['id']+'/confirm',json={'cost':0},headers=HEADERS)
    self.assertEqual((await r.json())['cost'],192)
   for change in [{'style':'invalid'},{'key':'coffee'},{'key':'d999'}]:
@@ -143,3 +143,20 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
    data,palette=await fn({'id':909828109},{**PAYLOAD,'kind':'designer','style':style,'key':'d16','slides':6})
    self.assertEqual(data['theme_name'],'designer_'+style);self.assertEqual(choose_design(data)['template_id'],'d16')
    afford.assert_called_once_with(909828109,192);self.assertEqual(data['pres_plan_key'],plan_key(data))
+
+class DesignerChoiceDeliveryTests(OutlineTests):
+ async def test_choices_reach_submission_and_final_plan_at_same_price(self):
+  payload={**PAYLOAD,'kind':'designer','style':'soft','key':'d42','background_mode':'gradient','diagram_layout':'cards'}
+  r=await self.client.post('/studio/outline',json=payload,headers=HEADERS)
+  token=(await r.json())['id'];row=self.studio.outline.rows[token];await row['task']
+  self.assertEqual(row['status'],'ready')
+  self.assertEqual(row['data']['pres_plan']['design']['diagram_layout'],'cards')
+  self.assertEqual(row['data']['studio_design_options']['background_mode'],'gradient')
+  self.assertEqual(row['data']['pres_plan_key'],plan_key(row['data']))
+  await self.client.post('/studio/outline/'+token+'/confirm',headers=HEADERS,json={'diagram_layout':'classic','background_mode':'solid'})
+  self.assertEqual(self.submit.call_args.args[1]['studio_design_options']['diagram_layout'],'cards')
+  self.assertEqual(row['cost'],128)
+ async def test_unknown_choices_rejected(self):
+  for field in ('diagram_layout','background_mode'):
+   r=await self.client.post('/studio/outline',json={**PAYLOAD,'kind':'designer','style':'strict','key':'d16',field:'bad'},headers=HEADERS)
+   self.assertEqual(r.status,400)

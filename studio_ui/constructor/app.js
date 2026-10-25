@@ -1,6 +1,7 @@
 (()=>{
 'use strict';const S=window.Scene,D=window.Diagrams,$=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));
 const storageKey=new URLSearchParams(location.search).has('qa')?'alix-constructor-qa-v1':'alix-constructor-v1';
+let pendingImport=null,importing=false;
 let deck=S.initial(),slideIndex=0,selected=null,undo=[],redo=[],drag=null,saveTimer,thumbTimer,exporting=false;
 try{const saved=localStorage.getItem(storageKey);if(saved)deck=S.validate(JSON.parse(saved));}catch{}
 const canvas=$('#canvas'),ctx=document.createElement('canvas').getContext('2d');
@@ -14,6 +15,7 @@ function historyButtons(){$('#undo').disabled=!undo.length;$('#redo').disabled=!
 const diagramMeasure=(t,size)=>measure(t,{size,font:'Arial'});
 function hasOverflow(e){return e.type==='diagram'?D.overflow(e,diagramMeasure):e.type==='text'&&S.wrap(e,measure).length*e.size*1.22>e.h+5;}
 function update(inspector=true){
+ $('#import-report').hidden=!deck.importWarnings?.length;
  canvas.innerHTML=S.inner(current(),{prefix:'main',selected,measure});
  let bill;try{bill=S.quote(deck);}catch(error){bill={slides:deck.slides.map(()=> '—'),cost:'—'};status(error.message);}
  $('#slide-label').textContent=`Слайд ${slideIndex+1} из ${deck.slides.length} · ${bill.slides[slideIndex]} кредитов`;
@@ -123,6 +125,10 @@ document.addEventListener('click',ev=>{
  case 'save-project':try{deck.name=$('#deck-name').value.slice(0,80);clearTimeout(saveTimer);localStorage.setItem(storageKey,JSON.stringify(deck));status('Проект сохранён на этом устройстве. Можно закрыть меню и продолжить позже.');$('#saved-dialog').showModal();}catch{status('Не удалось сохранить. Скачайте копию через меню «Проект».');}break;
  case 'backup-project':download(new Blob([JSON.stringify(deck)],{type:'application/octet-stream'}),'AlixDoc-project.alixdoc');status('Копия проекта скачана. Для редактирования выберите «Открыть копию проекта».');break;
  case 'open-ready':window.AlixMobile.openFiles();break;
+ case 'import-pptx':if(!importing)$('#pptx-file').click();break;
+ case 'import-report':window.alert((deck.importWarnings||[]).join('\n\n'));break;
+ case 'cancel-import':pendingImport=null;$('#import-dialog').close();break;
+ case 'accept-import':if(pendingImport){const next=pendingImport;mutate(()=>{deck=next;slideIndex=0;selected=null;$('#deck-name').value=deck.name;});pendingImport=null;$('#import-dialog').close();status('PPTX открыт как копия. Проверьте все слайды. Текст и фотографии можно менять.');}break;
  case 'open-project':$('#project-file').click();break;
  case 'mobile-preview':case 'preview':renderPreview();$('#preview-dialog').showModal();break;
  case 'close-preview':$('#preview-dialog').close();break;
@@ -179,6 +185,23 @@ let photoMode='add';const readFile=f=>new Promise((resolve,reject)=>{const r=new
 const loadImage=src=>new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=()=>reject(Error('Не удалось открыть изображение'));im.src=src;});
 $('#photo-file').addEventListener('change',async ev=>{const f=ev.target.files[0];ev.target.value='';if(!f)return;if(f.size>15000000){status('Выберите фото до 15 МБ.');return;}try{const im=await loadImage(await readFile(f)),ratio=Math.min(1,1800/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=Math.round(im.width*ratio);c.height=Math.round(im.height*ratio);c.getContext('2d').drawImage(im,0,0,c.width,c.height);const src=c.toDataURL('image/jpeg',.9);
  const target=photoMode==='replace'&&element()?.type==='photo'?element():null;if(target)mutate(()=>Object.assign(target,{src,iw:c.width,ih:c.height,fx:50,fy:50,zoom:1}));else add({...S.photo(630,140,480,390),src,iw:c.width,ih:c.height});}catch(e){status(e.message);}});
+$('#pptx-file').addEventListener('change',async ev=>{
+ const file=ev.target.files[0];ev.target.value='';if(!file||importing)return;
+ if(!/\.pptx$/i.test(file.name)||file.size>10000000){status('Выберите файл .pptx до 10 МБ.');return;}
+ importing=true;$('#import-pptx').disabled=true;status('Открываю PPTX. Текущий проект пока сохранён…');
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),45000);
+ try{
+  const response=await fetch('/studio/import-pptx',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Studio-Request':'1','X-Presentation-Name':encodeURIComponent(file.name)},body:file,signal:controller.signal});
+  if(response.status===401)throw Error('Откройте «Меню» заново в Telegram.');
+  const result=await response.json();if(!response.ok)throw Error(result.error||'Не удалось открыть PPTX.');
+  const next=S.validate(result.deck);S.quote(next);pendingImport=next;
+  $('#import-notice').textContent=result.notice;
+  $('#import-summary').textContent=`Слайдов: ${next.slides.length}. Сборка после редактирования: ${result.price.cost} кредитов, с отдельным подтверждением.`;
+  $('#import-warnings').replaceChildren(...result.warnings.map(text=>{const li=document.createElement('li');li.textContent=text;return li;}));
+  $('#import-dialog').showModal();status('Файл проверен. Подтвердите открытие копии.');
+ }catch(error){status(error.name==='AbortError'?'Не удалось открыть файл за 45 секунд. Проект не изменён.':error.message);}
+ finally{clearTimeout(timeout);importing=false;$('#import-pptx').disabled=false;}
+});
 $('#project-file').addEventListener('change',async ev=>{const f=ev.target.files[0];ev.target.value='';if(!f)return;try{if(f.size>15000000)throw Error('Проект слишком большой.');const next=S.validate(JSON.parse(await f.text()));mutate(()=>{deck=next;slideIndex=0;selected=null;$('#deck-name').value=deck.name;});}catch(e){status(e.message||'Не удалось открыть проект.');}});
 async function rasterElement(e){
  const c=document.createElement('canvas'),scale=2;c.width=Math.round(e.w*scale);c.height=Math.round(e.h*scale);const g=c.getContext('2d');g.scale(scale,scale);g.globalAlpha=e.opacity;
@@ -187,6 +210,7 @@ async function rasterElement(e){
  return c.toDataURL('image/png');
 }
 async function exportDeck(){
+ if(deck.importWarnings?.length&&!window.confirm('При импорте были отличия ('+deck.importWarnings.length+'). Проверьте слайды перед сборкой. Продолжить?'))return;
  if(exporting)return;if($('#properties textarea:invalid')){status('Сначала исправьте количество блоков схемы: от 2 до 7.');return;}const bad=deck.slides.findIndex(s=>s.elements.some(hasOverflow));if(bad>=0){slideIndex=bad;selected=current().elements.find(hasOverflow).id;update();status('Сначала поправьте текст, который не помещается в рамку.');return;}
  let bill;try{bill=S.quote(deck);}catch(e){status(e.message);return;}
  if(!window.confirm(`Стоимость каждого слайда: ${bill.slides.join(' + ')} кредитов.\nВсего: ${bill.cost} кредитов.\nОснова — 16, фото сверх первого — +5, узор — +2.\nСписание после отправки PPTX. Для администратора действует безлимит.\nСобрать презентацию?`))return;

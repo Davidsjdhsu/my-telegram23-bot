@@ -15,3 +15,9 @@ for style in ('strict','soft'):
             assert '/studio/constructor/coffee.jpg' in svg
         assert '/preview-pattern/'+style+'-d42.jpg' in svg
 print('Designer palette runtime: 8 scenes and bundled photograph OK')
+
+for layout in ('classic','cards','steps'):
+    svg=render_preview('soft','d42','wine',3,'gradient',layout)
+    ElementTree.fromstring(svg)
+    assert 'linearGradient' in svg
+print('Designer choices: diagram variants and gradient OK')
