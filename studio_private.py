@@ -231,6 +231,8 @@ class Studio:
             self.busy = False
 
     def register(self, app):
+        from studio_palette_preview import register as register_palette_preview
+        register_palette_preview(self, app)
         if self.outline:
             self.outline.register(app)
         app.router.add_get('/studio/', self.entry)

@@ -67,3 +67,5 @@ body{margin:0;background:#111318;color:#e7e2d9}
 #alix-real-catalog .rc-constructor:focus-visible{outline:2px solid var(--rc-gold);outline-offset:2px}
 
 #alix-real-catalog #rc-diagrams{display:block;margin:12px 0 16px;padding:12px;border:1px solid #c4aa7d66;border-radius:10px;color:var(--rc-gold);text-decoration:none;font-size:12px}
+
+.rc-live-preview{width:100%;aspect-ratio:16/9;overflow:hidden}.rc-live-preview svg{display:block;width:100%;height:100%}#rc-live-zoom{max-height:72dvh}#rc-slide[hidden],#rc-zoom-image[hidden],.rc-live-preview[hidden]{display:none!important}

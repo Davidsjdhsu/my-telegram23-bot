@@ -24,10 +24,15 @@ let groupRendered='',sent=new Set(),lastSaved='',touchStart=null;
 const constrained=navigator.connection?.saveData||/2g/.test(navigator.connection?.effectiveType||'')||navigator.deviceMemory<=2;
 const previews=new window.AlixPreviewLoader({limit:constrained?2:4,concurrency:2});
 const slideNames=['Обложка','Текст','Фото','Схема'];
-let requestID=0,shownURL='',idleTimer=null,thumbObserver=null,outlineModule;
+let requestID=0,shownURL='',idleTimer=null,thumbObserver=null,outlineModule,paletteModule;
+let paletteImport;
+function paletteAPI(){return paletteImport??=import('./palette-preview.js').then(m=>paletteModule=m).catch(e=>{paletteImport=null;throw e;});}
+function liveMode(on){$('#rc-slide').hidden=on;$('#rc-zoom-image').hidden=on;$('#rc-live-slide').hidden=!on;$('#rc-live-zoom').hidden=!on;}
 function paint(url){$('#rc-slide').src=url;$('#rc-zoom-image').src=url;}
 function showSlide(r){
+ if(state.kind==='designer'&&state.palette){showPalette(r);return;}
  const url=r.images[state.page];if(shownURL===url)return;
+ paletteModule?.cancel();liveMode(false);
  shownURL=url;const ticket=++requestID;clearTimeout(idleTimer);
  paint(r.thumbs[state.page]);window.AlixMobile?.enter($('.rc-stage'));$('#rc-quality').textContent='Загружаю чёткий слайд…';
  $('#rc-quality').hidden=false;$('#rc-slide').setAttribute('aria-busy','true');
@@ -42,6 +47,25 @@ function showSlide(r){
   if(ticket!==requestID||error.name==='AbortError')return;
   $('#rc-slide').setAttribute('aria-busy','false');$('#rc-quality').textContent='Превью. Нажмите, чтобы загрузить чётче';shownURL='';
  });
+}
+async function showPalette(r){
+ const {style,palette,page}=state,key=r.key;
+ const id=[style,key,palette,page].join(':');if(shownURL===id)return;
+ shownURL=id;const ticket=++requestID;clearTimeout(idleTimer);paletteModule?.cancel();
+ // Never display the old palette as though it were the newly selected one.
+ liveMode(true);for(const host of [$('#rc-live-slide'),$('#rc-live-zoom')]){host.replaceChildren();host.style.background=palettes.find(p=>p.key===palette).bg;host.setAttribute('aria-busy','true');}
+ $('#rc-quality').hidden=false;$('#rc-quality').textContent='Обновляю пример…';
+ try{
+  const api=await paletteAPI();if(ticket!==requestID)return;
+  const svg=await api.load(style,key,palette,page);if(ticket!==requestID)return;
+  api.paint(svg,[$('#rc-live-slide'),$('#rc-live-zoom')]);
+  for(const host of [$('#rc-live-slide'),$('#rc-live-zoom')])host.setAttribute('aria-busy','false');
+  $('#rc-quality').hidden=true;
+ }catch(error){
+  if(ticket!==requestID||error.name==='AbortError')return;
+  shownURL='';$('#rc-quality').textContent='Не удалось обновить пример. Нажмите, чтобы повторить';
+  for(const host of [$('#rc-live-slide'),$('#rc-live-zoom')])host.setAttribute('aria-busy','false');
+ }
 }
 function observeThumbnails(){
  thumbObserver?.disconnect();
@@ -121,7 +145,7 @@ $('.rc-stage').addEventListener('pointercancel',()=>{touchStart=null;});
 $('.rc-stage').addEventListener('pointerup',e=>{if(!touchStart)return;const dx=e.clientX-touchStart.x,dy=e.clientY-touchStart.y;touchStart=null;if(Math.abs(dx)>35&&Math.abs(dx)>Math.abs(dy))change(()=>{state.page=(state.page+(dx<0?1:3))%4;});});
 $('#rc-quality').addEventListener('click',()=>showSlide(selected()));
 $('#rc-zoom').addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();change(()=>{state.page=(state.page+(e.key==='ArrowRight'?1:3))%4;});}});
-window.addEventListener('pagehide',()=>{clearTimeout(idleTimer);previews.destroy();thumbObserver?.disconnect();});
+window.addEventListener('pagehide',()=>{clearTimeout(idleTimer);paletteModule?.cancel();previews.destroy();thumbObserver?.disconnect();});
 window.addEventListener('pageshow',e=>{if(e.persisted)window.location.reload();});
 window.addEventListener('openai:set_globals',e=>{
  const incoming=e.detail?.globals?.widgetState?.privateContent;
