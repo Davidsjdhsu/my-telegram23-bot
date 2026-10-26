@@ -2920,6 +2920,7 @@ def can_afford(uid, cost):
     held = sum(r.get("cost", 0) for r in u.get("constructor_orders", {}).values() if r.get("status") == "pending")
     held += sum(r.get("charged", 0) for r in u.get("studio_word_payments", {}).values() if r.get("status") == "pending")
     held += sum(r.get("charged", 0) for r in u.get("studio_excel_payments", {}).values() if r.get("status") == "pending")
+    held += sum(r.get("charged", 0) for r in u.get("presentation_payments", {}).values() if r.get("status") == "pending")
     return u.get("credits", 0) - held >= cost
 
 
@@ -5660,7 +5661,56 @@ async def pres_photos_fallback(m: Message, state: FSMContext):
     await m.answer(tr("msg_send_photos", lang), reply_markup=photos_done_kb(lang))
 
 
+_presentation_orders = None
+_file_library = None
+
 async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_images=False):
+    data = await state.get_data()
+    if _presentation_orders is None:
+        return await _build_presentation_impl(m, state, allow_missing_images=allow_missing_images)
+    if needs_photo_context(data):
+        return await ask_photo_context(m, state, user_lang(m.from_user.id))
+    async def build(job):
+        if job.row.get('pptx_ready'):
+            job.stage('Продолжаем подготовку PDF')
+            pptx = job.directory / 'document.pptx'
+            pdf = job.directory / 'document.pdf'
+            await convert_presentation_pdf(str(pptx), str(pdf), job.row['slide_count'])
+            return await job.deliver(pptx, pdf, job.row['cost'], job.row['title'])
+        return await _build_presentation_impl(m, state, allow_missing_images=allow_missing_images, order_job=job)
+    cost = presentation_cost(total_slides(data.get('slides') or 8), data)
+    old = _presentation_orders.get(m.from_user.id, data, cost)
+    if old.row['status'] == 'completed':
+        await state.clear()
+        return {'delivered': True, 'charged': old.row.get('charged', 0)}
+    ok, reason = start_job(m.from_user.id)
+    if not ok:
+        await m.answer(reason)
+        return {'delivered': False}
+    try:
+        result = await _presentation_orders.run(m.from_user.id, data, cost, build)
+        if result and result.get('delivered'):
+            await state.clear()
+        return result
+    finally:
+        finish_job(m.from_user.id)
+
+
+@dp.message(Command("continue_presentation"))
+async def continue_saved_presentation(m: Message, state: FSMContext):
+    row = _presentation_orders.latest(m.from_user.id) if _presentation_orders else None
+    if not row:
+        await m.answer('Нет незавершённой презентации. Можно создать новую через меню.')
+        return
+    if row['status'] == 'delivery_unknown':
+        await m.answer('Нужно уточнить отправку. Проверьте файлы в чате и обратитесь в поддержку. Повторного списания не будет.')
+        return
+    await state.set_data(row['data'])
+    await state.set_state(Form.waiting_confirm)
+    await _build_presentation(m, state)
+
+
+async def _build_presentation_impl(m: Message, state: FSMContext, *, allow_missing_images=False, order_job=None):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
     if needs_photo_context(data):
@@ -5676,7 +5726,7 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
     if not can_afford(uid, order_cost):
         await send_no_credits_notice(m, state, lang)
         return
-    ok, reason = start_job(uid)
+    ok, reason = (True, None) if order_job else start_job(uid)
     if not ok:
         await bot.send_message(uid, reason)
         return
@@ -5700,6 +5750,8 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
             # Upload/legacy sessions have no structured preview yet.
             plan = await _create_presentation_plan(data, lang)
         plan = finalize_plan_design(validate_plan(plan, planned_slides), data, lang)
+        if order_job:
+            data = order_job.input_data(data)
         owned = None
         photo_story = bool(data.get('user_photos') and personal_photo_story(data))
         if data.get('user_photos') and not resumed:
@@ -5852,6 +5904,10 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
                 # Do not fabricate additional documentary moments for a personal album.
                 for visual_item in visual_slides:
                     visual_item['_skip_ai_image'] = True
+        async def save_images(current_assets, current_warnings):
+            await run_heavy(recovery.save, plan, content, visual_slides, current_assets, current_warnings)
+            if order_job:
+                order_job.stage('Изображения: готово ' + str(sum(a is not None for a in current_assets)) + ' из ' + str(len(visual_slides)))
         if allow_missing_images:
             assets, image_warnings = resumed['assets'], resumed['warnings']
             # Explicit consent applies only to this saved order and its listed failures.
@@ -5861,13 +5917,15 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
             assets, image_warnings = await prepare_images(
                 content["title"], visual_slides, list(data.get("user_photos") or []),
                 data.get("pres_photo_captions") or {}, visual_tmp.name,
-                generate_image, ask_presentation_vision, extract_json, owned=owned, resumable=True,
+                generate_image, ask_presentation_vision, extract_json, owned=owned, resumable=True, checkpoint=save_images,
             )
         missing = missing_images(visual_slides, assets)
         if missing:
             recovery_saved = await run_heavy(recovery.save, plan, content, visual_slides, assets, image_warnings)
             print(f"presentation_recovery saved={recovery_saved} missing={len(missing)}", flush=True)
         require_images(visual_slides, assets, image_warnings, designer)
+        if order_job: order_job.stage('Собираем слайды PPTX')
+        await run_heavy(recovery.save, plan, content, visual_slides, assets, image_warnings)
         # Verify geometry before the expensive file delivery / billing stage.
         for index, (item, asset) in enumerate(zip(visual_slides, assets)):
             slide = prs.slides.add_slide(prs.slide_layouts[6])
@@ -5888,8 +5946,23 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
             if asset and not any(shape.shape_type == 13 and shape.name != 'Designer texture' for shape in saved.slides[index].shapes):
                 raise ImageDeliveryError("Image missing from saved presentation")
         pdf_path = os.path.join(visual_tmp.name, "presentation.pdf")
+        if order_job:
+            order_job.save_pptx(pptx_path, content.get('title') or 'Презентация', planned_slides)
+            order_job.stage('Подготавливаем и проверяем PDF')
+        # Do not retain two complete slide trees while LibreOffice converts PDF.
+        del saved, prs
         await convert_presentation_pdf(pptx_path, pdf_path, planned_slides)
 
+        if order_job:
+            result = await order_job.deliver(pptx_path, pdf_path, order_cost, content.get('title') or 'Презентация')
+            if result.get('delivered'):
+                await run_heavy(recovery.clear)
+                await state.clear()
+                try:
+                    await bot.send_message(uid, 'Презентация готова. PPTX и PDF отправлены в чат.', reply_markup=main_kb(lang, uid=uid))
+                except Exception:
+                    pass
+            return result
         pres_fname = safe_filename(content.get("title"), fallback="Презентация")
         chat_id = m.chat.id if getattr(m, "chat", None) else m.from_user.id
         await bot.send_document(chat_id, FSInputFile(pptx_path, filename=f"{pres_fname}.pptx"), caption=tr("msg_pptx_caption", lang))
@@ -5960,7 +6033,7 @@ async def _build_presentation(m: Message, state: FSMContext, *, allow_missing_im
     finally:
         if visual_tmp is not None:
             visual_tmp.cleanup()
-        finish_job(uid)
+        if not order_job: finish_job(uid)
 
 
 def presentation_recovery_kb(lang):
@@ -7077,7 +7150,7 @@ EXCEL_MIN_ROWS_AI = {
 }
 
 
-def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_style='standard', excel_palette='green', excel_protect=False, excel_calculation=None):
+def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_style='standard', excel_palette='green', excel_protect=False, excel_calculation=None, excel_password_hash=None):
     """Собирает смету/бюджет/прайс/расчётную таблицу с реальными формулами Excel.
     rows - список dict по схеме EXCEL_ROW_SCHEMA[kind]. Если хотя бы у одной строки заполнено
     поле category - добавляется колонка "Категория" и блок промежуточных итогов по ней (реальные
@@ -7087,24 +7160,32 @@ def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_styl
         cache = build_estimate(path, title, rows, style=excel_style, palette=excel_palette,
                                subtitle=subtitle, number=_xl_num, protect=excel_protect, calculation=excel_calculation)
         _xl_inject_cached_values(path, cache)
+        from excel_password import protect_file
+        if excel_protect: protect_file(path, excel_password_hash)
         return
     if kind in ('family_budget', 'project_budget'):
         from excel_budgets import build_budget
         cache = build_budget(path, title, kind, rows, style=excel_style, palette=excel_palette,
                              subtitle=subtitle, number=_xl_num, protect=excel_protect)
         _xl_inject_cached_values(path, cache)
+        from excel_password import protect_file
+        if excel_protect: protect_file(path, excel_password_hash)
         return
     if kind == 'price_list':
         from excel_prices import build_price_list
         cache = build_price_list(path, title, rows, style=excel_style, palette=excel_palette,
                                  subtitle=subtitle, number=_xl_num, protect=excel_protect)
         _xl_inject_cached_values(path, cache)
+        from excel_password import protect_file
+        if excel_protect: protect_file(path, excel_password_hash)
         return
     if kind == 'calc_table':
         from excel_study import build_study
         cache = build_study(path, title, rows, style=excel_style, palette=excel_palette,
                             subtitle=subtitle, number=_xl_num, protect=excel_protect)
         _xl_inject_cached_values(path, cache)
+        from excel_password import protect_file
+        if excel_protect: protect_file(path, excel_password_hash)
         return
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -7273,13 +7354,19 @@ def build_excel_items(path, title, kind, colors, rows, subtitle=None, excel_styl
     if cache:
         _xl_inject_cached_values(path, cache)
 
+    from excel_password import protect_file
+    if excel_protect: protect_file(path, excel_password_hash)
 
-def build_excel_startup(path, title, colors, data, excel_style='standard', excel_palette='green', excel_protect=False):
+
+def build_excel_startup(path, title, colors, data, excel_style='standard', excel_palette='green', excel_protect=False, excel_password_hash=None):
     from excel_startup import build_startup
     caches = build_startup(path, title, data, style=excel_style, palette=excel_palette, number=_xl_num, protect=excel_protect)
     for sheet_index, cache in caches.items():
         _xl_inject_cached_values(path, cache, sheet_index=sheet_index,
                                  error_cells=[ref for ref, value in cache.items() if value == "#N/A"])
+
+    from excel_password import protect_file
+    if excel_protect: protect_file(path, excel_password_hash)
 
 
 EXCEL_KIND_DESC = {
@@ -7514,7 +7601,7 @@ async def excel_extra(m: Message, state: FSMContext):
 
 
 @dp.message(Form.waiting_excel_confirm, F.text.in_(ALL_BTN_BUILD_TABLE_LABELS))
-async def excel_build(m: Message, state: FSMContext):
+async def excel_build(m: Message, state: FSMContext, *, studio_job=None):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
     uid = m.from_user.id
@@ -7533,11 +7620,15 @@ async def excel_build(m: Message, state: FSMContext):
     try:
         if kind == "startup_model":
             from excel_startup import STARTUP_PROMPT
-            raw = await ask_grok(STARTUP_PROMPT + f"\nСообщение пользователя: {topic}\nУточнения: {extra}\n" + lang_instr)
-            parsed = extract_json(raw)
+            if studio_job and data.get("excel_parsed"):
+                parsed = data["excel_parsed"]
+            else:
+                raw = await ask_grok(STARTUP_PROMPT + f"\nСообщение пользователя: {topic}\nУточнения: {extra}\n" + lang_instr)
+                parsed = extract_json(raw)
+                if studio_job: await state.update_data(excel_parsed=parsed)
             xlsx_path = f"/tmp/xl_{uid}.xlsx"
             await run_heavy(build_excel_startup, xlsx_path, parsed.get("title") or "Финансовая модель", colors, parsed,
-                            excel_style=data.get('excel_style', 'standard'), excel_palette=data.get('excel_palette', 'green'), excel_protect=data.get('excel_protect') is True)
+                            excel_style=data.get('excel_style', 'standard'), excel_palette=data.get('excel_palette', 'green'), excel_protect=data.get('excel_protect') is True, excel_password_hash=data.get('excel_password_hash'))
             title_for_name = parsed.get("title") or "Финмодель"
 
         else:
@@ -7589,14 +7680,17 @@ async def excel_build(m: Message, state: FSMContext):
                 from excel_study import CALC_INSTRUCTIONS
                 task_line = ('Используй только исходные данные пользователя.' if not ai_mode else
                              'Подготовь небольшой условный учебный пример по теме.') + CALC_INSTRUCTIONS
-            raw = await ask_grok(f"""Собери содержимое для Excel-таблицы: {EXCEL_KIND_DESC.get(kind)}.
-{task_line}
-Тема/данные: {topic}
-Доп: {extra}
-Каждая строка - объект с полями {schema['fields']}, например {schema['example']}.
-Только JSON:
-{{"title":"короткое название таблицы по теме","rows":[{schema['example']}]}}{lang_instr}""")
-            parsed = extract_json(raw)
+            if studio_job and data.get('excel_parsed'):
+                parsed=data['excel_parsed']
+            else:
+                raw = await ask_grok(f"""Собери содержимое для Excel-таблицы: {EXCEL_KIND_DESC.get(kind)}.
+    {task_line}
+    Тема/данные: {topic}
+    Доп: {extra}
+    Каждая строка - объект с полями {schema['fields']}, например {schema['example']}.
+    Только JSON:
+    {{"title":"короткое название таблицы по теме","rows":[{schema['example']}]}}{lang_instr}""")
+                parsed = extract_json(raw)
             rows = parsed.get("rows") or []
             if kind == 'calc_table' and (parsed.get('unsupported') or not rows):
                 from excel_study import StudyValidationError
@@ -7623,6 +7717,7 @@ async def excel_build(m: Message, state: FSMContext):
 
             if not rows:
                 raise ValueError("Модель не вернула строки таблицы")
+            if studio_job: await state.update_data(excel_parsed=parsed)
             xlsx_path = f"/tmp/xl_{uid}.xlsx"
             xl_subtitle = f"Сформировано: {datetime.now().strftime('%d.%m.%Y')}"
             if ai_mode:
@@ -7631,9 +7726,18 @@ async def excel_build(m: Message, state: FSMContext):
                 topic_short = topic if len(topic) <= 60 else topic[:57] + "..."
                 xl_subtitle += f" · Тема: {topic_short}"
             (await run_heavy(build_excel_items, xlsx_path, parsed.get("title") or EXCEL_KIND_DESC.get(kind, "Таблица"), kind, colors, rows, subtitle=xl_subtitle,
-                             excel_style=data.get('excel_style', 'standard'), excel_palette=data.get('excel_palette', 'green'), excel_protect=data.get('excel_protect') is True))
+                             excel_style=data.get('excel_style', 'standard'), excel_palette=data.get('excel_palette', 'green'), excel_protect=data.get('excel_protect') is True, excel_password_hash=data.get('excel_password_hash')))
             title_for_name = parsed.get("title") or EXCEL_KIND_DESC.get(kind)
 
+        if studio_job:
+            import shutil
+            destination=studio_job.directory/'document.xlsx'
+            pending=studio_job.directory/'checked.xlsx'
+            shutil.copyfile(xlsx_path,pending)
+            pending.replace(destination)
+            studio_job.row['title']=title_for_name
+            studio_job.stage('Таблица собрана, отправляем файл')
+            return {'built':True}
         fname = safe_filename(title_for_name, fallback=EXCEL_KIND_DESC.get(kind, "Таблица"))
         await m.answer_document(FSInputFile(xlsx_path, filename=f"{fname}.xlsx"), caption=tr("msg_excel_caption", lang))
         u["generations"] += 1
@@ -7651,6 +7755,8 @@ async def excel_build(m: Message, state: FSMContext):
         await m.answer(note, reply_markup=main_kb(lang, uid=m.from_user.id))
         await state.clear()
     except Exception as e:
+        if studio_job:
+            raise
         from excel_startup import StartupValidationError
         if kind == 'startup_model' and isinstance(e, StartupValidationError):
             await state.set_state(Form.waiting_excel_confirm)
@@ -9604,11 +9710,13 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         content = _clip_text(payload.get("content"), 4000)
         if not content:
             return
+        from excel_password import protection
+        protected = protection(payload)
         excel_style, excel_palette = normalize_excel_appearance(payload.get('excel_style'), payload.get('excel_palette'))
         await state.update_data(
             excel_kind=payload.get("kind") or "calc_table", excel_topic=content,
             extra=_clip_text(payload.get("extra"), 800), excel_mode="user" if payload.get("kind") == "startup_model" else (payload.get("mode") or "ai"),
-            excel_style=excel_style, excel_palette=excel_palette, excel_protect=payload.get('excel_protect') is True, content_lang=output_lang,
+            excel_style=excel_style, excel_palette=excel_palette, **protected, content_lang=output_lang,
         )
         await excel_build(m, state)
         return
@@ -10561,7 +10669,9 @@ async def studio_submit_preview(user, data):
     uid = user['id']
     if get_user(uid).get('busy') or uid in _miniapp_action_tasks or len(_miniapp_action_tasks) >= MAX_CONCURRENT_GENERATIONS:
         raise _aiohttp_web.HTTPConflict(text='Предыдущая работа ещё выполняется. Попробуйте позже.')
-    if not can_afford(uid, presentation_cost(data['slides'], data)):
+    journal = globals().get('_presentation_orders')
+    pending = journal.get(uid, data, presentation_cost(data['slides'], data)).row.get('billing_pending') if journal else False
+    if not pending and not can_afford(uid, presentation_cost(data['slides'], data)):
         raise _aiohttp_web.HTTPPaymentRequired(text='Недостаточно кредитов. Пополните баланс в профиле.')
     # Reserve the existing per-user Mini App slot before yielding. The builder
     # retains the shared generation limit, image checks and post-delivery billing.
@@ -10596,10 +10706,29 @@ async def start_web_server():
     статику Mini App, если она перенесена на этот же сервер (см. MINIAPP_STATIC_DIR),
     3) принимает вебхуки от ЮKassa и действия Mini App из /api/action."""
     app = _aiohttp_web.Application()
+    global _presentation_orders, _file_library
+    from studio_files import FileLibrary
+    _file_library = FileLibrary(os.path.join(os.path.dirname(USERS_FILE), 'studio-files'))
+    from presentation_orders import PresentationOrders
+    from order_billing import charge_callback
+    async def send_presentation_file(uid, path, title, ext):
+        message = await bot.send_document(uid, FSInputFile(str(path), filename=safe_filename(title, fallback='Презентация')+'.'+ext), caption='Ваша презентация · '+ext.upper())
+        _file_library.record(uid, message, title, ext, str(path.parent))
+        return message
+    _presentation_orders = PresentationOrders(os.path.join(os.path.dirname(USERS_FILE), 'presentation-orders'),
+        send_presentation_file, charge_callback(globals(), 'presentation_payments', 'Презентация'), can_afford, bot.send_message)
+    async def recovered_orders(app):
+        async def notifications():
+            await _presentation_orders.notify_restarts()
+            await word_service.notify_restarts(bot.send_message)
+            await excel_service.notify_restarts(bot.send_message)
+        app['presentation_restart_notices'] = asyncio.create_task(notifications())
+    app.on_startup.append(recovered_orders)
     from studio_private import Studio
     async def studio_send_file(uid, data):
-        await bot.send_document(uid, BufferedInputFile(data, filename="AlixDoc-constructor.pptx"),
+        message = await bot.send_document(uid, BufferedInputFile(data, filename="AlixDoc-constructor.pptx"),
             caption="Конструктор: ваш редактируемый PPTX. Цена подтверждена перед сборкой.")
+        _file_library.record(uid, message, 'Презентация из конструктора', 'pptx', 'constructor:' + str(message.message_id))
     async def studio_action(user, payload, request_id):
         return await accept_miniapp_action(user, "gen_presentation", payload, request_id)
     async def studio_profile(user):
@@ -10611,6 +10740,7 @@ async def start_web_server():
                 "content_lang": u.get('studio_content_lang', user_lang(user['id'])),
                 "mode": u.get("control_mode", "buttons"),
                 "history": [str(h)[:200] for h in (u.get("history") or [])[-30:]],
+                "files": _file_library.public(user['id']),
                 "payments": await asyncio.to_thread(recent_payments, PAYMENTS_LOG_FILE, user["id"])}
     async def studio_settings(user, values):
         u = miniapp_user_record(user)
@@ -10621,11 +10751,12 @@ async def start_web_server():
     constructor_billing = ConstructorBilling(get_user, save_users_now, start_job, finish_job, ADMIN_IDS)
     studio = Studio(miniapp_verified_user, studio_send_file, studio_action, WEB_BASE_URL, billing=constructor_billing,
            profile=studio_profile, settings=studio_settings, menu_action=accept_miniapp_action,
-           outline_planner=studio_plan_preview, outline_submit=studio_submit_preview)
+           outline_planner=studio_plan_preview, outline_submit=studio_submit_preview, state_root=os.path.join(os.path.dirname(USERS_FILE), 'studio-state'), presentation_orders=_presentation_orders)
     from studio_word_runtime import attach as attach_studio_word
-    attach_studio_word(studio, app, globals())
+    word_service = attach_studio_word(studio, app, globals())
     from studio_excel_runtime import attach as attach_studio_excel
-    attach_studio_excel(studio, app, globals())
+    excel_service = attach_studio_excel(studio, app, globals())
+    _file_library.attach(studio, app, bot)
     studio.register(app)
     app.router.add_get("/", _health_handler)
     app.router.add_get("/health", _health_handler)

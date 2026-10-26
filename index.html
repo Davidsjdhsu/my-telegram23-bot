@@ -1104,8 +1104,9 @@
           <span>Защитить формулы</span>
           <input id="excelProtect" type="checkbox" role="switch" aria-describedby="excelProtectHint">
         </label>
-        <p class="field-hint" id="excelProtectHint">По умолчанию выключено — можно редактировать весь файл. Если включить, исходные данные останутся доступны, а расчётные формулы будут защищены от случайной замены. Защиту можно снять в Excel без пароля. Сортировка строк с формулами может быть ограничена.</p>
+        <p class="field-hint" id="excelProtectHint">По умолчанию выключено — можно редактировать весь файл. Если включить, исходные данные останутся доступны, а расчётные формулы будут защищены от случайной замены. Для снятия защиты в Excel потребуется ваш пароль. Это защита редактирования, а не шифрование файла. Сортировка строк с формулами может быть ограничена.</p>
       </div>
+      <div class="field-block" id="excelPasswordBlock" hidden><label class="field-label" for="excelPassword">Добавьте пароль</label><input class="field-input" id="excelPassword" type="password" minlength="4" maxlength="64" autocomplete="new-password" placeholder="От 4 до 64 символов"><p class="field-hint">Сохраните пароль у себя. Он понадобится для изменения формул.</p></div>
       <button class="form-submit" id="excelSubmit" data-i18n="createTableBtn">Создать таблицу</button>
       <p class="form-cost" data-cost="5">Стоимость: 5 кредитов</p>
     </div>
@@ -2025,15 +2026,19 @@
   document.getElementById('excelKind').addEventListener('change', updateExcelAppearance);
   document.getElementById('excelStyle').addEventListener('change', updateExcelAppearance);
   updateExcelAppearance();
+  document.getElementById('excelProtect').addEventListener('change', e=>{document.getElementById('excelPasswordBlock').hidden=!e.target.checked;if(!e.target.checked)document.getElementById('excelPassword').value='';});
   document.getElementById('excelSubmit').addEventListener('click', () => {
     const content = document.getElementById('excelContent').value.trim();
     if (!content) { document.getElementById('excelContent').focus(); return; }
+    const password=document.getElementById('excelPassword');
+    if(document.getElementById('excelProtect').checked&&password.value.length<4){password.setCustomValidity('Добавьте пароль: минимум 4 символа.');password.reportValidity();password.oninput=()=>password.setCustomValidity('');return;}
     sendAction('gen_excel', {
       kind: document.getElementById('excelKind').value,
       content,
       extra: document.getElementById('excelExtra').value.trim(),
       mode: document.getElementById('excelKind').value === 'startup_model' ? 'user' : activeChipValue('excelMode', 'ai'),
       excel_protect: document.getElementById('excelProtect').checked === true,
+      excel_password: document.getElementById('excelProtect').checked ? password.value : '',
       excel_style: supportsExcelAppearance() ? document.getElementById('excelStyle').value : 'standard',
       excel_palette: supportsExcelAppearance() && document.getElementById('excelStyle').value === 'designer' ? document.getElementById('excelPalette').value : 'green',
     });
