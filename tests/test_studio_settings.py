@@ -58,7 +58,7 @@ class PaletteTests(unittest.TestCase):
 class PayloadLanguageTests(unittest.IsolatedAsyncioTestCase):
  async def test_word_and_excel_receive_selected_language_without_changing_ui(self):
   from excel_styles import normalize_excel_appearance
-  env={'Message':object,'FSMContext':object,'ensure_answerable':lambda m:m,'user_lang':lambda uid:'ru','get_user':lambda uid:{'studio_content_lang':'fr'},'can_afford':lambda *a:True,'_clip_text':lambda v,n:str(v or '')[:n], 'CREDIT_COSTS':{'excel':5},'WORD_PAGE_CHOICE_KINDS':{'essay','doc'},'WORD_DEFAULT_PAGES':2,'normalize_word_pages':lambda v:int(v),'word_cost':lambda n:10,'thin_long_doc_warning':lambda *a:None,'word_build':AsyncMock(),'excel_build':AsyncMock(),'normalize_excel_appearance':normalize_excel_appearance}
+  env={'Message':object,'FSMContext':object,'ensure_answerable':lambda m:m,'user_lang':lambda uid:'ru','get_user':lambda uid:{'studio_content_lang':'fr'},'can_afford':lambda *a:True,'_clip_text':lambda v,n:str(v or '')[:n], 'CREDIT_COSTS':{'excel':5},'WORD_PAGE_CHOICE_KINDS':{'essay','doc'},'WORD_DEFAULT_PAGES':2,'normalize_word_pages':lambda v:int(v),'word_cost':lambda n, kind='doc':10,'thin_long_doc_warning':lambda *a:None,'word_build':AsyncMock(),'excel_build':AsyncMock(),'normalize_excel_appearance':normalize_excel_appearance}
   fn=load_functions(['_handle_miniapp_payload'],env)['_handle_miniapp_payload']
   for uid,expected in [(PILOT_UID,'en'),(987,'ru')]:
    for action in ['gen_word','gen_excel']:

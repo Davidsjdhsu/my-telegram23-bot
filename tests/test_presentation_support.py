@@ -49,6 +49,10 @@ def load_functions(names, env=None):
     ns.update({k: getattr(pd,k) for k in ('is_designer','render_designer_slide','content_instruction','validate_designer','build_scene','plan_designer_images','DesignerValidationError','designer_copy')})
     ns.update({k: getattr(pp,k) for k in ('ensure_pdf_converter','convert_presentation_pdf','PresentationPDFError','pdf_failure_notice')})
     ns.update({k:getattr(pr,k) for k in ('PresentationRecovery','missing_images','recovery_notice','PARTIAL_LABELS','RESUME_LABELS')})
+    from service_pricing import VERSION, excel_price
+    ns.update(PRICE_VERSION=VERSION, excel_price=excel_price, billing_saved=AsyncMock(),can_afford=lambda *a:True)
+    from wallet import BillingPersistenceError, persistence_notice, request_key
+    ns.update(BillingPersistenceError=BillingPersistenceError,persistence_notice=persistence_notice,request_key=request_key)
     ns.update(env or {})
     module = ast.Module(body=[ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')],level=0)] + nodes, type_ignores=[])
     exec(compile(ast.fix_missing_locations(module),'main.py','exec'),ns)
@@ -131,7 +135,7 @@ class PlanValidationTests(unittest.TestCase):
 
 
 class State:
-    def __init__(self,data): self.data=copy.deepcopy(data); self.current=None
+    def __init__(self,data): self.data=copy.deepcopy(data); self.data.update({'price_version':__import__('service_pricing').VERSION} if ('word_kind' in data or 'excel_kind' in data) and 'price_version' not in data else {}); self.current=None
     async def get_data(self): return copy.deepcopy(self.data)
     async def update_data(self,**kw): self.data.update(kw)
     async def set_state(self,value): self.current=value
@@ -298,7 +302,7 @@ class BuildTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(pptx.slides),count)
                 for slide in pptx.slides:
                     self.assertEqual(tuple(slide.background.fill.fore_color.rgb),(250,252,250))
-                env['spend_credits'].assert_called_once_with(-987654321,'presentation',amount=count*16)
+                env['spend_credits'].assert_called_once_with(-987654321,'presentation',amount=count*10, operation_id=__import__('unittest.mock',fromlist=['ANY']).ANY)
                 env['finish_job'].assert_called_once()
                 env['_create_presentation_plan'].assert_not_awaited()
                 self.assertEqual(state.data,{})

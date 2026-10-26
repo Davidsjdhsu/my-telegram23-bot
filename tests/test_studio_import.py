@@ -38,7 +38,7 @@ class ImportTests(unittest.TestCase):
   t['text']='Исправленный текст';s['elements'][1]['raster']=s['elements'][1]['src']
   p=Presentation(io.BytesIO(build_pptx(d)))
   self.assertIn('Исправленный текст',p.slides[0].shapes[0].text)
-  self.assertEqual(len(p.slides[0].shapes),2);self.assertEqual(r['price']['cost'],16)
+  self.assertEqual(len(p.slides[0].shapes),2);self.assertEqual(r['price']['cost'],10)
  def test_unsupported_objects_reported_per_slide(self):
   p=Presentation(io.BytesIO(fixture()));p.slides[0].shapes.add_table(2,2,0,0,1000000,1000000)
   p.slides[0].shapes.add_shape(MSO_SHAPE.OVAL,0,0,1000000,1000000)

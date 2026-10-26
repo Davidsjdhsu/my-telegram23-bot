@@ -92,7 +92,7 @@ class ExcelStyleFlowTests(unittest.IsolatedAsyncioTestCase):
                      {'name':'Расход','type':'expense','amount':300,'category':'Проект'}]})),extract_json=json.loads,
                 run_heavy=run,build_excel_items=office_env()['build_excel_items'],datetime=datetime,
                 safe_filename=lambda *a,**k:'estimate',FSInputFile=lambda path,**kw:path,
-                spend_credits=lambda *a:order.append('charge'),note_success=Mock(),os=os,
+                spend_credits=lambda *a,**kw:order.append('charge'),note_success=Mock(),os=os,
                 signature_line=AsyncMock(return_value=''),main_kb=lambda *a,**kw:None)
             env=load_functions(['excel_build','_handle_miniapp_payload'],e)
             await env['_handle_miniapp_payload'](msg,state,{'kind':kind,'content':'Данные',

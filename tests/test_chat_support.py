@@ -238,6 +238,10 @@ def main_namespace(*names):
             node.decorator_list = [] if node.name != 'chat_typing' else node.decorator_list
             nodes.append(node)
     namespace = {name: getattr(support, name) for name in dir(support) if not name.startswith('__')}
+    from unittest.mock import Mock, AsyncMock
+    namespace.update(PRICE_VERSION=__import__('service_pricing').VERSION,can_afford=lambda *a:True,CREDIT_COSTS={'chat':.5,'voice':3,'vision':3},spend_credits=Mock(),billing_saved=AsyncMock())
+    from wallet import BillingPersistenceError, persistence_notice
+    namespace.update(BillingPersistenceError=BillingPersistenceError,persistence_notice=persistence_notice)
     namespace.update(asyncio=asyncio, asynccontextmanager=asynccontextmanager, suppress=suppress,
                      Message=object, FSMContext=object, TelegramBadRequest=BadRequest, TelegramRetryAfter=RetryAfter,
                      _chat_gate=support.ChatGate(), tr=lambda key, lang, **kwargs: key)
@@ -328,7 +332,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     def chat_ns(self):
         ns=main_namespace('respond_in_chat','send_chat_reply','chat_typing','try_local_math_answer')
-        users={1:{'history':[],'chat_history':[],'credits':100}}
+        users={1:{'history':[],'chat_history':[],'credits':100,'chat_price_notice':__import__('service_pricing').VERSION}}
         ns.update(bot=FakeBot(),get_user=lambda uid:users[uid],get_chat_history=lambda uid:users[uid]['chat_history'],
                   note_chat_message=lambda uid:None,try_local_time_answer=lambda text:None,
                   append_chat_turn=lambda uid,role,content:users[uid]['chat_history'].append({'role':role,'content':content}))
@@ -395,7 +399,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         ns.update(bot=bot,user_lang=lambda uid:'ru',get_user=lambda uid:user,
                   can_afford=lambda *a:True,CREDIT_COSTS={'vision':3},start_job=lambda uid:(True,None),
                   finish_job=lambda uid:events.append('finish'),analyze_user_image=analyze,grok_failed=lambda x:False,
-                  main_kb=lambda *a,**kw:'menu',spend_credits=lambda *a:events.append('charged'),
+                  main_kb=lambda *a,**kw:'menu',spend_credits=lambda *a,**kw:events.append('charged'),
                   save_users=lambda:None,note_success=lambda uid:None,append_chat_turn=lambda *a:None,
                   datetime=__import__('datetime').datetime)
         m=types.SimpleNamespace(from_user=types.SimpleNamespace(id=1),answer=answer)

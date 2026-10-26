@@ -65,7 +65,7 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
  async def settle(self):await asyncio.gather(*[v[1] for v in self.flow.tasks.values()])
  async def status(self,o):return await (await self.client.get('/studio/excel/orders/'+o['id'])).json()
  async def test_auth_owner_csrf_and_server_price(self):
-  o=await self.create(cost=0);self.assertEqual(o['cost'],5)
+  o=await self.create(cost=0);self.assertEqual(o['cost'],20)
   self.assertEqual((await self.confirm(o,confirmedCost=0)).status,409)
   self.assertEqual((await self.client.post('/studio/excel/orders',json=PAYLOAD)).status,403)
   await self.login(909828109);self.assertEqual((await self.client.get('/studio/excel/orders/'+o['id'])).status,404)

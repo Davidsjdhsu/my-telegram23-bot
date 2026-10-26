@@ -14,7 +14,7 @@ class PageContractTests(unittest.IsolatedAsyncioTestCase):
         env = load_functions(['word_size_kb'], {
             'KeyboardButton': lambda **kw: SimpleNamespace(**kw),
             'ReplyKeyboardMarkup': lambda **kw: SimpleNamespace(**kw),
-            'word_cost': lambda n: n * 5, 'tr': lambda key, lang: key,
+            'word_cost': lambda n, kind='doc': n * 5, 'tr': lambda key, lang: key,
         })
         for kind in academic.KINDS:
             kb = env['word_size_kb']('ru', kind, True)
@@ -28,10 +28,10 @@ class PageContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def run_handler(self, kind, actual_body, fail_send=False):
         env, message, state = WordWorkflowTests().env()
-        state.get_data.return_value = {'word_kind': kind, 'word_pages': 6, 'topic': 'Учебная тема',
+        state.get_data.return_value = {'price_version': env['PRICE_VERSION'], 'word_kind': kind, 'word_pages': 6, 'topic': 'Учебная тема',
                                       'extra': 'Вуз: Учебный вуз\nДисциплина: Информатика\nФИО: Анна Петрова\nГруппа: ИС-21\nПреподаватель: Ирина Петрова\nГород: Москва\nКурс: 1\nГод: 2026'}
         env['WORD_KIND_LABELS'] = {k: {'ru': k} for k in academic.KINDS}
-        env['word_cost'] = lambda n: n * 5
+        env['word_cost'] = lambda n, kind='doc': n * 5
         content = {'title': 'Тема', 'sections': [{'title': 'Проблема', 'content': 'Пояснение.'}]}
         env['ask_grok'].return_value = json.dumps(content)
         async def prepare(value, requested, *args, **kwargs):
@@ -54,7 +54,7 @@ class PageContractTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(kind=kind, actual=actual):
                     env, message, order = await self.run_handler(kind, actual)
                     self.assertEqual(order, ['send', 'send', 'charge'])
-                    env['spend_credits'].assert_called_once_with(-9901, 'word', amount=min(6, actual) * 5)
+                    env['spend_credits'].assert_called_once_with(-9901, 'word', amount=min(6, actual, ) * 5, operation_id=__import__('unittest.mock',fromlist=['ANY']).ANY)
                     notice = '\n'.join(str(c.args[0]) for c in message.answer.call_args_list)
                     self.assertIn(f'{actual} стр. текста', notice)
                     self.assertIn('без доплаты', notice)

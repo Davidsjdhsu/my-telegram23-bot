@@ -10,6 +10,7 @@ from test_presentation_support import load_functions
 class TitleInputTests(unittest.IsolatedAsyncioTestCase):
     def setup_state(self, data):
         env, m, state = WordWorkflowTests().env()
+        data.setdefault('price_version',env['PRICE_VERSION'])
         state.get_data.side_effect = lambda: dict(data)
         async def update(**kwargs):
             data.update(kwargs)

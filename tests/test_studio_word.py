@@ -32,7 +32,7 @@ class CatalogTests(unittest.TestCase):
   self.assertIn('record_book',SPECS['notes']['fields']);self.assertNotIn('record_book',SPECS['essay']['fields'])
   for kind in SPECS:
    p=normalize(dict(kind=kind,topic='Тема',fields={},pages=6))
-   self.assertEqual(price(p),10 if SPECS[kind]['fixed'] or kind=='resume' else 30)
+   self.assertEqual(price(p),40 if kind in __import__('service_pricing').DETAILED_WORD else (20 if SPECS[kind]['fixed'] or kind=='resume' else 30))
   for p in [[],{'kind':'essay','topic':'A','fields':{'foo':'B'}},{'kind':'essay','topic':'A','pages':3},{'kind':'essay','topic':'A','pages':True},{'kind':'essay','topic':''},{'kind':'services_ru','content':'ignored'},{'kind':'services_ru','content_lang':'en'},{'kind':'dkp_car','fields':{'seller':'ООО Компания'}}]:
    with self.assertRaises(ValueError):normalize(p)
  def test_real_cover_fields_are_literal_and_not_ai_generated(self):

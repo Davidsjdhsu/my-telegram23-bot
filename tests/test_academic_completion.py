@@ -17,7 +17,7 @@ from word_quality import (WORD_ACCEPT, WORD_REFINE, apply_word_section_patch,
 class CompletionTests(unittest.IsolatedAsyncioTestCase):
     def setup_flow(self, kind='notes', actual=4, fill=.9):
         env, message, state = WordWorkflowTests().env()
-        data = {'word_kind': kind, 'word_pages': 6, 'topic': 'Оперативная память',
+        data = {'price_version': env['PRICE_VERSION'], 'word_kind': kind, 'word_pages': 6, 'topic': 'Оперативная память',
                 'extra': 'Вуз: Учебный вуз\nФИО: Анна Петрова\nГруппа: ИС-21\nКурс: 1\n'
                          'Дисциплина: Информатика\nПреподаватель: Ирина Петрова\nГород: Москва\nГод: 2026'}
         state.get_data.side_effect = lambda: dict(data)
@@ -26,7 +26,7 @@ class CompletionTests(unittest.IsolatedAsyncioTestCase):
         state.update_data.side_effect = update
         state.clear.side_effect = clear
         env['WORD_KIND_LABELS'] = {k: {'ru': k} for k in academic.KINDS}
-        env['word_cost'] = lambda n: n * 5
+        env['word_cost'] = lambda n, kind='doc': n * 5
         value = {'title': 'Память', 'sections': [{'title': 'Работа с данными', 'content': 'Контрольный текст.'}]}
         env['ask_grok'].return_value = json.dumps(value)
         async def prepare(content, requested, *args, **kwargs):
@@ -60,7 +60,7 @@ class CompletionTests(unittest.IsolatedAsyncioTestCase):
         await env['word_build'](m, state, quality_action='accept')
         self.assertEqual(events, ['send', 'send', 'charge'])
         env['ask_grok'].assert_not_awaited()
-        env['spend_credits'].assert_called_once_with(-9901, 'word', amount=20)
+        env['spend_credits'].assert_called_once_with(-9901, 'word', amount=20, operation_id=__import__('unittest.mock',fromlist=['ANY']).ANY)
         self.assertIsNone(env['prepare_word_files'].call_args.kwargs['expand'])
         await env['word_build'](m, state, quality_action='accept')
         self.assertEqual(events, ['send', 'send', 'charge'])

@@ -85,7 +85,7 @@ class CheckpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([sum(s.shape_type == 13 for s in slide.shapes) for slide in deck.slides], [1, 0, 1])
         for slide in deck.slides:
             self.assertTrue(any(s.has_text_frame and s.text for s in slide.shapes))
-        env['spend_credits'].assert_called_once_with(MESSAGE.from_user.id, 'presentation', amount=48)
+        env['spend_credits'].assert_called_once_with(MESSAGE.from_user.id, 'presentation', amount=30, operation_id=__import__('unittest.mock',fromlist=['ANY']).ANY)
 
     async def test_second_failure_keeps_successful_images_and_remains_unbilled(self):
         env, state, sent, _ = await self.failed_order()

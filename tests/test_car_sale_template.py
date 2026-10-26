@@ -85,7 +85,7 @@ class CarWorkflowTests(unittest.IsolatedAsyncioTestCase):
         e,m,_=test_office.WordWorkflowTests().env()
         e['Form']=SimpleNamespace(waiting_word_confirm='confirm',waiting_word_extra='extra')
         e['cancel_kb']=lambda *a:None
-        e['word_cost']=lambda p:5*p
+        e['word_cost']=lambda p, kind='doc':5*p
         e['send_no_credits_notice']=AsyncMock()
         async def heavy(fn,*a,**kw):return fn(*a,**kw)
         e['run_heavy']=heavy
@@ -109,7 +109,7 @@ class CarWorkflowTests(unittest.IsolatedAsyncioTestCase):
         e['spend_credits'].side_effect=lambda *a,**kw:events.append('charge')
         await car.build(m,s,e)
         self.assertEqual(events,['send','send','charge']);e['ask_grok'].assert_awaited_once()
-        e['spend_credits'].assert_called_once_with(-9901,'word',amount=10)
+        e['spend_credits'].assert_called_once_with(-9901,'word',amount=10, operation_id=__import__('unittest.mock',fromlist=['ANY']).ANY)
         self.assertEqual(s.data,{})
     async def test_pdf_send_failure_resume_skips_docx_and_generation(self):
         e,m,s=self.env();await car.build(m,s,e)

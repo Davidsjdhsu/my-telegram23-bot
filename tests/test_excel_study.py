@@ -92,7 +92,7 @@ class StudyTests(unittest.TestCase):
 
 class StudyFailureFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_calculation_keeps_request_and_never_sends_or_charges(self):
-        data=dict(excel_kind='calc_table',excel_topic='Вычислить скорость',excel_mode='user')
+        data=dict(price_version=__import__('service_pricing').VERSION,excel_kind='calc_table',excel_topic='Вычислить скорость',excel_mode='user')
         state=SimpleNamespace(get_data=AsyncMock(return_value=data),set_state=AsyncMock(),clear=AsyncMock())
         msg=SimpleNamespace(from_user=SimpleNamespace(id=123),answer=AsyncMock(),answer_document=AsyncMock())
         spend=Mock(); finish=Mock()

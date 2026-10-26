@@ -9,7 +9,7 @@ from presentation_pricing import presentation_cost
 
 class MiniAppIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_designer_payload_reaches_bot_and_checks_actual_price(self):
-        for style, amount in [('default', 128), ('designer_soft', 256), ('designer_strict', 256)]:
+        for style, amount in [('default', 80), ('designer_soft', 160), ('designer_strict', 160)]:
             for affordable in [True, False]:
                 with self.subTest(style=style, affordable=affordable):
                     start, rejected = AsyncMock(), AsyncMock()

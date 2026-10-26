@@ -28,15 +28,15 @@ class PresentationPricingTests(unittest.IsolatedAsyncioTestCase):
 
     def test_rates_follow_actual_renderer_including_custom_colors(self):
         for style in ('default', 'minimal', 'tech', 'business', 'unknown', None):
-            self.assertEqual(presentation_cost(8, style), 128)
+            self.assertEqual(presentation_cost(8, style), 80)
         for style in ('designer_soft', 'designer_strict'):
-            self.assertEqual(presentation_cost(8, style), 256)
-            self.assertEqual(presentation_cost('bad', style), 96)
+            self.assertEqual(presentation_cost(8, style), 160)
+            self.assertEqual(presentation_cost('bad', style), 60)
             # Copied custom colours select the ordinary renderer.
-            self.assertEqual(presentation_cost(8, {'theme_name': style, 'custom_colors': {'bg': 'white'}}), 128)
+            self.assertEqual(presentation_cost(8, {'theme_name': style, 'custom_colors': {'bg': 'white'}}), 80)
 
     async def test_successful_delivery_debits_actual_balance_at_selected_rate(self):
-        for style, amount in [('minimal', 128), ('designer_soft', 256), ('designer_strict', 256)]:
+        for style, amount in [('minimal', 80), ('designer_soft', 160), ('designer_strict', 160)]:
             with self.subTest(style=style):
                 env, state, sent, user, ledger = self.priced_order(style)
                 original = env['bot'].send_document
@@ -48,7 +48,7 @@ class PresentationPricingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result, {'delivered': True})
                 self.assertEqual(len(sent), 2)
                 self.assertEqual(user['credits'], 1000-amount)
-                env['spend_credits'].assert_called_once_with(-987654321, 'presentation', amount=amount)
+                env['spend_credits'].assert_called_once_with(-987654321, 'presentation', amount=amount, operation_id=__import__('unittest.mock',fromlist=['ANY']).ANY)
                 ledger['save_users'].assert_called_once()
                 self.assertIn(str(amount)+' кредитов', env['bot'].send_message.await_args_list[0].args[1])
 
@@ -68,13 +68,13 @@ class PresentationPricingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_designer_insufficient_balance_stops_before_generation(self):
         for style in ('designer_soft', 'designer_strict'):
-            env, state, sent, user, ledger = self.priced_order(style, balance=255)
+            env, state, sent, user, ledger = self.priced_order(style, balance=159)
             await env['_build_presentation'](SimpleNamespace(from_user=SimpleNamespace(id=-987654321)), state)
             self.assertEqual(sent, [])
             env['start_job'].assert_not_called()
             env['ask_grok'].assert_not_awaited()
             ledger['save_users'].assert_not_called()
-            self.assertEqual(user['credits'], 255)
+            self.assertEqual(user['credits'], 159)
 
     async def test_missing_images_partial_consent_keeps_designer_price(self):
         env, state, sent, user, ledger = self.priced_order('designer_strict')
@@ -82,10 +82,10 @@ class PresentationPricingTests(unittest.IsolatedAsyncioTestCase):
         message = SimpleNamespace(from_user=SimpleNamespace(id=-987654321))
         await env['_build_presentation'](message, state)
         self.assertEqual(user['credits'], 1000)
-        self.assertIn('256', env['bot'].send_message.await_args.args[1])
+        self.assertIn('160', env['bot'].send_message.await_args.args[1])
         await env['_build_presentation'](message, state, allow_missing_images=True)
         self.assertEqual(len(sent), 2)
-        self.assertEqual(user['credits'], 744)
+        self.assertEqual(user['credits'], 840)
         ledger['save_users'].assert_called_once()
 
     async def test_style_switch_updates_quote_and_rejects_insufficient_balance(self):
@@ -95,21 +95,21 @@ class PresentationPricingTests(unittest.IsolatedAsyncioTestCase):
         env = f.load_functions(['process_style'], env)
         state = f.State({'slides':8,'theme_name':'minimal'})
         m = f.WorkflowTests().message('Designer')
-        env['can_afford'] = lambda uid, cost: cost <= 255
+        env['can_afford'] = lambda uid, cost: cost <= 159
         before = copy.deepcopy(state.data)
         await env['process_style'](m, state)
         self.assertEqual(state.data, before)
         env['_create_presentation_plan'].assert_not_awaited()
-        env['can_afford'] = lambda uid, cost: cost <= 256
+        env['can_afford'] = lambda uid, cost: cost <= 160
         await env['process_style'](m, state)
-        self.assertIn('256 кредитов', env['_send_presentation_draft'].await_args.args[1])
+        self.assertIn('160 кредитов', env['_send_presentation_draft'].await_args.args[1])
         m.text = 'Standard'
         await env['process_style'](m, state)
-        self.assertIn('128 кредитов', env['_send_presentation_draft'].await_args.args[1])
+        self.assertIn('80 кредитов', env['_send_presentation_draft'].await_args.args[1])
 
     def test_quotes_include_total_and_formats_in_all_languages(self):
         for lang in ('ru','en','de','ar','zh','es','fr'):
-            for style, amount in [('minimal',128),('designer_soft',256),('designer_strict',256)]:
+            for style, amount in [('minimal',80),('designer_soft',160),('designer_strict',160)]:
                 quote = presentation_price_notice(8, style, lang)
                 for part in (str(amount),'PPTX','PDF'):
                     self.assertIn(part, quote)

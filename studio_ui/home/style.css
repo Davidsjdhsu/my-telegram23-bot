@@ -235,3 +235,5 @@ html,body{margin:0;background:#191b20;color:#e7e2d9}#alix-studio-mixed{padding:0
 #alix-studio-mixed .as-legal-content button{padding:0 16px}
 
 #alix-studio-mixed #file-search{width:100%;box-sizing:border-box;padding:14px;margin:12px 0 20px;background:#25262b;color:#e4dfd4;border:1px solid #514b42;border-radius:12px;font:inherit}#alix-studio-mixed #file-results .as-row{display:flex;justify-content:space-between;gap:12px;align-items:center}#alix-studio-mixed #file-results .as-row>div{min-width:0;overflow-wrap:anywhere}#alix-studio-mixed #file-results small{display:block;margin-top:6px}#alix-studio-mixed #file-results button{flex-shrink:0;max-width:120px;min-height:44px;padding:10px;border:1px solid #655740;border-radius:12px;background:#28272b;color:#d0b989}
+
+#alix-studio-mixed .as-tx-title{overflow-wrap:anywhere}#alix-studio-mixed .as-tx-amount:not(.positive) strong{color:#dfc2b5}

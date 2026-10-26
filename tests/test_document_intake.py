@@ -51,7 +51,7 @@ class IntakeFlowTests(unittest.IsolatedAsyncioTestCase):
             EXCEL_KIND_DESC={'expense_estimate':'смета расходов','calc_table':'учебный расчёт'},WORD_KIND_LABELS={'essay':{'ru':'Эссе'},'doc':{'ru':'Документ'},'services':{'ru':'Договор услуг'}},WORD_KIND_DESC={'essay':'эссе','doc':'документ','services':'договор услуг'},
             EXCEL_STYLES=STYLE_LABELS,EXCEL_PALETTES=PALETTE_LABELS,CREDIT_COSTS={'excel':5},
             excel_confirm_kb=lambda _: 'excel_confirm_buttons',main_kb=lambda *a,**k:'main',
-            can_afford=lambda *a:True,word_cost=lambda p:p*5,normalize_word_pages=int,WORD_DEFAULT_PAGES=2,
+            can_afford=lambda *a:True,word_cost=lambda p, kind='doc':p*5,normalize_word_pages=int,WORD_DEFAULT_PAGES=2,
             extract_page_count=lambda t:int(re.search(r'(\d+) страниц',t)[1]) if re.search(r'(\d+) страниц',t) else None,
             WORD_PAGE_CHOICE_KINDS={'doc','essay'},word_after_input=AsyncMock(),word_build_draft=AsyncMock(),
             extract_slide_count=lambda t:8,extract_style=lambda t:None,presentation_cost=lambda *a:40,
@@ -154,7 +154,7 @@ class ProductionRegressionTests(unittest.IsolatedAsyncioTestCase):
         rows=[dict(name='Краска',qty=3,price=3400),dict(name='Грунтовка',qty=2,price=1100),
               dict(name='Рабочий стол',qty=2,price=14500),dict(name='Рабочее кресло',qty=2,price=7200)]
         for protect in [False,True]:
-            s=State();s.data=dict(excel_kind='expense_estimate',excel_topic=REQUEST,excel_mode='ai',excel_protect=protect)
+            s=State();s.data=dict(price_version=__import__('service_pricing').VERSION,excel_kind='expense_estimate',excel_topic=REQUEST,excel_mode='ai',excel_protect=protect)
             ask=AsyncMock(return_value=json.dumps({'title':'Мастерская','rows':rows}));order=[]
             async def run(fn,*a,**kw):return fn(*a,**kw)
             async def send(path,**kw):
@@ -175,7 +175,7 @@ class ProductionRegressionTests(unittest.IsolatedAsyncioTestCase):
                 EXCEL_ROW_SCHEMA={'expense_estimate':{'fields':['name','qty','price'],'example':'{}'}},
                 EXCEL_MIN_ROWS_AI={'expense_estimate':14},EXCEL_KIND_DESC={'expense_estimate':'Смета'},
                 datetime=datetime,os=os,safe_filename=lambda *a,**kw:'test',FSInputFile=lambda p,**kw:p,
-                spend_credits=lambda *a:order.append('charge'),note_success=Mock(),signature_line=AsyncMock(return_value=''),main_kb=lambda *a,**kw:None))
+                spend_credits=lambda *a,**kw:order.append('charge'),note_success=Mock(),signature_line=AsyncMock(return_value=''),main_kb=lambda *a,**kw:None))
             await e['excel_build'](m,s)
             self.assertEqual(order,['send','charge']);ask.assert_awaited_once()
             self.assertIn('ничего не досочиняя',ask.call_args.args[0]);self.assertNotIn('МИНИМУМ',ask.call_args.args[0])

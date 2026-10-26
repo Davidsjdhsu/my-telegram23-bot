@@ -317,14 +317,14 @@ class WordDeliveryPageTests(unittest.IsolatedAsyncioTestCase):
         e,m,s=self.setup_env(1)
         await e['word_build'](m,s)
         self.assertEqual(m.answer_document.await_count,2)
-        e['spend_credits'].assert_called_once_with(-9901,'word',amount=10)
+        e['spend_credits'].assert_called_once_with(-9901,'word',amount=10, operation_id=__import__('unittest.mock',fromlist=['ANY']).ANY)
         self.assertTrue(any('1 стр.' in str(c) and '10 кредитов' in str(c) for c in m.answer.await_args_list))
         self.assertEqual(e['ask_grok'].await_count,2)
 
     async def test_extra_pages_do_not_increase_charge(self):
         e,m,s=self.setup_env(3)
         await e['word_build'](m,s)
-        e['spend_credits'].assert_called_once_with(-9901,'word',amount=20)
+        e['spend_credits'].assert_called_once_with(-9901,'word',amount=20, operation_id=__import__('unittest.mock',fromlist=['ANY']).ANY)
         self.assertEqual(e['ask_grok'].await_count,2)
 
     async def test_plain_document_prompt_has_editorial_structure_without_legal_language(self):

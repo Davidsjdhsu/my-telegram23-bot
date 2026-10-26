@@ -11,11 +11,11 @@ class PricingTests(unittest.TestCase):
   for photos in range(4):
    for patterns in range(4):
     cost=quote(self.deck(photos,patterns))['cost']
-    self.assertEqual(cost,16+max(0,photos-1)*5+patterns*2)
-    self.assertLessEqual(cost,32)
+    self.assertEqual(cost,min(20,10+max(0,photos-1)*3+patterns*2))
+    self.assertLessEqual(cost,20)
  def test_example_and_limits(self):
   decks=[self.deck(1,0),self.deck(1,1),self.deck(2,1),self.deck(3,3)]
-  self.assertEqual(quote({'version':1,'slides':[d['slides'][0] for d in decks]})['cost'],89)
+  self.assertEqual(quote({'version':1,'slides':[d['slides'][0] for d in decks]})['cost'],57)
   for d in [self.deck(4,0),self.deck(0,4),{'version':1,'slides':[]},{'version':1,'slides':[{'elements':[]}]*21},self.deck()|{'slides':[{'elements':[{'type':'text'}]*7}]}]:
    with self.assertRaises(ValueError):quote(d)
 
@@ -53,7 +53,7 @@ class BillingTests(unittest.IsolatedAsyncioTestCase):
   self.send.assert_not_awaited();self.assertEqual(self.user['credits'],100)
   self.assertEqual(self.user['constructor_orders'],{})
  async def test_save_failure_after_send_never_duplicates(self):
-  b=self.env();self.persist.side_effect=[True,False]
+  b=self.env();self.persist.side_effect=[True,False,True]
   with self.assertRaises(web.HTTPServiceUnavailable):await b.deliver(1,'a',16,b'',self.send)
   self.assertTrue((await b.deliver(1,'a',16,b'',self.send))['duplicate'])
   self.send.assert_awaited_once();self.assertEqual(self.user['credits'],84)

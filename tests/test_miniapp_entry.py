@@ -23,6 +23,7 @@ class MiniAppEntryTests(unittest.IsolatedAsyncioTestCase):
         self.env = load_functions(['verify_telegram_init_data', 'miniapp_verified_user',
             'miniapp_user_record', 'api_profile_handler', 'api_action_handler',
             'run_miniapp_action', 'accept_miniapp_action', '_cors_headers', 'native_miniapp_url', 'sync_menu_button'], {
+            'PAYMENTS_LOG_FILE': '/tmp/alix-nonexistent-test-payments.jsonl',
             'BOT_TOKEN': 'unit-test-token', 'INIT_DATA_MAX_AGE_SECONDS': 604800,
             'hashlib': hashlib, 'hmac': hmac, 'time': time, 'asyncio': asyncio,
             'parse_qsl': __import__('urllib.parse', fromlist=['parse_qsl']).parse_qsl,
@@ -64,6 +65,18 @@ class MiniAppEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(profile['unlimited'])
         self.assertEqual(r.headers['Cache-Control'], 'no-store')
         self.assertEqual(self.user['name'], 'Тигран')
+
+    async def test_transaction_history_pagination_and_privacy(self):
+        from wallet import apply
+        self.user['credits']=100.5
+        for n in range(55): apply(self.user,'private-id-'+str(n),-.5,'Ответ в чате')
+        first=json.loads((await self.call('api_profile_handler',{'initData':self.signed()})).text)['profile']
+        second=json.loads((await self.call('api_profile_handler',{'initData':self.signed(),'transaction_offset':50})).text)['profile']
+        self.assertEqual(first['credits'],73)
+        self.assertEqual(len(first['transactions']['items']),50)
+        self.assertEqual(len(second['transactions']['items']),5)
+        self.assertNotIn('private-id',json.dumps(first))
+        self.assertEqual((await self.call('api_profile_handler',{'initData':self.signed(),'transaction_offset':'bad'})).status,400)
 
     async def test_rejects_forged_expired_and_invalid_requests(self):
         for signed in ['', self.signed()+'bad', self.signed(age=700000), self.signed(uid='123')]:

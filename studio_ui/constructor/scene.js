@@ -78,8 +78,8 @@ function quote(project){
  for(const e of slide.elements){if(!(e.type in counts))throw Error('Неизвестный элемент.');counts[e.type]++;}
  if(counts.photo>3||counts.pattern>3)throw Error(`Слайд ${i+1}: максимум 3 фотографии и 3 узора.`);
  if(counts.text>6||counts.diagram>1)throw Error(`Слайд ${i+1}: максимум 6 текстовых блоков и 1 схема.`);
- return 16+5*Math.max(0,counts.photo-1)+2*counts.pattern;});
- return {version:'constructor-16-5-2-v1',slides,cost:slides.reduce((a,b)=>a+b,0)};
+ return Math.min(20,10+3*Math.max(0,counts.photo-1)+2*counts.pattern);});
+ return {version:'constructor-10-3-2-cap20-v2',slides,cost:slides.reduce((a,b)=>a+b,0)};
 }
 const api={quote,W,H,FONTS,esc,clamp,uid,text,photo,pattern,initial,wrap,crop,patternMarkup,inner,svg,validate};
 if(typeof module!=='undefined')module.exports=api;else scope.Scene=api;

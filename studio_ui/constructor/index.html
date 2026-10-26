@@ -3,9 +3,9 @@
 <body class="studio-editor">
  <header class="top"><a class="studio-return" href="/studio/templates/?kind=designer">← Назад</a><div class="heading"><input id="deck-name" aria-label="Название презентации" value="Моя кофейня"><small>Конструктор · личный тест</small></div><div class="history"><button id="undo" title="Отменить Ctrl+Z" aria-label="Отменить">↶</button><button id="redo" title="Повторить Ctrl+Shift+Z" aria-label="Повторить">↷</button></div><details class="project-menu"><summary>Проект ⋯</summary><div><button id="import-pptx">Открыть PPTX для редактирования</button><button id="import-report" hidden>Особенности импортированного файла</button><button id="save-project">Сохранить на устройстве</button><button id="open-project">Открыть копию проекта</button><button id="backup-project">Скачать копию проекта</button><small>Черновик сохраняется автоматически на этом устройстве и откроется при возвращении. Копия проекта — для переноса на другое устройство, не готовая презентация.</small></div></details><button class="gold" id="export">Получить презентацию</button></header>
  <nav class="mode-switch" aria-label="Тип презентации">
-  <a href="/studio/templates/?kind=standard"><strong>Обычная</strong><small>16 кредитов / слайд</small></a>
-  <a href="/studio/templates/?kind=designer"><strong>Дизайнерская</strong><small>32 кредитов / слайд</small></a>
-  <a href="/studio/constructor/" aria-current="page"><strong>Конструктор</strong><small>16–32 кредита / слайд</small></a>
+  <a href="/studio/templates/?kind=standard"><strong>Обычная</strong><small>10 кредитов / слайд</small></a>
+  <a href="/studio/templates/?kind=designer"><strong>Дизайнерская</strong><small>20 кредитов / слайд</small></a>
+  <a href="/studio/constructor/" aria-current="page"><strong>Конструктор</strong><small>10–20 кредита / слайд</small></a>
  </nav>
  <main class="workspace">
   <aside class="slide-panel"><div class="section-label">Слайды <span id="slide-count"></span></div><div id="slide-list"></div><button id="add-slide" class="wide">＋ Слайд</button><div class="slide-actions"><button id="duplicate-slide">Копия</button><button id="delete-slide">Удалить</button><button id="slide-up" aria-label="Переместить слайд раньше">↑</button><button id="slide-down" aria-label="Переместить слайд позже">↓</button></div></aside>
@@ -14,7 +14,7 @@
    <div class="canvas-area"><div id="canvas-wrap"><svg id="canvas" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" role="img" aria-label="Редактируемый слайд"></svg></div></div>
    <div class="canvas-foot"><span id="slide-label">Слайд 1</span><span>Нажмите на текст, фото или узор → «Настройки»</span><button id="edit-text" hidden>Редактировать текст</button><button id="edit-element" aria-controls="inspector" aria-expanded="false">Настройки</button><button id="deselect">Фон</button></div>
    <div id="warning" role="status"></div>
-   <div class="bottom-help"><strong>Соберите свой вариант</strong><span>Основа — 16 кредитов; второе и третье фото — по +5; узор — +2 (до 3). До 6 текстовых блоков и 1 схемы. Цвета и расположение включены.</span><button id="preview">Просмотр без рамок</button></div>
+   <div class="bottom-help"><strong>Соберите свой вариант</strong><span>Основа — 10 кредитов; второе и третье фото — по +3; узор — +2 (до 3). До 6 текстовых блоков и 1 схемы. Цвета и расположение включены. Не больше 20 кредитов за слайд.</span><button id="preview">Просмотр без рамок</button></div>
   </section>
   <aside class="inspector" id="inspector" aria-label="Настройки слайда"><div class="inspector-bar"><span>Настройки</span><button id="close-inspector">Готово ×</button></div><div class="inspector-scroll"><div id="properties"></div><div class="layers"><div class="section-label">Слои <small>Верхний — ближе к зрителю</small></div><div id="layers"></div></div></div></aside>
  </main>
