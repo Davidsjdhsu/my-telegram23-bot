@@ -4,6 +4,7 @@ from excel_styles import PALETTES, PALETTE_LABELS, STYLE_LABELS
 
 from excel_calculations import normalize_calculation, calculate
 
+KINDS = {'expense_estimate':'Смета','family_budget':'Семейный бюджет','project_budget':'Бюджет проекта','price_list':'Прайс-лист','calc_table':'Учебные расчёты','startup_model':'Финансовая модель'}
 MAX_ROWS = 60
 
 def text(value, limit, label):
@@ -23,13 +24,24 @@ def number(value, label, maximum):
     return float(n)
 
 def normalize(body, draft=False):
-    if not isinstance(body, dict) or body.get('kind', 'expense_estimate') != 'expense_estimate':
-        raise ValueError('В новом экране пока доступна смета.')
+    if not isinstance(body, dict) or body.get('kind', 'expense_estimate') not in KINDS:
+        raise ValueError('Выберите вид таблицы.')
+    kind=body.get('kind','expense_estimate')
     title = text(body.get('title', ''), 180, 'Название')
     if not draft and not title: raise ValueError('Укажите название сметы.')
     style, palette = body.get('style', 'standard'), body.get('palette', 'green')
     if not isinstance(style, str) or style not in STYLE_LABELS or not isinstance(palette, str) or palette not in PALETTES:
         raise ValueError('Выберите оформление сметы.')
+    if kind != 'expense_estimate':
+        from excel_password import protection
+        from studio_settings import CONTENT_LANGUAGES
+        content=text(body.get('source',''),6000,'Исходные данные')
+        if not draft and not content: raise ValueError('Опишите таблицу или вставьте свои данные.')
+        lang=body.get('content_lang','ru')
+        if lang not in CONTENT_LANGUAGES: raise ValueError('Выберите язык файла.')
+        return dict(kind=kind,title=title or KINDS[kind],subtitle=text(body.get('subtitle',''),300,'Примечание'),
+                    source=content,style=style,palette=palette if style=='designer' else 'green', rows=[],
+                    calculation={'mode':'cost'},content_lang=lang, **protection(body,draft=draft))
     calculation = normalize_calculation(body.get('calculation'))
     rows = body.get('rows', [])
     if not isinstance(rows, list) or len(rows) > MAX_ROWS or (not draft and not rows):
@@ -51,10 +63,12 @@ def normalize(body, draft=False):
             if not draft: raise ValueError(f'Строка {i}: {e}')
     total = sum(Decimal(str(v)) for v in values)
     if abs(total) > Decimal('999999999999'): raise ValueError('Общая сумма слишком велика: максимум 999 999 999 999 ₽.')
-    return dict(kind='expense_estimate', title=title, subtitle=text(body.get('subtitle', ''), 300, 'Примечание'),
+    from excel_password import protection
+    protected = protection(body, draft=draft)
+    return dict(**protected, kind='expense_estimate', title=title, subtitle=text(body.get('subtitle', ''), 300, 'Примечание'),
                 style=style, palette=palette if style == 'designer' else 'green', rows=result, calculation=calculation,
                 source=text(body.get('source', ''), 6000, 'Исходные данные'))
 
 def catalog(cost):
-    return dict(ok=True, cost=cost, max_rows=MAX_ROWS, styles=STYLE_LABELS, palettes=PALETTE_LABELS,
+    return dict(ok=True, kinds=KINDS, cost=cost, max_rows=MAX_ROWS, styles=STYLE_LABELS, palettes=PALETTE_LABELS,
                 colors={key: list(value) for key, value in PALETTES.items()})

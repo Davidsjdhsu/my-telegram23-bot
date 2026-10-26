@@ -12,7 +12,7 @@ async function request(url,body){
 }
 function remember(id){try{sessionStorage.setItem(memoryKey,id)}catch{}}
 function forget(){try{sessionStorage.removeItem(memoryKey)}catch{}}
-function close(){clearTimeout(timer);generation++;if(['completed','build_failed'].includes(current?.status))forget();dialog.close();returnFocus?.focus();}
+function close(){clearTimeout(timer);generation++;if(['completed'].includes(current?.status))forget();dialog.close();returnFocus?.focus();}
 function shell(){
  if(dialog)return;
  dialog=el('dialog','op-dialog');dialog.setAttribute('aria-label','План вашей презентации');
@@ -47,12 +47,14 @@ function paint(row){
   item.append(el('span','op-number','Слайд '+(i+1)),card);list.append(item);
  });body.append(list);}
  clearTimeout(timer);
- if(['building','completed','build_failed'].includes(row.status)){
+ if(['building','delivering','completed','build_failed','interrupted','delivery_unknown'].includes(row.status)){
   const messages={building:['Собираем презентацию…','Создаём текст и изображения, затем проверим и отправим PPTX и PDF. Можно оставаться здесь — статус обновится автоматически.'],completed:['Готово ✓','Презентация собрана. PPTX и PDF уже отправлены в чат бота.'],build_failed:['Не удалось завершить сборку',row.error||'Проверьте сообщения бота перед повторной попыткой.']};
+  messages.building[1]=row.stage||messages.building[1];messages.delivering=['Отправляем файлы…',row.stage||'Сохраняем результат отправки'];messages.interrupted=['Можно продолжить',row.stage||'Заказ и готовые этапы сохранены.'];messages.delivery_unknown=['Нужно уточнить отправку','Проверьте файлы в чате и обратитесь в поддержку. Автоматической повторной отправки и списания не будет.'];
   const [title,note]=messages[row.status],f=footer(note),heading=el('div','op-build-state '+row.status,title);heading.setAttribute('role','status');heading.setAttribute('aria-live','polite');f.prepend(heading);
-  if(row.status==='building'){
+  if(['building','delivering'].includes(row.status)){
    remember(row.id);timer=setTimeout(()=>poll(row.id,generation),2500);
   }else{
+   if(['build_failed','interrupted'].includes(row.status)){const retry=el('button','op-primary','Продолжить · '+row.cost+' кредитов');retry.onclick=async()=>{retry.disabled=true;try{paint(await request('/studio/outline/'+encodeURIComponent(row.id)+'/confirm',{}));}catch(e){paint(row);dialog.querySelector('footer').prepend(el('p','op-error',e.message));}};f.append(retry);}
    const button=el('button','op-primary',row.status==='completed'?'Открыть файл':'Вернуться в чат');button.type='button';
    button.onclick=()=>window.AlixMobile.openFiles();f.append(button);
    // Keep the result available after a reload until the user closes it.
@@ -78,10 +80,11 @@ async function poll(id,ticket){
 export async function open(payload,trigger){
  shell();clearTimeout(timer);const ticket=++generation;returnFocus=trigger;currentPayload=payload;dialog.showModal();busy();
  try{const row=await request('/studio/outline',payload);remember(row.id);if(ticket!==generation)return;
-  if(['ready','building','completed','build_failed'].includes(row.status))paint(row);else await poll(row.id,ticket);
+  if(['ready','building','delivering','completed','build_failed','interrupted','delivery_unknown'].includes(row.status))paint(row);else await poll(row.id,ticket);
  }catch(e){if(ticket===generation)failure(e.message,()=>{close();open(payload,trigger)});}
 }
-export function resume(trigger){let id;try{id=sessionStorage.getItem(memoryKey)}catch{}if(!id)return;
+export async function resume(trigger){let id;try{id=sessionStorage.getItem(memoryKey)}catch{}
+ if(!id){try{const row=await request('/studio/outline/latest');if(row.empty||['ready','failed','completed'].includes(row.status))return;id=row.id;remember(id);}catch{return;}}
  shell();returnFocus=trigger;dialog.showModal();busy();poll(id,++generation);
 }
 window.addEventListener('pagehide',()=>{clearTimeout(timer);generation++});

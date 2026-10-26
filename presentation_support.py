@@ -95,6 +95,12 @@ def validate_plan(value, count):
     if not isinstance(accent, str) or (accent and not re.fullmatch(r'#[0-9a-fA-F]{6}', accent)):
         raise PresentationValidationError('Invalid accent')
     result['design'] = {'background': design['background'], 'accent': accent}
+    if 'background_mode' in design or 'diagram_layout' in design:
+        from presentation_options import options
+        try:
+            result['design'].update(options(design))
+        except ValueError as error:
+            raise PresentationValidationError(str(error)) from error
     if design.get('family') in PROFILES:
         secondary = design.get('secondary', '')
         if not isinstance(secondary, str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', secondary):

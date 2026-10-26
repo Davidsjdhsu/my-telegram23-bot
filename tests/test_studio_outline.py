@@ -57,7 +57,7 @@ class OutlineTests(unittest.IsolatedAsyncioTestCase):
   await self.client.post(url+'/confirm',json={},headers=HEADERS)
   self.build.set_result(None);await asyncio.sleep(0)
   result=await (await self.client.get(url)).json();self.assertEqual(result['status'],'build_failed');self.assertTrue(result['error'])
-  await self.client.post(url+'/confirm',json={},headers=HEADERS);self.submit.assert_awaited_once()
+  await self.client.post(url+'/confirm',json={},headers=HEADERS);self.assertEqual(self.submit.await_count,2)
  async def test_exception_and_cancelled_build_are_not_success(self):
   token=await self.create();row=self.studio.outline.rows[token]
   for cancelled in [False,True]:

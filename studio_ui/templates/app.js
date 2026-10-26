@@ -134,7 +134,7 @@ root.addEventListener('click',async e=>{
  else if(b.id==='rc-confirm'){
  const topic=$('#rc-topic').value.trim();if(!topic){$('#rc-status').textContent='Напишите тему презентации.';return;}
  if(b.disabled)return;
- b.disabled=true;try{outlineModule??=await import('./outline.js');await outlineModule.open({topic,kind:state.kind,style:state.style,key:selected().key,slides:state.slides,content_lang:window.AlixPreferences.content(),...(state.kind==='designer'?{background_mode:state.background_mode,diagram_layout:state.diagram_layout,...(state.palette?{palette:state.palette}:{})}:{})},b);}catch(e){$('#rc-status').textContent='Не удалось открыть план. Повторите попытку.';}finally{b.disabled=false;}
+ $('#rc-status').textContent='';b.disabled=true;try{outlineModule??=await import('./outline.js');await outlineModule.open({topic,kind:state.kind,style:state.style,key:selected().key,slides:state.slides,content_lang:window.AlixPreferences.content(),...(state.kind==='designer'?{background_mode:state.background_mode,diagram_layout:state.diagram_layout,...(state.palette?{palette:state.palette}:{})}:{})},b);}catch(e){$('#rc-status').textContent='Не удалось открыть план. Повторите попытку.';}finally{b.disabled=false;}
  }
  else if(b.id==='rc-zoom-open')$('#rc-zoom').showModal();
  else if(b.id==='rc-zoom-close')$('#rc-zoom').close();
@@ -159,4 +159,5 @@ window.addEventListener('openai:set_globals',e=>{
 });
 render();save();
  outlineModule=await import('./outline.js');outlineModule.resume($('#rc-confirm'));
+$('#rc-topic').addEventListener('input',()=>{if($('#rc-topic').value.trim())$('#rc-status').textContent=''});
 })().catch(()=>{document.getElementById('rc-status').textContent='Не удалось открыть каталог. Обновите страницу.';});

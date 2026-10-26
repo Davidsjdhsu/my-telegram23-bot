@@ -54,9 +54,20 @@ class WordWorkflow:
             try:
                 row=json.loads(p.read_text())
                 if row['status'] in ACTIVE:
-                    row.update(status='delivery_unknown' if row.get('sending') or row.get('billing_pending') else 'interrupted',stage='Работа прервалась. Можно продолжить.')
+                    row.update(status='delivery_unknown' if row.get('sending') else 'interrupted',stage='Работа прервалась. Можно продолжить.',restart_notice=True)
                     atomic(p,row)
             except (OSError,ValueError,KeyError):pass
+
+    async def notify_restarts(self, notify):
+        for path in self.root.glob('*/order.json'):
+            try:
+                row=json.loads(path.read_text())
+                if not row.get('restart_notice'): continue
+                text='Сборка файла прервалась при перезапуске. Данные сохранены. Откройте соответствующий раздел Word или Excel в меню и нажмите «Продолжить сборку».'
+                if row['status']=='delivery_unknown': text='Связь прервалась при отправке файла. Проверьте чат и обратитесь в поддержку. Автоматического повторного списания не будет.'
+                await notify(row['uid'],text)
+                row.pop('restart_notice',None);atomic(path,row)
+            except Exception: continue
 
     def public(self,job):
         r=job.row
@@ -153,7 +164,7 @@ class WordWorkflow:
         elif action!='build' or r['status'] not in ('ready','failed','interrupted'):raise web.HTTPBadRequest()
         expected=r.get('actual_cost') if action=='accept' else r['cost']
         if type(body.get('confirmedCost')) is not int or body['confirmedCost']!=expected:raise web.HTTPConflict(text='Подтвердите актуальную стоимость.')
-        if not self.afford(user['id'],expected):raise web.HTTPPaymentRequired(text='Недостаточно кредитов. Пополните баланс в профиле.')
+        if not r.get('billing_pending') and not self.afford(user['id'],expected):raise web.HTTPPaymentRequired(text='Недостаточно кредитов. Пополните баланс в профиле.')
         if any(value[0]==user['id'] for value in self.tasks.values()):raise web.HTTPConflict(text='Предыдущий документ ещё собирается.')
         r.update(status='building',stage='Готовим содержание',notice=None);job.save()
         task=asyncio.create_task(self.run(user,job,action));self.tasks[r['id']]=(user['id'],task)
@@ -166,17 +177,17 @@ class WordWorkflow:
                     await self.deliver(job)
                 else:await self.build(user,job,action)
             if job.row['status'] in ACTIVE:
-                job.row.update(status='delivery_unknown' if job.row.get('sending') or job.row.get('billing_pending') else 'failed',notice=job.row.get('notice') or 'Не удалось завершить сборку. Данные сохранены. Кредиты не списаны.');job.save()
+                job.row.update(status='delivery_unknown' if job.row.get('sending') else 'failed',notice=job.row.get('notice') or 'Не удалось завершить сборку. Данные сохранены. Кредиты не списаны.');job.save()
         except (Exception,asyncio.CancelledError) as e:
             # Only exception classes in logs; field values and documents stay private.
             print('studio_word_error',type(e).__name__,flush=True)
             notice=str(e) if isinstance(e,ValueError) else e.text if isinstance(e,web.HTTPException) else 'Работа прервалась. Данные сохранены. Можно продолжить.'
-            job.row.update(status='delivery_unknown' if job.row.get('sending') or job.row.get('billing_pending') else 'interrupted',notice=notice);job.save()
+            job.row.update(status='delivery_unknown' if job.row.get('sending') else 'interrupted',notice=notice);job.save()
         finally:self.tasks.pop(job.row['id'],None)
 
     async def deliver(self,job):
         r=job.row;cost=r['actual_cost']
-        if len(r['sent'])<2 and not self.afford(r['uid'],cost):raise web.HTTPPaymentRequired()
+        if not r.get('billing_pending') and len(r['sent'])<2 and not self.afford(r['uid'],cost):raise web.HTTPPaymentRequired()
         for ext in ('docx','pdf'):
             if ext in r['sent']:continue
             r['sending']=ext;job.save()

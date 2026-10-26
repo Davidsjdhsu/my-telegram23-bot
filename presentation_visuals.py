@@ -338,7 +338,7 @@ async def prepare_own_images(topic, slides, photos, captions, directory, inspect
     return assets, warnings
 
 
-async def prepare_images(topic, slides, photos, captions, directory, generate, inspect, parse_json, owned=None, *, resumable=False):
+async def prepare_images(topic, slides, photos, captions, directory, generate, inspect, parse_json, owned=None, *, resumable=False, checkpoint=None):
     """Reuse inspected uploads, then generate and review remaining image slots."""
     for slide in slides:
         if effective_diagram(slide):slide['_skip_ai_image'] = True
@@ -352,6 +352,7 @@ async def prepare_images(topic, slides, photos, captions, directory, generate, i
         assets, warnings = list(owned[0]), dict(owned[1])
         if len(assets) != len(slides):
             raise ImageDeliveryError('Uploaded photo slots differ from plan')
+    if checkpoint: await checkpoint(assets, warnings)
     unique = {a['digest'] for a in assets if a}
 
     context = next((s['_request_context'] for s in slides if s.get('_request_context')), topic)
@@ -413,6 +414,7 @@ async def prepare_images(topic, slides, photos, captions, directory, generate, i
                         asset['safe_frames'] = [s for s in allowed if isinstance(s,str) and s in
                             ('square','circle','triangle','hexagon','chamfer')] if isinstance(allowed,list) else []
                         assets[index] = asset
+                        if checkpoint: await checkpoint(assets, warnings)
                         for key in ('_image_issue', '_image_job', '_image_attempt', '_retry_scene'):
                             slide.pop(key, None)
                         return
@@ -443,6 +445,7 @@ async def prepare_images(topic, slides, photos, captions, directory, generate, i
     warnings['ai_omitted'] = sum(a is None and not s.get('chart') and not s.get('_skip_ai_image') for a,s in zip(assets,slides))
     log.info('presentation_images total=%d embedded=%d ai_omitted=%d own_unreadable=%d',
              len(slides), sum(bool(a) for a in assets), warnings['ai_omitted'], warnings['own_unreadable'])
+    if checkpoint: await checkpoint(assets, warnings)
     return assets, warnings
 
 

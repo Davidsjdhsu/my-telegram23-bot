@@ -74,7 +74,7 @@ class ExcelWorkflow(WordWorkflow):
         uid=self.studio.authorized(request)['user']['id']; self.studio.check_write(request)
         try: payload=normalize(await self.studio.body(request,64000))
         except ValueError as e: raise web.HTTPBadRequest(text=str(e))
-        identity={k:v for k,v in payload.items() if k!='source'}
+        identity={k:v for k,v in payload.items() if k!='source' or payload['kind']!='expense_estimate'}
         fingerprint=hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()
         rows=[]
         for path in self.root.glob('*/order.json'):
@@ -90,7 +90,7 @@ class ExcelWorkflow(WordWorkflow):
         if len(rows)>=40: raise web.HTTPTooManyRequests(text='Достигнут лимит сохранённых заявок. Попробуйте позже.')
         token=secrets.token_urlsafe(24); (self.root/token).mkdir(mode=0o700)
         job=WordJob(self,dict(id=token,uid=uid,created=time.time(),fingerprint=fingerprint,payload=payload,
-            cost=self.cost,actual_cost=self.cost,status='ready',stage='Проверьте смету и стоимость',title=payload['title'],sent=[]))
+            cost=self.cost,actual_cost=self.cost,status='ready',stage='Проверьте таблицу и стоимость',title=payload['title'],sent=[]))
         job.save(); return self.response(job)
 
     async def confirm(self, request):
@@ -102,24 +102,28 @@ class ExcelWorkflow(WordWorkflow):
         if r['status'] not in ('ready','interrupted','failed'): raise web.HTTPConflict()
         if type(body.get('confirmedCost')) is not int or body['confirmedCost']!=r['cost']:
             raise web.HTTPConflict(text='Подтвердите актуальную стоимость.')
-        if not self.afford(user['id'],r['cost']): raise web.HTTPPaymentRequired(text='Недостаточно кредитов. Пополните баланс в профиле.')
+        if not r.get('billing_pending') and not self.afford(user['id'],r['cost']): raise web.HTTPPaymentRequired(text='Недостаточно кредитов. Пополните баланс в профиле.')
         if any(v[0]==user['id'] for v in self.tasks.values()): raise web.HTTPConflict(text='Предыдущая таблица ещё собирается.')
-        r.update(status='building',stage='Собираем смету с формулами',notice=None); job.save()
+        r.update(status='building',stage='Собираем таблицу с формулами',notice=None); job.save()
         task=asyncio.create_task(self.run(user,job)); self.tasks[r['id']]=(user['id'],task)
         return self.response(job)
 
     async def run(self, user, job):
         try:
-            async with asyncio.timeout(180): await self.build(user,job)
+            async with asyncio.timeout(1200):
+                if (job.directory/'document.xlsx').exists(): await self.deliver(job)
+                else: await self.build(user,job)
+            if job.row['status'] in ('building','delivering'):
+                job.row.update(status='delivery_unknown' if job.row.get('sending') else 'interrupted',stage='Сборка не завершена. Данные сохранены.');job.save()
         except (Exception,asyncio.CancelledError) as e:
             print('studio_excel_error',type(e).__name__,flush=True)
             notice=str(e) if isinstance(e,ValueError) else e.text if isinstance(e,web.HTTPException) else 'Сборка прервалась. Данные сохранены, можно продолжить.'
-            job.row.update(status='delivery_unknown' if job.row.get('sending') or job.row.get('billing_pending') else 'interrupted',notice=notice); job.save()
+            job.row.update(status='delivery_unknown' if job.row.get('sending') else 'interrupted',notice=notice); job.save()
         finally: self.tasks.pop(job.row['id'],None)
 
     async def deliver(self, job):
         r=job.row
-        if not self.afford(r['uid'],r['cost']): raise web.HTTPPaymentRequired(text='Недостаточно кредитов.')
+        if not r.get('billing_pending') and not self.afford(r['uid'],r['cost']): raise web.HTTPPaymentRequired(text='Недостаточно кредитов.')
         if not r['sent']:
             r.update(status='delivering',stage='Отправляем Excel в чат',sending='xlsx'); job.save()
             await self.send(r['uid'],job.directory/'document.xlsx',r['title'])

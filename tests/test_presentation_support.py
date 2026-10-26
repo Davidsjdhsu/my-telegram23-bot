@@ -280,7 +280,8 @@ class BuildTests(unittest.IsolatedAsyncioTestCase):
             'main_kb':lambda *a,**kw:None,'FSInputFile':lambda path,filename:SimpleNamespace(path=path,filename=filename),
             'bot':SimpleNamespace(send_message=AsyncMock(),send_document=send_document),
             '_create_presentation_plan':AsyncMock(return_value=p)})
-        names=['_build_presentation','slide_background','rect','txt','fill_slide_text','slide_paragraphs',
+        env['_presentation_orders']=None
+        names=['_build_presentation','_build_presentation_impl','slide_background','rect','txt','fill_slide_text','slide_paragraphs',
                '_estimate_wrapped_lines','_relative_luminance','_blend_toward','safe_line','invert_colors',
                'sandwich_colors','card_fill_for','text_on_fill','wrap_lines','safe_filename']
         return load_functions(names,env),State(data),sent

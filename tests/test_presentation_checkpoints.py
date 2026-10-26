@@ -127,7 +127,7 @@ class CheckpointTests(unittest.IsolatedAsyncioTestCase):
             os.utime(checkpoint, (time.time()-recovery.TTL-1,)*2)
             self.assertIsNone(reader.load(td))
             os.utime(checkpoint, None)
-            (reader.directory / 'asset-0.jpg').write_bytes(b'corrupt')
+            (reader.directory / json.loads(checkpoint.read_text())['assets'][0]['path']).write_bytes(b'corrupt')
             self.assertIsNone(reader.load(td))
 
     async def test_other_user_or_changed_style_cannot_read_order(self):

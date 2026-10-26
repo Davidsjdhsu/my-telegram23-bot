@@ -13,10 +13,39 @@ class OutlinePreview:
     def __init__(self, studio, planner, submit):
         self.studio, self.planner, self.submit = studio, planner, submit
         self.rows = {}
+        self.path = studio.state_root/'outlines.json' if getattr(studio, 'state_root', None) else None
+        if self.path:
+            try:
+                self.rows = json.loads(self.path.read_text())
+                self.rows = {k:r for k,r in self.rows.items() if r['expires'] > time.time()}
+                for row in self.rows.values():
+                    if row['status'] in ('building', 'submitting'):
+                        row.update(status='interrupted', error='Сервер перезапустился. Заказ сохранён, можно продолжить.')
+                    elif row['status'] == 'planning':
+                        row.update(status='failed', error='Подготовка плана прервалась. Составьте план ещё раз.')
+                self.save()
+            except (OSError, ValueError, KeyError): self.rows = {}
+
+    def save(self):
+        if self.path:
+            from studio_word import atomic
+            atomic(self.path, {k:{f:v for f,v in r.items() if f!='task'} for k,r in self.rows.items()})
+
+    def sync_order(self, row):
+        service = getattr(self.studio, 'presentation_orders', None)
+        if service and row.get('data') and row['status'] not in ('ready','planning','failed'):
+            key = service.key(row['uid'], row['data'])
+            path = service.root/key/'order.json'
+            try:
+                order = json.loads(path.read_text())
+                row.update(status=order['status'], stage=order.get('stage'), charged=order.get('charged'))
+            except (OSError, ValueError): pass
+
 
     def response(self, row):
-        value = {'ok': True, 'id': row['id'], 'status': row['status'], 'cost': row['cost']}
-        if row['status'] in ('ready', 'building', 'completed', 'build_failed'):
+        self.sync_order(row)
+        value = {'stage': row.get('stage'), 'charged': row.get('charged'), 'ok': True, 'id': row['id'], 'status': row['status'], 'cost': row['cost']}
+        if row['status'] in ('ready', 'building', 'delivering', 'completed', 'build_failed', 'interrupted', 'delivery_unknown'):
             plan = row['data']['pres_plan']
             value.update(title=plan['title'], audience=plan['audience'],
                          titles=[s['title'] for s in plan['slides']], palette=row['palette'])
@@ -58,7 +87,7 @@ class OutlinePreview:
         elif any(k in body for k in ('background_mode', 'diagram_layout')):
             raise web.HTTPBadRequest()
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
-        now = time.monotonic()
+        now = time.time()
         self.rows = {k: r for k, r in self.rows.items() if r['expires'] > now}
         for row in self.rows.values():
             if row['uid'] == user['id']:
@@ -69,12 +98,16 @@ class OutlinePreview:
                 if now - row['created'] < 15:
                     return web.json_response({'ok': False, 'error': 'Подождите несколько секунд перед новым планом.'}, status=429)
         if len(self.rows) >= 12:
-            oldest = min(self.rows, key=lambda k: self.rows[k]['created'])
+            finished = [k for k,r in self.rows.items() if r['status'] in ('completed','failed','ready')]
+            if not finished:
+                raise web.HTTPTooManyRequests(text='Дождитесь завершения текущих сборок.')
+            oldest = min(finished, key=lambda k: self.rows[k]['created'])
             del self.rows[oldest]
         token = secrets.token_urlsafe(24)
-        row = dict(id=token, uid=user['id'], fingerprint=fingerprint, created=now, expires=now+3600,
+        row = dict(id=token, uid=user['id'], fingerprint=fingerprint, created=now, expires=now+86400,
                    status='planning', cost=presentation_cost(count, 'designer_'+style if kind == 'designer' else key), error=None)
         self.rows[token] = row
+        self.save()
         row['task'] = asyncio.create_task(self.prepare(row, user, payload))
         return self.response(row)
 
@@ -96,10 +129,13 @@ class OutlinePreview:
         except Exception:
             row.update(status='failed', error='Не удалось подготовить план. Попробуйте ещё раз. Кредиты не списаны.')
 
+        finally:
+            self.save()
+
     def get_row(self, request):
         user = self.studio.authorized(request)['user']
         row = self.rows.get(request.match_info['outline_id'])
-        if not row or row['uid'] != user['id'] or row['expires'] <= time.monotonic():
+        if not row or row['uid'] != user['id'] or row['expires'] <= time.time():
             raise web.HTTPNotFound(text='План устарел. Составьте его заново.')
         return user, row
 
@@ -110,15 +146,19 @@ class OutlinePreview:
     async def confirm(self, request):
         user, row = self.get_row(request)
         self.studio.check_write(request)
+        self.sync_order(row)
         # The client cannot override the confirmed plan, recipient, settings or cost.
-        if row['status'] in ('building', 'completed', 'build_failed'):
+        if row['status'] in ('building', 'delivering', 'completed'):
             return self.response(row)
-        if row['status'] != 'ready':
+        if row['status'] == 'delivery_unknown':
+            raise web.HTTPConflict(text='Проверьте файлы в чате и обратитесь в поддержку. Повторной отправки и списания не будет.')
+        if row['status'] not in ('ready', 'build_failed', 'interrupted'):
             return web.json_response({'ok': False, 'error': 'Дождитесь готового плана.'}, status=409)
         row['status'] = 'submitting'
+        self.save()
         try:
             task = await self.submit(user, copy.deepcopy(row['data']))
-            row.update(status='building', error=None, expires=time.monotonic()+7200)
+            row.update(status='building', error=None, expires=time.time()+86400)
             if isinstance(task, asyncio.Future):
                 task.add_done_callback(lambda done: self.build_finished(row, done))
             else:
@@ -130,6 +170,7 @@ class OutlinePreview:
         except Exception:
             row['status'] = 'ready'
             return web.json_response({'ok': False, 'error': 'Не удалось запустить сборку. Повторите попытку.'}, status=503)
+        self.save()
         return self.response(row)
 
     def build_finished(self, row, task):
@@ -138,17 +179,27 @@ class OutlinePreview:
             success = isinstance(result, dict) and result.get('delivered') is True
         except (Exception, asyncio.CancelledError):
             success = False
-        row.update(status='completed' if success else 'build_failed', expires=time.monotonic()+7200,
+        row.update(status='completed' if success else 'build_failed', expires=time.time()+86400,
                    error=None if success else 'Сборка не завершилась успешно. Подробности и доступные действия — в чате бота. Проверьте полученные файлы перед повторной попыткой.')
 
+        self.sync_order(row)
+        self.save()
+
+    async def latest(self, request):
+        uid=self.studio.authorized(request)['user']['id']
+        rows=[r for r in self.rows.values() if r['uid']==uid and r['expires']>time.time()]
+        if not rows: return web.json_response({'ok':True,'empty':True})
+        return self.response(max(rows,key=lambda r:r['created']))
+
     async def cleanup(self, app):
-        tasks = [r['task'] for r in self.rows.values() if not r['task'].done()]
+        tasks = [r['task'] for r in self.rows.values() if r.get('task') and not r['task'].done()]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
     def register(self, app):
         app.router.add_post('/studio/outline', self.create)
+        app.router.add_get('/studio/outline/latest', self.latest)
         app.router.add_get('/studio/outline/{outline_id}', self.status)
         app.router.add_post('/studio/outline/{outline_id}/confirm', self.confirm)
         app.on_cleanup.append(self.cleanup)

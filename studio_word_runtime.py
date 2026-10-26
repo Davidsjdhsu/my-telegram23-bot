@@ -71,26 +71,12 @@ def attach(studio,app,api):
 
     async def send(uid,path,title,ext):
         filename=api['safe_filename'](title,fallback='Документ')+'.'+ext
-        await api['bot'].send_document(uid,api['FSInputFile'](str(path),filename=filename),caption='Ваш документ · '+ext.upper())
+        message=await api['bot'].send_document(uid,api['FSInputFile'](str(path),filename=filename),caption='Ваш документ · '+ext.upper())
+        if api.get('_file_library'): api['_file_library'].record(uid,message,title,ext,str(path.parent))
+        return message
 
-    async def charge(uid,order_id,cost,title):
-        user=api['get_user'](uid);ledger=user.setdefault('studio_word_payments',{})
-        old=ledger.get(order_id)
-        if old:
-            if old['status']=='paid':return old['charged']
-            raise RuntimeError('Payment requires reconciliation')
-        if not api['can_afford'](uid,cost):raise web.HTTPPaymentRequired()
-        charged=0 if uid in api['ADMIN_IDS'] else cost
-        ledger[order_id]={'status':'pending','charged':charged}
-        if not await api['save_users_now']():
-            del ledger[order_id];raise RuntimeError('Unable to persist payment intent')
-        user['credits']=int(user.get('credits',0))-charged
-        ledger[order_id]={'status':'paid','charged':charged}
-        user['generations']=user.get('generations',0)+1
-        user.setdefault('history',[]).append('Word · '+title[:180])
-        if not await api['save_users_now']():raise RuntimeError('Unable to confirm payment')
-        api['note_success'](uid)
-        return charged
+    from order_billing import charge_callback
+    charge=charge_callback(api, 'studio_word_payments', 'Word')
 
     root=Path(api['USERS_FILE']).parent/'studio-word'
     service=WordWorkflow(studio,root,build,preview,send,charge,api['can_afford'])

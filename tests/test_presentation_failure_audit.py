@@ -70,5 +70,5 @@ class FailureAudit(unittest.IsolatedAsyncioTestCase):
         await env['_build_presentation'](MESSAGE, state)
         self.assertEqual(len(sent), 3)
         env['spend_credits'].assert_called_once()
-        self.assertEqual(env['ask_grok'].await_count, 2)
+        self.assertEqual(env['ask_grok'].await_count, 1)  # Accepted text survives retry.
         self.assertFalse(state.data)

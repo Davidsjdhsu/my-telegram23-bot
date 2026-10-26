@@ -96,7 +96,7 @@ class ExcelStyleFlowTests(unittest.IsolatedAsyncioTestCase):
                 signature_line=AsyncMock(return_value=''),main_kb=lambda *a,**kw:None)
             env=load_functions(['excel_build','_handle_miniapp_payload'],e)
             await env['_handle_miniapp_payload'](msg,state,{'kind':kind,'content':'Данные',
-                'mode':'user','excel_style':style,'excel_palette':palette,'excel_protect':protect},'gen_excel')
+                'mode':'user','excel_style':style,'excel_palette':palette,'excel_protect':protect,'excel_password':'Test-2026' if protect else ''},'gen_excel')
             self.assertEqual(order,['send'] if fail_send else ['send','charge'])
             self.assertEqual(user['generations'],0 if fail_send else 1)
             if fail_send: os.remove('/tmp/xl_-903020.xlsx')

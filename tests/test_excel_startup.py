@@ -129,7 +129,7 @@ class StartupFlowTests(unittest.IsolatedAsyncioTestCase):
                 FSInputFile=lambda path,**kw:path,datetime=datetime,os=os,spend_credits=lambda *a:order.append('charge'),
                 note_success=Mock(),signature_line=AsyncMock(return_value=''),main_kb=lambda *a,**k:None,
                 Form=SimpleNamespace(waiting_excel_confirm='confirm'),excel_confirm_kb=lambda _:None))
-            await env['_handle_miniapp_payload'](msg,state,dict(kind='startup_model',content='Данные',mode='ai',excel_style='designer',excel_palette='burgundy',excel_protect=protect),'gen_excel')
+            await env['_handle_miniapp_payload'](msg,state,dict(kind='startup_model',content='Данные',mode='ai',excel_style='designer',excel_palette='burgundy',excel_protect=protect,excel_password='Test-2026' if protect else ''),'gen_excel')
             self.assertEqual(data['excel_mode'],'user')
             self.assertEqual(order,[] if invalid else ['send'] if fail else ['send','charge'])
             if invalid:state.clear.assert_not_awaited();state.set_state.assert_awaited_with('confirm')

@@ -40,11 +40,15 @@ PUBLIC_SHELL.update('templates/' + name for name in re.findall(
 
 
 class Studio:
-    def __init__(self, verify, send_file, action, origin, profile=None, menu_action=None, outline_planner=None, outline_submit=None, settings=None, billing=None):
+    def __init__(self, verify, send_file, action, origin, profile=None, menu_action=None, outline_planner=None, outline_submit=None, settings=None, billing=None, state_root=None, presentation_orders=None):
         self.verify, self.send_file, self.action = verify, send_file, action
         self.profile_callback, self.menu_action = profile, menu_action
         self.settings_callback = settings
         self.billing = billing
+        self.state_root = Path(state_root) if state_root else None
+        self.presentation_orders = presentation_orders
+        if self.state_root:
+            self.state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.forms_cache = None
         self.outline = None
         if outline_planner and outline_submit:
@@ -59,6 +63,17 @@ class Studio:
 
     def authorized(self, request):
         s = self.sessions.get(request.cookies.get(COOKIE, ''))
+        if not s and self.state_root:
+            token = request.cookies.get(COOKIE, '')
+            if isinstance(token, str) and 20 <= len(token) <= 100:
+                try:
+                    saved = json.loads((self.state_root/'sessions.json').read_text())
+                    record = saved.get(hashlib.sha256(token.encode()).hexdigest())
+                    if record and record['expires'] > time.time() and is_pilot_user(record['user'].get('id')):
+                        s = {'expires': time.monotonic() + record['expires'] - time.time(), 'user': record['user']}
+                        self.sessions[token] = s
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
         if not s or s['expires'] < time.monotonic():
             raise web.HTTPUnauthorized(text='Откройте «Меню» заново в Telegram.')
         return s
@@ -106,6 +121,15 @@ class Studio:
             self.sessions.pop(next(iter(self.sessions)))
         token = secrets.token_urlsafe(32)
         self.sessions[token] = {'expires': now + 7200, 'user': user}
+        if self.state_root:
+            from studio_word import atomic
+            path = self.state_root/'sessions.json'
+            try: saved = json.loads(path.read_text())
+            except (OSError, ValueError): saved = {}
+            saved = {k:v for k,v in saved.items() if v['expires'] > time.time()}
+            saved[hashlib.sha256(token.encode()).hexdigest()] = {'expires': time.time()+7200, 'user': user}
+            saved = dict(sorted(saved.items(), key=lambda item:item[1]['expires'])[-32:])
+            atomic(path, saved)
         response = web.json_response({'ok': True, 'version': VERSION}, headers={'Cache-Control':'no-store'})
         response.set_cookie(COOKIE, token, max_age=7200, secure=True, httponly=True, samesite='Strict', path='/studio/')
         return response

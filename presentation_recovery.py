@@ -90,7 +90,7 @@ class PresentationRecovery:
             for i, asset in enumerate(assets):
                 if not asset:
                     continue
-                source = self.directory / f'asset-{i}.jpg'
+                source = self.directory / Path(asset['path']).name
                 raw = source.read_bytes()
                 if hashlib.sha256(raw).hexdigest() != asset.pop('file_hash'):
                     return None
@@ -132,9 +132,11 @@ class PresentationRecovery:
                     stored.append(None)
                     continue
                 raw = Path(asset['path']).read_bytes()
-                target = self.directory / f'asset-{i}.jpg'
-                target.write_bytes(raw)
-                stored.append({**asset, 'path': target.name, 'file_hash': hashlib.sha256(raw).hexdigest()})
+                digest = hashlib.sha256(raw).hexdigest()
+                target = self.directory / f'asset-{i}-{digest}.jpg'
+                if not target.exists():
+                    target.write_bytes(raw)
+                stored.append({**asset, 'path': target.name, 'file_hash': digest})
             value = dict(version=VERSION, key=self.key, plan=plan, content=content,
                          slides=slides, assets=stored, warnings=warnings)
             temporary = self.directory / 'checkpoint.tmp'

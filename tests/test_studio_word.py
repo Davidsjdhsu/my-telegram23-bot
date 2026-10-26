@@ -128,6 +128,9 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
   self.assertEqual(restored.get(PILOT_UID,a['id']).row['status'],'interrupted')
   job.row.update(status='delivering',billing_pending=True);job.save()
   restored=WordWorkflow(self.studio,self.tmp.name,self.builder,self.preview,self.send,self.charge,lambda *a:True)
+  self.assertEqual(restored.get(PILOT_UID,a['id']).row['status'],'interrupted')
+  job.row.update(status='delivering',sending='pdf');job.save()
+  restored=WordWorkflow(self.studio,self.tmp.name,self.builder,self.preview,self.send,self.charge,lambda *a:True)
   self.assertEqual(restored.get(PILOT_UID,a['id']).row['status'],'delivery_unknown')
 
 class MainIntegrationTests(unittest.IsolatedAsyncioTestCase):
