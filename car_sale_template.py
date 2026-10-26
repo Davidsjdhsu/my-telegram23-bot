@@ -15,7 +15,7 @@ from docx import Document
 ASSETS = Path(__file__).resolve().parent / 'assets' / 'word'
 TEMPLATE = ASSETS / 'dkp_car_ru_v1.docx'
 FIELDS = json.loads((ASSETS / 'dkp_car_ru_v1.fields.json').read_text(encoding='utf-8'))
-VERSION = 'dkp_car_ru_approved_v4'
+VERSION = 'dkp_car_ru_approved_v4' + '-prices-v2'
 TITLE = 'Договор купли-продажи автомобиля'
 LABELS = {
     'city': 'Город', 'date': 'Дата договора', 'seller_name': 'ФИО продавца',
@@ -137,6 +137,8 @@ def render(path, fields=None):
 
 
 async def preview(m, state, api):
+    from service_pricing import VERSION
+    await state.update_data(price_version=VERSION)
     data = await state.get_data()
     issue = scope_issue(data)
     if issue:
@@ -178,7 +180,7 @@ async def preview(m, state, api):
               'Пропуски останутся видимыми в Word и PDF для заполнения вручную. '
               'Проверь, что все переданные сведения учтены. Для уточнений нажми «Добавить или изменить информацию» '
               'и напиши «Название поля: значение».',
-              'Сборка — ' + str(api['word_cost'](2)) + ' кредитов. Нажимая кнопку сборки, '
+              'Сборка — ' + str(api['word_cost'](2, 'dkp_car')) + ' кредитов. Нажимая кнопку сборки, '
               'ты подтверждаешь эти данные, условия шаблона и выпуск документа с указанными пропусками.']
     chunks=[];chunk=''
     for line in lines:
@@ -199,7 +201,7 @@ async def build(m, state, api):
         await preview(m, state, api)
         return
     uid = m.from_user.id
-    cost = api['word_cost'](2)
+    cost = api['word_cost'](2, 'dkp_car')
     if not api['can_afford'](uid, cost) and not order.get('charged'):
         await api['send_no_credits_notice'](m, state, api['user_lang'](uid))
         return
@@ -240,7 +242,8 @@ async def build(m, state, api):
                 del completed[:-30]
                 user['generations'] += 1
                 user['history'].append(datetime.now().strftime('%d.%m %H:%M')+' — '+TITLE)
-                api['spend_credits'](uid, 'word', amount=api['word_cost'](min(2, order['actual_pages'])))
+                api['spend_credits'](uid, 'word', amount=api['word_cost'](2, 'dkp_car'), operation_id='car-sale:'+token)
+            if api.get('billing_saved'): await api['billing_saved']()
             order['charged'] = True
             await state.update_data(car_sale=order)
         api['note_success'](uid)

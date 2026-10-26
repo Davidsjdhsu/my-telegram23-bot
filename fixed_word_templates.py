@@ -29,7 +29,7 @@ def spec_for(data):
     return CATALOG[data['word_kind']]
 
 def fingerprint(data):
-    return hashlib.sha256((spec_for(data)['version']+'\n'+INPUT_VERSION+'\n'+source_text(data)).encode()).hexdigest()
+    return hashlib.sha256((spec_for(data)['version']+'\n2026-10-26-prices\n'+INPUT_VERSION+'\n'+source_text(data)).encode()).hexdigest()
 
 def form_text(kind):
     return '\n'.join(label+': ' for label in CATALOG[kind]['fields'].values())
@@ -95,6 +95,8 @@ def scope_issue(data):
     return ''
 
 async def preview(m,state,api):
+    from service_pricing import VERSION
+    await state.update_data(price_version=VERSION)
     data=await state.get_data();spec=spec_for(data);issue=scope_issue(data)
     if issue:
         await state.update_data(fixed_word=None)
@@ -123,7 +125,7 @@ async def preview(m,state,api):
     lines += ['',('Не заполнено: '+', '.join(missing)+'.') if missing else 'Все поля заполнены.',
         'Неизвестные сведения останутся в квадратных скобках. Проверь, что все переданные условия учтены. '
         'Для исправления нажми «Добавить или изменить информацию» и пришли «Название поля: значение».',
-        'Word и PDF: до '+str(api['word_cost'](2))+' кредитов по текущей цене за страницу; дополнительные страницы цену не увеличивают. '
+        'Word и PDF: '+str(api['word_cost'](2, data['word_kind']))+' кредитов за документ; число страниц цену не меняет. '
         'Нажимая «Собрать документ», ты подтверждаешь применимость шаблона, сведения и выпуск с указанными пропусками.']
     await send_chunks(m,'\n'.join(lines),api['word_confirm_kb']('ru'))
     await state.set_state(api['Form'].waiting_word_confirm)
@@ -141,7 +143,7 @@ async def build(m,state,api):
     if scope_issue(data):await preview(m,state,api);return
     if order.get('fingerprint')!=fingerprint(data):await preview(m,state,api);return
     uid=m.from_user.id
-    if not api['can_afford'](uid,api['word_cost'](2)) and not order.get('charged'):
+    if not api['can_afford'](uid,api['word_cost'](2, data['word_kind'])) and not order.get('charged'):
         await api['send_no_credits_notice'](m,state,api['user_lang'](uid));return
     ok,reason=api['start_job'](uid)
     if not ok:await m.answer(reason);return
@@ -159,13 +161,14 @@ async def build(m,state,api):
             if not order.get('sent_'+ext):
                 await m.answer_document(api['FSInputFile'](str(path),filename=spec['title']+'.'+ext),caption=spec['title']+' · '+ext.upper()+' · проверь незаполненные поля')
                 order['sent_'+ext]=True;await state.update_data(fixed_word=order)
-        cost=api['word_cost'](min(2,order['pages']))
+        cost=api['word_cost'](2, data['word_kind'])
         if not order.get('charged'):
             user=api['get_user'](uid);done=user.setdefault('fixed_word_completed_orders',[])
             if directory.name not in done:
                 done.append(directory.name);del done[:-30]
                 user['generations']+=1;user['history'].append(datetime.now().strftime('%d.%m %H:%M')+' — '+spec['title'])
-                api['spend_credits'](uid,'word',amount=cost)
+                api['spend_credits'](uid,'word',amount=cost,operation_id='fixed-word:'+directory.name)
+            if api.get('billing_saved'): await api['billing_saved']()
             order['charged']=True;await state.update_data(fixed_word=order)
         api['note_success'](uid)
         print('Fixed word delivered kind='+data['word_kind']+' version='+spec['version']+' pages='+str(order['pages']),flush=True)

@@ -70,5 +70,6 @@ def normalize(body, draft=False):
                 source=text(body.get('source', ''), 6000, 'Исходные данные'))
 
 def catalog(cost):
-    return dict(ok=True, kinds=KINDS, cost=cost, max_rows=MAX_ROWS, styles=STYLE_LABELS, palettes=PALETTE_LABELS,
+    from service_pricing import EXCEL
+    return dict(ok=True, kinds=KINDS, cost=cost, costs=EXCEL, max_rows=MAX_ROWS, styles=STYLE_LABELS, palettes=PALETTE_LABELS,
                 colors={key: list(value) for key, value in PALETTES.items()})

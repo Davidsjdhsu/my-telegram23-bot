@@ -32,6 +32,9 @@ def catalog():
     out.append(dict(kind='resume',title='Резюме',category='physical',cover=False,fixed=False,
         fields={'name':'ФИО','position':'Желаемая должность','phone':'Телефон','email':'Электронная почта','city':'Город'},
         notice='Предпросмотр первой страницы. Опыт и навыки укажите в исходных данных.'))
+    from service_pricing import word_price, GENERATED_WORD
+    for row in out:
+        row["fixed_price"] = None if row["kind"] in GENERATED_WORD else word_price(2,row["kind"])
     return out
 
 SPECS={r['kind']:r for r in catalog()}
@@ -73,7 +76,9 @@ def normalize(body, *, preview=False):
             if issue:raise ValueError(issue)
     return value
 
-def price(payload):return payload['pages']*5
+def price(payload):
+    from service_pricing import word_price
+    return word_price(payload['pages'],payload['kind'])
 
 def render_preview(path,payload,generic_render=None):
     kind=payload['kind'];fields=payload['fields'];title=payload['topic'] or 'Тема работы'

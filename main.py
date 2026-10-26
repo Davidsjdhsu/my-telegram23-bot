@@ -9,6 +9,8 @@ from word_quality import (
 )
 from excel_styles import normalize_excel_appearance, STYLE_LABELS as EXCEL_STYLES, PALETTE_LABELS as EXCEL_PALETTES
 import os
+from wallet import BillingPersistenceError, persistence_notice, request_key
+from service_pricing import word_price, excel_price, public_tariffs, VERSION as PRICE_VERSION
 import asyncio
 import tempfile
 from presentation_pricing import presentation_cost, presentation_price_notice, PRESENTATION_CREDITS_PER_SLIDE, PRESENTATION_MIN_SLIDES
@@ -280,6 +282,7 @@ def _save_processed_payments():
         print("Не удалось сохранить processed_payments.json:", e)
 
 
+_yookassa_inflight = set()
 _processed_yookassa_payment_ids = _load_processed_payments()  # защита от повторной обработки одного и того же вебхука (хранится на диске)
 # Уже зачисленные платежи Telegram Payments (telegram_payment_charge_id) - защита от повторного
 # начисления, если Telegram доставит одно и то же обновление дважды (например, после рестарта).
@@ -605,7 +608,7 @@ PLAN_LIMITS = {"premium": 15}
 # формат. PLAN_LIMITS выше оставлен как есть (на него по-прежнему смотрит
 # статистика /grant и старая логика), но реальный допуск к генерации теперь
 # решает can_afford() ниже, а не can_generate().
-CREDIT_COSTS = {"presentation": 10, "word": 5, "excel": 5, "template": 0, "image": 10, "vision": 3}
+CREDIT_COSTS = {"presentation": 10, "word": 5, "excel": 20, "chat": 0.5, "voice": 3, "template": 0, "image": 10, "vision": 3}
 STARTING_CREDITS = 100  # стартовый баланс для новых пользователей
 
 # Презентация стоит не фиксированную сумму, а по числу слайдов - честнее, чем плоская
@@ -618,13 +621,9 @@ WORD_MIN_PAGES = 1
 WORD_MAX_PAGES = 40  # раньше было 20 - не хватало на длинные работы вроде курсовой на 30 страниц
 
 
-def word_cost(pages) -> int:
-    try:
-        n = int(pages)
-    except (TypeError, ValueError):
-        n = WORD_MIN_PAGES
-    n = max(WORD_MIN_PAGES, min(WORD_MAX_PAGES, n))
-    return n * WORD_CREDITS_PER_PAGE
+def word_cost(pages, kind='doc') -> int:
+    from service_pricing import word_price
+    return word_price(pages, kind)
 
 
 def normalize_word_pages(pages) -> int:
@@ -756,11 +755,13 @@ def _build_users_payload():
             "lang_chosen": bool(u.get("lang_chosen")),
             "control_mode": u.get("control_mode") or "buttons",
             "control_mode_chosen": bool(u.get("control_mode_chosen")),
-            "credits": int(u.get("credits") if u.get("credits") is not None else STARTING_CREDITS),
+            "credits": u.get("credits") if u.get("credits") is not None else STARTING_CREDITS,
             "chat_history": list(u.get("chat_history") or [])[-30:],
             "chat_summary": u.get("chat_summary") or "",
             "known_facts": list(u.get("known_facts") or [])[-15:],
         }
+        from wallet import snapshot
+        payload[str(uid)].update(snapshot(u))
         # Учёт чата - пишем только если есть что писать, чтобы не раздувать файл.
         if u.get("chat_msgs"):
             payload[str(uid)]["chat_msgs"] = int(u.get("chat_msgs") or 0)
@@ -806,14 +807,9 @@ _save_users_lock = asyncio.Lock()
 
 
 async def _save_users_async():
-    # Снимок данных берётся сразу (до ожидания лока), чтобы каждая запись несла
-    # самые свежие на момент своего вызова данные. Сам asyncio.Lock не столько
-    # защищает от гонки (payload уже неизменяемый снимок), сколько гарантирует,
-    # что параллельные вызовы допишутся на диск строго в том порядке, в котором
-    # были запланированы - иначе поздний, но более свежий снимок мог бы попасть
-    # на диск РАНЬШЕ, а следом его молча затёр бы более старый снимок.
-    payload = _build_users_payload()
     async with _save_users_lock:
+        # Capture under the lock: an older waiting snapshot must not overwrite a newer receipt.
+        payload = _build_users_payload()
         return await asyncio.to_thread(_write_users_payload, payload)
 
 
@@ -1278,9 +1274,15 @@ async def topup_custom_callback(cq: CallbackQuery, state: FSMContext):
 
 @dp.pre_checkout_query()
 async def pre_checkout_handler(pcq: PreCheckoutQuery):
-    """Telegram требует ответить в течение 10 секунд - подтверждаем всегда, это ещё
-    не списание денег, а просто "да, готовы принять заказ" перед вводом карты."""
-    await bot.answer_pre_checkout_query(pcq.id, ok=True)
+    """Validate the invoice before accepting money, using the same 1:1 contract."""
+    payload = str(pcq.invoice_payload or '')
+    try:
+        credits = int(payload.split(':')[-1])
+        valid = payload.startswith('credits:') and credits > 0 and pcq.currency == 'RUB' and pcq.total_amount == credits * 100
+    except (ValueError, TypeError):
+        valid = False
+    await bot.answer_pre_checkout_query(pcq.id, ok=valid, **({} if valid else {'error_message':'Счёт устарел или содержит неверную сумму. Создайте новый через «Пополнить баланс».'}))
+
 
 
 @dp.message(F.successful_payment)
@@ -1296,14 +1298,22 @@ async def successful_payment_handler(m: Message):
         credits_bought = 0
     charge_id = str(getattr(m.successful_payment, "telegram_payment_charge_id", "") or "")
     if charge_id and charge_id in _processed_tg_charge_ids:
-        print("Повторное уведомление об оплате Telegram проигнорировано:", charge_id)
+        await billing_saved()
         return
     u = get_user(m.from_user.id)
-    u["credits"] = int(u.get("credits") or 0) + credits_bought
+    if not payload.startswith('credits:') or credits_bought <= 0 or not charge_id or m.successful_payment.currency != 'RUB' or m.successful_payment.total_amount != credits_bought * 100:
+        await _notify_admins('Платёж Telegram требует сверки: неверные сумма или идентификатор.')
+        return
+    from wallet import apply
+    apply(u, 'telegram:'+charge_id, credits_bought, 'Пополнение баланса', 'topup')
     if charge_id:
         _processed_tg_charge_ids.add(charge_id)
     # Ждём реальной записи на диск: баланс и отметка о платеже уходят одним файлом.
-    saved = await save_users_now()
+    try:
+        await billing_saved()
+        saved = True
+    except BillingPersistenceError:
+        saved = False
     log_payment("telegram", m.from_user.id, charge_id, m.successful_payment.total_amount / 100,
                 credits_bought, u["credits"])
     if not saved:
@@ -1311,6 +1321,9 @@ async def successful_payment_handler(m: Message):
             f"⚠️ Оплата от {m.from_user.id} на {credits_bought} кредитов зачислена, но базу не удалось "
             "записать на диск. Проверьте диск и логи."
         )
+    if not saved:
+        await m.answer("Оплата получена. Сохранение баланса задерживается; повторно оплачивать не нужно. Поддержка уведомлена: @AlixDocSupport.")
+        return
     await m.answer(tr("msg_payment_success", lang, credits=credits_bought, balance=u["credits"]))
     if PAYMENT_NOTIFY_IDS:
         uname = f"@{m.from_user.username}" if m.from_user.username else str(m.from_user.id)
@@ -1817,7 +1830,7 @@ TR = {
         "es": "⚠️ Pediste {pages} páginas, pero diste muy pocos datos. Con esta extensión, sin detalles el documento corre el riesgo de salir incompleto, repetitivo o con errores. Te recomendamos añadir hechos, ideas clave y estructura; también puedes continuar así, pero el resultado será más flojo.",
         "fr": "⚠️ Vous avez demandé {pages} pages, mais très peu d'informations. À cette longueur, sans détails, le document risque d'être incomplet, répétitif ou de contenir des erreurs. Nous recommandons d'ajouter des faits, des points clés et une structure — vous pouvez aussi continuer tel quel, mais le résultat sera plus faible.",
     },
-    "msg_which_size": {"ru": "Сколько страниц? 1 страница = 5 кредитов. Выберите кнопкой или напишите своё число (1-40).",
+    "msg_which_size": {"ru": "Сколько страниц? 1 страница = 5 кредитов, минимум 20 за документ. Выберите кнопкой или напишите своё число (1-40).",
                        "en": "How many pages? 1 page = 5 credits. Tap a button or type your own number (1-40).",
                        "de": "Wie viele Seiten? 1 Seite = 5 Credits. Wähle einen Button oder gib eine eigene Zahl ein (1-40).",
                        "ar": "كم عدد الصفحات؟ الصفحة الواحدة = 5 كريدت. اختر زرًا أو اكتب رقمًا خاصًا بك (1-40).",
@@ -2087,13 +2100,7 @@ TR = {
                              "zh": "没能理解。请用下方按钮选择操作，或输入 /cancel 重新开始。",
                              "es": "No entendí. Elige una acción con el botón de abajo, o escribe /cancel para empezar de nuevo.",
                              "fr": "Je n'ai pas compris. Choisis une action avec le bouton ci-dessous, ou tape /cancel pour recommencer."},
-    "msg_plan_info": {"ru": "💳 Баланс: {credits} кредитов\nОбычная презентация — 16 кр./слайд · Дизайнерская — 32 кр./слайд · Конструктор — 16–32 кр./слайд (фото сверх первого +5, узор +2) · Word — 5 кр./страница · Excel — 5 кр. · распознавание фото — 3 кр. · шаблон бесплатно",
-                      "en": "💳 Balance: {credits} credits\nStandard presentation — 16 cr./slide · Designer — 32 cr./slide · Constructor — 16–32 cr./slide (extra photo +5, pattern +2) · Word/Excel — 5 cr. · photo recognition — 3 cr. · template is free",
-                      "de": "💳 Guthaben: {credits} Credits\nStandardpräsentation — 16 Cr./Folie · Design — 32 Cr./Folie · Word/Excel — 5 Cr. · Fotoerkennung — 3 Cr. · Vorlage kostenlos",
-                      "ar": "💳 الرصيد: {credits} كريدت\nعرض عادي — 16 لكل شريحة · عرض مصمم — 32 لكل شريحة · وورد/إكسل — 5 · التعرف على الصور — 3 · القالب مجاني",
-                      "zh": "💳 余额：{credits} 积分\n普通演示文稿 — 每页16积分 · 设计版 — 每页32积分 · Word/Excel — 5 积分 · 图片识别 — 3 积分 · 模板免费",
-                      "es": "💳 Saldo: {credits} créditos\nPresentación normal — 16 cr./diapositiva · De diseño — 32 cr./diapositiva · Word/Excel — 5 cr. · reconocimiento de fotos — 3 cr. · plantilla gratis",
-                      "fr": "💳 Solde : {credits} crédits\nPrésentation standard — 16 cr./diapositive · Design — 32 cr./diapositive · Word/Excel — 5 cr. · reconnaissance photo — 3 cr. · modèle gratuit"},
+    "msg_plan_info": {"ru": "💳 Баланс: {credits} кредитов\nПрезентация: обычная — 10, дизайнерская — 20 за слайд. Конструктор — 10–20 за слайд (основа 10, фото сверх первого +3, узор +2, максимум 20). Word: простые документы — 20, подробные договоры — 40 за файл; учебные работы и обычный текст — 5 за страницу, минимум 20. Excel — 20, бюджет проекта и финансовая модель — 40. Чат — 0,5 за ответ, фото — 3, голос — 3. Пустые шаблоны и навигация бесплатны.", "en": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. Chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "de": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. Chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "ar": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. Chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "zh": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. Chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "es": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. Chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "fr": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. Chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free."},
     "msg_pptx_ready": {
         "ru": "Готово ✅\n\nPDF — для просмотра: все слайды с фотографиями и оформлением. Открывай его прямо в Telegram. PPTX — для редактирования в PowerPoint, Keynote или Google Презентациях.",
         "en": "Done ✅\n\nPDF contains all slides, photographs and design for viewing in Telegram. Use PPTX for editing in PowerPoint, Keynote or Google Slides.",
@@ -2861,6 +2868,9 @@ class VoiceToTextMiddleware(BaseMiddleware):
         if isinstance(event, Message) and event.voice and not event.text:
             uid = event.from_user.id
             lang = user_lang(uid)
+            if not can_afford(uid, CREDIT_COSTS["voice"]):
+                await event.answer("Недостаточно кредитов. Голосовое сообщение — 3 кредита.")
+                return
             if voice_rate_limited(uid):
                 await event.answer(tr("msg_chat_rate_limited", lang))
                 return
@@ -2918,14 +2928,14 @@ def can_afford(uid, cost):
     if uid in ADMIN_IDS:
         return True
     u = get_user(uid)
-    held = sum(r.get("cost", 0) for r in u.get("constructor_orders", {}).values() if r.get("status") == "pending")
+    held = u.get("_chat_reserved", 0) + sum(r.get("cost", 0) for r in u.get("constructor_orders", {}).values() if r.get("status") == "pending")
     held += sum(r.get("charged", 0) for r in u.get("studio_word_payments", {}).values() if r.get("status") == "pending")
     held += sum(r.get("charged", 0) for r in u.get("studio_excel_payments", {}).values() if r.get("status") == "pending")
     held += sum(r.get("charged", 0) for r in u.get("presentation_payments", {}).values() if r.get("status") == "pending")
     return u.get("credits", 0) - held >= cost
 
 
-def spend_credits(uid, action, amount=None):
+def spend_credits(uid, action, amount=None, *, operation_id=None, title=None):
     """Списывает стоимость завершённой генерации. Вызывать один раз, сразу после
     того как результат уже отправлен пользователю - до этого момента ошибка
     генерации не должна списывать кредиты. amount - явная сумма (используется для
@@ -2936,9 +2946,25 @@ def spend_credits(uid, action, amount=None):
     if uid in ADMIN_IDS:
         return u.get("credits", 0)
     cost = amount if amount is not None else CREDIT_COSTS.get(action, 0)
-    u["credits"] = max(0, int(u.get("credits") or 0) - cost)
+    from wallet import apply
+    import uuid
+    labels={'word':'Документ Word','excel':'Таблица Excel','presentation':'Презентация','vision':'Распознавание фото','chat':'Ответ в чате','voice':'Голосовое сообщение','image':'Изображение','template':'Пустой шаблон'}
+    if cost:
+        apply(u, operation_id or 'delivery:'+uuid.uuid4().hex, -cost, title or labels.get(action,action))
     save_users()
     return u["credits"]
+
+
+async def billing_saved():
+    for attempt in range(3):
+        if await save_users_now():
+            return
+        if attempt < 2:
+            await asyncio.sleep(0.2)
+    try:
+        await _notify_admins('Не удалось сохранить финансовую операцию. Нужна сверка диска и истории; повторное списание не запускать.')
+    finally:
+        raise BillingPersistenceError('Unable to persist payment receipt')
 
 
 # --- Защита от флуда и DDoS ------------------------------------------------
@@ -3017,6 +3043,8 @@ def start_job(uid):
     если в будущем сюда добавится вызов из ThreadPoolExecutor/run_in_executor."""
     global _active_generations
     u = get_user(uid)
+    if u.get("_chat_reserved"):
+        return False, "Дождитесь ответа на предыдущее сообщение."
 
     with _jobs_lock:
         if u.get("busy"):
@@ -3342,6 +3370,7 @@ async def handle_vision_upload(m: Message, state: FSMContext, local_path: str, c
 
 
 async def _handle_vision_upload_impl(m: Message, state: FSMContext, local_path: str, caption: str):
+    from wallet import request_key
     """Общий путь для фото из галереи и картинки, присланной как документ."""
     lang = user_lang(m.from_user.id)
     uid = m.from_user.id
@@ -3354,7 +3383,7 @@ async def _handle_vision_upload_impl(m: Message, state: FSMContext, local_path: 
         await m.answer(reason)
         return
     wait_text = {
-        "ru": "Смотрю фото: распознаю текст и разберу задание…",
+        "ru": "Смотрю фото: распознаю текст и разберу задание… Стоимость успешного разбора — 3 кредита.",
         "en": "Looking at the photo: reading the text and solving it…",
         "de": "Ich schaue mir das Foto an…",
         "es": "Estoy leyendo la foto…",
@@ -3377,7 +3406,8 @@ async def _handle_vision_upload_impl(m: Message, state: FSMContext, local_path: 
         )
         if readable is None:
             return
-        spend_credits(uid, "vision")
+        spend_credits(uid, "vision", operation_id=request_key(m,"vision"))
+        await billing_saved()
         u = get_user(uid)
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — разбор фото")
@@ -3388,6 +3418,8 @@ async def _handle_vision_upload_impl(m: Message, state: FSMContext, local_path: 
         # доступа к самому файлу после этого момента, только к тому, что мы ему сохранили.
         append_chat_turn(uid, "user", (caption or "[прислал фото]") + " [приложено фото]")
         append_chat_turn(uid, "assistant", readable)
+    except BillingPersistenceError:
+        await m.answer(persistence_notice())
     except Exception as e:
         print("Ошибка разбора фото:", type(e).__name__)
         if get_user(uid).get("_chat_memory_epoch", 0) == memory_epoch:
@@ -5981,7 +6013,8 @@ async def _build_presentation_impl(m: Message, state: FSMContext, *, allow_missi
         await bot.send_document(chat_id, FSInputFile(pdf_path, filename=f"{pres_fname}.pdf"), caption=tr("msg_pptx_pdf_caption", lang))
         u["generations"] += 1
         # Цена соответствует подтверждённому общему числу слайдов с обложкой.
-        spend_credits(uid, "presentation", amount=order_cost)
+        spend_credits(uid, "presentation", amount=order_cost, operation_id=request_key(m,"presentation"))
+        await billing_saved()
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
         note_success(uid)
         for p in (pptx_path, pdf_path, *(data.get("user_photos") or [])):
@@ -6006,6 +6039,9 @@ async def _build_presentation_impl(m: Message, state: FSMContext, *, allow_missi
         # Explicit success only after both documents were sent and accounting
         # completed. Handled errors below return None, never a successful result.
         return {"delivered": True}
+    except BillingPersistenceError:
+        await state.clear()
+        await bot.send_message(uid, persistence_notice())
     except PresentationPDFError as error:
         print("presentation_pdf failure=" + str(error), flush=True)
         await state.set_state(Form.waiting_confirm)
@@ -7569,7 +7605,7 @@ async def excel_topic(m: Message, state: FSMContext):
     await state.update_data(excel_topic=m.text or "")
     if is_thin_input(m.text):
         await m.answer(tr("msg_thin_input", lang))
-    await m.answer(tr("msg_build_table_q", lang), reply_markup=excel_confirm_kb(lang))
+    await m.answer(tr("msg_build_table_q", lang) + f"\nСтоимость: {excel_price((await state.get_data()).get('excel_kind'))} кредитов.", reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
 
@@ -7579,7 +7615,7 @@ async def excel_data(m: Message, state: FSMContext):
     await state.update_data(excel_topic=m.text or "")
     if is_thin_input(m.text):
         await m.answer(tr("msg_thin_input", lang))
-    await m.answer(tr("msg_build_table_q", lang), reply_markup=excel_confirm_kb(lang))
+    await m.answer(tr("msg_build_table_q", lang) + f"\nСтоимость: {excel_price((await state.get_data()).get('excel_kind'))} кредитов.", reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
 
@@ -7589,7 +7625,7 @@ async def excel_startup_data(m: Message, state: FSMContext):
     await state.update_data(excel_topic=m.text or "")
     if is_thin_input(m.text):
         await m.answer(tr("msg_thin_input", lang))
-    await m.answer(tr("msg_build_model_q", lang), reply_markup=excel_confirm_kb(lang))
+    await m.answer(tr("msg_build_model_q", lang) + f"\nСтоимость: {excel_price('startup_model')} кредитов.", reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
 
@@ -7621,7 +7657,7 @@ async def excel_extra(m: Message, state: FSMContext):
     data = await state.get_data()
     extra = (data.get("extra", "") + "\n" + (m.text or "")).strip()
     await state.update_data(extra=extra)
-    await m.answer(tr("msg_build_table_q", lang), reply_markup=excel_confirm_kb(lang))
+    await m.answer(tr("msg_build_table_q", lang) + f"\nСтоимость: {excel_price((await state.get_data()).get('excel_kind'))} кредитов.", reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
 
@@ -7629,6 +7665,14 @@ async def excel_extra(m: Message, state: FSMContext):
 async def excel_build(m: Message, state: FSMContext, *, studio_job=None):
     lang = user_lang(m.from_user.id)
     data = await state.get_data()
+    if not studio_job and data.get('price_version') != PRICE_VERSION:
+        await state.update_data(price_version=PRICE_VERSION)
+        await state.set_state(Form.waiting_excel_confirm)
+        await m.answer(f'Стоимость: {excel_price(data.get("excel_kind"))} кредитов. Подтвердите сборку по текущему тарифу.', reply_markup=excel_confirm_kb(lang))
+        return
+    if not can_afford(m.from_user.id, excel_price(data.get("excel_kind"))):
+        await send_no_credits_notice(m, state, lang)
+        return
     uid = m.from_user.id
     u = get_user(uid)
     ok, reason = start_job(uid)
@@ -7766,7 +7810,8 @@ async def excel_build(m: Message, state: FSMContext, *, studio_job=None):
         fname = safe_filename(title_for_name, fallback=EXCEL_KIND_DESC.get(kind, "Таблица"))
         await m.answer_document(FSInputFile(xlsx_path, filename=f"{fname}.xlsx"), caption=tr("msg_excel_caption", lang))
         u["generations"] += 1
-        spend_credits(uid, "excel")
+        spend_credits(uid, "excel", amount=excel_price(kind), operation_id=request_key(m,"excel"))
+        await billing_saved()
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {title_for_name}")
         note_success(uid)
         try:
@@ -7777,8 +7822,14 @@ async def excel_build(m: Message, state: FSMContext, *, studio_job=None):
         if kind == "startup_model":
             note += tr("msg_check_source_numbers", lang)
         note += "\n\n" + await signature_line(lang)
-        await m.answer(note, reply_markup=main_kb(lang, uid=m.from_user.id))
         await state.clear()
+        try:
+            await m.answer(note, reply_markup=main_kb(lang, uid=m.from_user.id))
+        except Exception:
+            pass
+    except BillingPersistenceError:
+        await state.clear()
+        await m.answer(persistence_notice())
     except Exception as e:
         if studio_job:
             raise
@@ -8526,7 +8577,7 @@ async def word_after_input(m: Message, state: FSMContext):
         # Для договоров, заявлений, доверенностей, резюме и т.п. объём определяет сама структура документа,
         # а вопрос давал возможность случайно заказать (и оплатить) договор аренды на 30 страниц. word_pages задаём явно, чтобы не подхватить значение из прошлой попытки.
         pages = normalize_word_pages(WORD_DEFAULT_PAGES)
-        if not can_afford(m.from_user.id, word_cost(pages)):
+        if not can_afford(m.from_user.id, word_cost(pages, kind)):
             await send_no_credits_notice(m, state, lang)
             return
         await state.update_data(word_pages=pages, word_size="short")
@@ -8584,7 +8635,7 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
         await preview_car_sale(m, state, globals())
         return
     pages = normalize_word_pages(data.get("word_pages") or (2 if size == "short" else 6))
-    await state.update_data(word_size=size, word_pages=pages)
+    await state.update_data(word_size=size, word_pages=pages, price_version=PRICE_VERSION)
     await m.answer(tr("msg_building_draft", lang), reply_markup=cancel_kb(lang))
     size_map = {
         "short": f"объём документа — примерно {pages} страниц Word, без воды, только суть",
@@ -8598,7 +8649,7 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
         from academic_templates import page_guidance, volume_label
         kind_name = WORD_KIND_LABELS[kind]["ru"] + academic_guidance(kind)
         size_map[size] = page_guidance(kind, pages)
-        await m.answer(volume_label(kind, pages) + f". Стоимость — {word_cost(pages)} кредитов; титульный и оглавление без доплаты.")
+        await m.answer(volume_label(kind, pages) + f". Стоимость — {word_cost(pages, kind)} кредитов; титульный и оглавление без доплаты.")
     lang_instr = grok_lang_instruction(content_gen_lang(data, lang) or "ru")
     prompt = f"""Собери черновик-план (не полный текст): {kind_name}.
 Тема/данные: {data.get('topic')}
@@ -8612,6 +8663,8 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
 план должен отражать суть темы конкретно, а не общими фразами.
 Обычным текстом, коротко: название и 4 пункта структуры (каждый пункт — одна строка, без раскрытия
 содержания). Без JSON.{lang_instr}"""
+    if not academic:
+        await m.answer(f"Стоимость: {word_cost(pages, kind)} кредитов.")
     sample = await ask_grok(prompt, system_prompt=WORD_SYSTEM, temperature=0.25)
     if grok_failed(sample):
         await m.answer(
@@ -8646,7 +8699,7 @@ async def word_size(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
     raw = re.findall(r"\d+", m.text or "")
     pages = normalize_word_pages(raw[0] if raw else 2)
-    if not can_afford(m.from_user.id, word_cost(pages)):
+    if not can_afford(m.from_user.id, word_cost(pages, (await state.get_data()).get("word_kind", "doc"))):
         await send_no_credits_notice(m, state, lang)
         return
     size = "short" if pages <= 3 else "long"
@@ -8800,6 +8853,14 @@ async def word_build(m: Message, state: FSMContext, quality_action=None, studio_
             [KeyboardButton(text=LEAVE_TITLE_BLANKS)],
             [KeyboardButton(text=tr("btn_main_menu", lang))],
         ], resize_keyboard=True))
+        return
+    if not studio_job and data.get('price_version') != PRICE_VERSION:
+        await state.update_data(price_version=PRICE_VERSION)
+        await state.set_state(Form.waiting_word_confirm)
+        await m.answer(f'Стоимость: {word_cost(data.get("word_pages") or 2, data.get("word_kind","doc"))} кредитов. Подтвердите сборку по текущему тарифу.', reply_markup=word_confirm_kb(lang))
+        return
+    if not can_afford(m.from_user.id, word_cost(data.get("word_pages") or 2, data.get("word_kind","doc"))):
+        await send_no_credits_notice(m, state, lang)
         return
     pending = data.get("word_quality_pending")
     if not isinstance(pending, dict) or pending.get("request_key") != title_request_key(data):
@@ -9112,29 +9173,30 @@ section_index — index из задания, after_paragraph — номер су
                         "actual_body_pages": actual_body_pages, "actual_pages": actual_pages})
                     await state.set_state(Form.waiting_word_quality)
                     if studio_job:
-                        studio_job.choice(word_cost(charged_pages), word_quality_choice_notice(pages, actual_body_pages, word_cost(charged_pages), any(x < .5 for x in (layout or {}).get("body_page_fills", []))))
+                        studio_job.choice(word_cost(charged_pages, kind), word_quality_choice_notice(pages, actual_body_pages, word_cost(charged_pages, kind), any(x < .5 for x in (layout or {}).get("body_page_fills", []))))
                         return
                     await m.answer(word_quality_choice_notice(pages, actual_body_pages,
-                        word_cost(charged_pages), any(x < .5 for x in (layout or {}).get('body_page_fills', []))),
+                        word_cost(charged_pages, kind), any(x < .5 for x in (layout or {}).get('body_page_fills', []))),
                         reply_markup=word_quality_keyboard(KeyboardButton, ReplyKeyboardMarkup,
                                                            tr("btn_main_menu", lang)))
                     return
-            if not can_afford(uid, word_cost(charged_pages)):
+            if not can_afford(uid, word_cost(charged_pages, kind)):
                 await m.answer("Недостаточно кредитов для выдачи документа. Пополни баланс и повтори получение.")
                 return
             if academic:
-                await m.answer(delivery_notice(kind, pages, actual_body_pages, actual_pages, word_cost(charged_pages)))
+                await m.answer(delivery_notice(kind, pages, actual_body_pages, actual_pages, word_cost(charged_pages, kind)))
             elif actual_pages != pages:
-                await m.answer(word_page_notice(lang, pages, actual_pages, word_cost(charged_pages)))
+                await m.answer(word_page_notice(lang, pages, actual_pages, word_cost(charged_pages, kind)))
 
             if studio_job:
-                return await studio_job.deliver(docx_path, pdf_path, word_cost(charged_pages), content.get("title") or "Документ")
+                return await studio_job.deliver(docx_path, pdf_path, word_cost(charged_pages, kind), content.get("title") or "Документ")
 
             fname = safe_filename(content.get("title"), fallback=WORD_KIND_DESC.get(kind, "Документ"), author=(content.get("meta") or {}).get("author"))
             await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
             await m.answer_document(FSInputFile(pdf_path, filename=f"{fname}.pdf"), caption=tr("msg_pdf_caption", lang))
             u["generations"] += 1
-            spend_credits(uid, "word", amount=word_cost(charged_pages))
+            spend_credits(uid, "word", amount=word_cost(charged_pages, kind), operation_id=request_key(m,"word"))
+            await billing_saved()
             u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title')}")
             note_success(uid)
             for p in (docx_path, pdf_path):
@@ -9158,6 +9220,9 @@ section_index — index из задания, after_paragraph — номер су
                 if path and os.path.exists(path):
                     os.remove(path)
 
+    except BillingPersistenceError:
+        await state.clear()
+        await m.answer(persistence_notice())
     except Exception as exc:
         print("Word build failure=" + type(exc).__name__, flush=True)
         await m.answer(tr("msg_grok_error", lang), reply_markup=(
@@ -9180,7 +9245,22 @@ async def waiting_word_confirm_fallback(m: Message, state: FSMContext):
 async def history(m: Message):
     lang = user_lang(m.from_user.id)
     u = get_user(m.from_user.id)
-    await m.answer(tr("msg_history_empty", lang) if not u["history"] else tr("msg_history_title", lang) + "\n".join(u["history"][-10:]))
+    from wallet import public_history
+    from studio_menu import recent_payments
+    legacy = await asyncio.to_thread(recent_payments, PAYMENTS_LOG_FILE, m.from_user.id, ledger=True)
+    rows = public_history(u, legacy, limit=10)['items']
+    if rows:
+        lines = ['Последние операции · кредиты']
+        for row in rows:
+            delta = row['delta']
+            lines.append(f"{row['ts'][:16].replace('T',' ')} UTC · {row['title']} · {delta:+g} · остаток {row['balance_after'] if row['balance_after'] is not None else 'не сохранён'}")
+        lines.append('Полная сохранённая история — в профиле мини-аппа.')
+        await m.answer('\n'.join(lines), parse_mode=None)
+    if u.get('history'):
+        await m.answer(tr('msg_history_title', lang) + '\n'.join(u['history'][-10:]), parse_mode=None)
+    elif not rows:
+        await m.answer(tr('msg_history_empty', lang))
+
 
 
 @dp.message(F.text.in_(ALL_BTN_PLAN_LABELS))
@@ -9296,12 +9376,26 @@ async def send_chat_reply(uid, text, reply_markup=None, is_current=None):
 
 
 async def respond_in_chat(m, text, lang):
+    from wallet import request_key
     uid = m.from_user.id
+    voice = bool(getattr(m, 'voice', None))
+    cost = CREDIT_COSTS['voice' if voice else 'chat']
+    if not can_afford(uid, cost):
+        await bot.send_message(uid, 'Недостаточно кредитов. Ответ в чате — 0,5 кредита; голосовое — 3 кредита. Пополните баланс в меню.')
+        return
+    if get_user(uid).get('busy'):
+        await bot.send_message(uid, 'Сначала дождитесь завершения текущей работы.')
+        return
     denied = _chat_gate.enter(uid)
     if denied:
         await bot.send_message(uid, chat_notice(denied, lang))
         return
+    u = get_user(uid)
+    u["_chat_reserved"] = cost
     try:
+        if u.get('chat_price_notice') != PRICE_VERSION:
+            await bot.send_message(uid, 'Тарифы чата: текстовый ответ — 0,5 кредита; фото — 3; голосовой запрос с ответом — 3. Списание после успешного ответа, операция появится в профиле.' if lang == 'ru' else 'Chat rates: 0.5 credit per text reply; photo 3; voice request including reply 3. Charged after a successful reply; see your profile history.')
+            u['chat_price_notice'] = PRICE_VERSION
         u = get_user(uid)
         memory_epoch = u.get("_chat_memory_epoch", 0)
         local_reply = (try_local_time_answer(text) if lang == "ru" else None) or try_local_math_answer(text, lang)
@@ -9321,15 +9415,20 @@ async def respond_in_chat(m, text, lang):
         )
         if readable is None:
             return
+        spend_credits(uid, 'voice' if voice else 'chat', operation_id=request_key(m,'voice' if voice else 'chat'))
+        await billing_saved()
         # Failed model calls and undelivered replies must not become conversation history.
         append_chat_turn(uid, "user", text)
         append_chat_turn(uid, "assistant", readable)
         if getattr(m, "voice", None):
             await maybe_send_voice_reply(m, readable)
         await asyncio.wait_for(update_long_term_memory(uid), timeout=30.0)
+    except BillingPersistenceError:
+        await bot.send_message(uid, persistence_notice())
     except asyncio.TimeoutError:
         print("Chat memory update timed out")
     finally:
+        u.pop("_chat_reserved", None)
         _chat_gate.leave(uid)
 
 
@@ -9386,7 +9485,7 @@ async def advance_document_intake(m, state, draft, lang):
     if fmt == 'word':
         kind = guess_word_kind(text)
         mode = draft.get('mode') or source_mode(text,fmt) or 'ai'
-        if not can_afford(m.from_user.id, word_cost(normalize_word_pages((extract_page_count(text) if kind in WORD_PAGE_CHOICE_KINDS else None) or WORD_DEFAULT_PAGES))):
+        if not can_afford(m.from_user.id, word_cost(normalize_word_pages((extract_page_count(text) if kind in WORD_PAGE_CHOICE_KINDS else None) or WORD_DEFAULT_PAGES), kind)):
             await send_no_credits_notice(m,state,lang)
             return
         await state.update_data(document_intake=None, word_kind=kind, topic=text, user_text=text if mode=='user' else '',
@@ -9395,7 +9494,7 @@ async def advance_document_intake(m, state, draft, lang):
         pages = extract_page_count(text)
         if pages and kind in WORD_PAGE_CHOICE_KINDS:
             pages = normalize_word_pages(pages)
-            if not can_afford(m.from_user.id, word_cost(pages)):
+            if not can_afford(m.from_user.id, word_cost(pages, kind)):
                 await send_no_credits_notice(m,state,lang)
                 return
             await state.update_data(word_pages=pages,word_size='short' if pages<=3 else 'long')
@@ -9436,7 +9535,7 @@ async def advance_document_intake(m, state, draft, lang):
         + ('Данные: только присланные позиции и числа. Новые позиции не добавляю.\n' if mode=='user' else 'Данные: условный пример по теме.\n')
         + f'Оформление: {EXCEL_STYLES[style]}'+(f', {EXCEL_PALETTES[palette]}' if style=='designer' else '')+'.\n'
         + ('Защита формул включена, без пароля.\n' if protect else 'Защита выключена, файл можно редактировать.\n')
-        + f'Стоимость: {CREDIT_COSTS["excel"]} кредитов. Собрать файл?',
+        + f'Стоимость: {excel_price(kind)} кредитов. Собрать файл?',
         reply_markup=excel_confirm_kb(lang), parse_mode=None)
 
 
@@ -9709,7 +9808,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
             # Число страниц из формы для договоров и официальных документов не принимаем, что бы ни прислали
             # (в том числе прямым запросом к /api/action): объём у них задан структурой, а не выбором.
             pages = normalize_word_pages(WORD_DEFAULT_PAGES)
-        if not can_afford(m.from_user.id, word_cost(pages)):
+        if not can_afford(m.from_user.id, word_cost(pages, kind)):
             await send_no_credits_notice(m, state, lang)
             return
         content = _clip_text(payload.get("content"), 4000)
@@ -9717,7 +9816,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
             return
         extra = _clip_text(payload.get("extra"), 800)
         await state.update_data(
-            word_kind=kind,
+            word_kind=kind, price_version=PRICE_VERSION,
             word_size="short" if pages <= 3 else "long",
             word_pages=pages,
             topic=content, user_text="", extra=extra, car_sale=None, fixed_word=None, content_lang=output_lang, extra_used=0, academic_cover_allow_blanks=None,
@@ -9729,7 +9828,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         return
 
     if action == "gen_excel":
-        if not can_afford(m.from_user.id, CREDIT_COSTS["excel"]):
+        if not can_afford(m.from_user.id, excel_price(payload.get("kind") or "calc_table")):
             await send_no_credits_notice(m, state, lang)
             return
         content = _clip_text(payload.get("content"), 4000)
@@ -9739,7 +9838,7 @@ async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, 
         protected = protection(payload)
         excel_style, excel_palette = normalize_excel_appearance(payload.get('excel_style'), payload.get('excel_palette'))
         await state.update_data(
-            excel_kind=payload.get("kind") or "calc_table", excel_topic=content,
+            excel_kind=payload.get("kind") or "calc_table", excel_topic=content, price_version=PRICE_VERSION,
             extra=_clip_text(payload.get("extra"), 800), excel_mode="user" if payload.get("kind") == "startup_model" else (payload.get("mode") or "ai"),
             excel_style=excel_style, excel_palette=excel_palette, **protected, content_lang=output_lang,
         )
@@ -9865,8 +9964,11 @@ async def addcredits(m: Message):
         await m.answer("Формат: /addcredits user_id количество\nНапример: /addcredits 123456789 50")
         return
     u = get_user(uid)
-    u["credits"] = max(0, int(u.get("credits") or 0) + amount)
-    save_users()
+    from wallet import apply
+    if amount < 0 and not can_afford(uid, -amount):
+        await m.answer('Недостаточно свободных кредитов для корректировки.'); return
+    apply(u, 'adjustment:'+str(m.chat.id)+':'+str(m.message_id), amount, 'Начисление администратором' if amount>0 else 'Корректировка администратором', 'adjustment')
+    await billing_saved()
     await m.answer(f"Пользователю {uid} начислено {amount} кредитов. Новый баланс: {u['credits']}.")
     lang = user_lang(uid)
     try:
@@ -9945,7 +10047,8 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
             fname = safe_filename(content.get("title"), fallback=kind_name)
             await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
             u["generations"] += 1
-            spend_credits(uid, "word", amount=word_cost(pages))
+            spend_credits(uid, "word", amount=word_cost(pages), operation_id=request_key(m,"word"))
+            await billing_saved()
             u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — {content.get('title') or kind_name} (из файла)")
             save_users()
             note_success(uid)
@@ -9959,6 +10062,9 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
             except Exception:
                 pass
 
+    except BillingPersistenceError:
+        await state.clear()
+        await m.answer(persistence_notice())
     except Exception as exc:
         print("Word upload failure=" + type(exc).__name__, flush=True)
         await m.answer(tr("msg_grok_error", lang), reply_markup=main_kb(lang, uid=uid))
@@ -10084,11 +10190,15 @@ async def image_prompt_handler(m: Message, state: FSMContext):
             return
         u = get_user(uid)
         await m.answer_photo(FSInputFile(img_path))
-        spend_credits(uid, "image")
+        spend_credits(uid, "image", operation_id=request_key(m,"image"))
+        await billing_saved()
         u["generations"] += 1
         u["history"].append(f"{datetime.now().strftime('%d.%m %H:%M')} — картинка: {prompt[:60]}")
         save_users()
         note_success(uid)
+    except BillingPersistenceError:
+        await state.clear()
+        await m.answer(persistence_notice())
     except Exception as e:
         print("Ошибка генерации картинки:", e)
         await m.answer(tr("msg_image_failed", lang))
@@ -10384,11 +10494,19 @@ async def api_profile_handler(request):
     user = miniapp_verified_user(body.get("initData")) if isinstance(body, dict) else None
     if not user:
         return _aiohttp_web.json_response({"ok": False, "error": "invalid init data"}, status=401, headers=_cors_headers())
+    try:
+        offset = max(0, int(body.get('transaction_offset', 0)))
+    except (ValueError, TypeError):
+        return _aiohttp_web.json_response({'ok': False, 'error': 'invalid offset'}, status=400, headers=_cors_headers())
     u = miniapp_user_record(user)
+    from wallet import public_history
+    from studio_menu import recent_payments
+    legacy = await asyncio.to_thread(recent_payments, PAYMENTS_LOG_FILE, user['id'], ledger=True)
     return _aiohttp_web.json_response({"ok": True, "profile": {
         "name": u.get("name") or "", "credits": u.get("credits", 0),
         "unlimited": user["id"] in ADMIN_IDS, "lang": user_lang(user["id"]),
         "mode": u.get("control_mode", "buttons"),
+        "transactions": public_history(u, legacy, offset=offset, limit=50),
         "history": [str(h)[:200] for h in (u.get("history") or [])[-8:]],
     }}, headers=_cors_headers())
 
@@ -10548,9 +10666,12 @@ async def yookassa_webhook_handler(request):
     if data.get("event") != "payment.succeeded" or not payment_id:
         return _aiohttp_web.Response(status=200, text="ok")
     if payment_id in _processed_yookassa_payment_ids:
-        return _aiohttp_web.Response(status=200, text="ok")
+        saved = await save_users_now()
+        return _aiohttp_web.Response(status=200 if saved else 503, text="ok" if saved else "retry")
+    if payment_id in _yookassa_inflight:
+        return _aiohttp_web.Response(status=503, text="processing")
 
-    _processed_yookassa_payment_ids.add(payment_id)
+    _yookassa_inflight.add(payment_id)
     credited = False
     retry = False
     try:
@@ -10564,14 +10685,23 @@ async def yookassa_webhook_handler(request):
                 credits = int(metadata.get("credits"))
             except (TypeError, ValueError):
                 uid = credits = None
-            if uid and credits:
+            from decimal import Decimal
+            payment_amount=verified.get('amount') or {}
+            try:
+                valid_amount=payment_amount.get('currency')=='RUB' and Decimal(str(payment_amount.get('value') or 0))==Decimal(credits or 0)
+            except Exception:
+                valid_amount=False
+            if uid and credits and credits>0 and valid_amount:
                 u = get_user(uid)
-                u["credits"] = int(u.get("credits") or 0) + credits
+                from wallet import apply
+                apply(u, 'yookassa:'+payment_id, credits, 'Пополнение баланса', 'topup')
+                _processed_yookassa_payment_ids.add(payment_id)
                 credited = True
                 # Ждём реальной записи на диск: баланс и отметка о платеже уходят одним файлом,
                 # поэтому рестарт сразу после оплаты не оставит "деньги списаны, кредитов нет".
                 saved = await save_users_now()
-                _save_processed_payments()
+                retry = not saved
+                if saved: _save_processed_payments()
                 log_payment("yookassa", uid, payment_id, (verified.get("amount") or {}).get("value"),
                             credits, u["credits"])
                 if not saved:
@@ -10590,6 +10720,7 @@ async def yookassa_webhook_handler(request):
                     except Exception:
                         pass
     finally:
+        _yookassa_inflight.discard(payment_id)
         if not credited:
             _processed_yookassa_payment_ids.discard(payment_id)
     if retry:
@@ -10758,7 +10889,9 @@ async def start_web_server():
         return await accept_miniapp_action(user, "gen_presentation", payload, request_id)
     async def studio_profile(user):
         from studio_menu import recent_payments
+        from wallet import public_history
         u = miniapp_user_record(user)
+        legacy = await asyncio.to_thread(recent_payments, PAYMENTS_LOG_FILE, user["id"], ledger=True)
         return {"name": u.get("name") or "", "credits": u.get("credits", 0),
                 "unlimited": user["id"] in ADMIN_IDS, "lang": u.get('studio_ui_lang', 'ru'),
                 "ui_lang": u.get('studio_ui_lang', 'ru'),
@@ -10766,12 +10899,22 @@ async def start_web_server():
                 "mode": u.get("control_mode", "buttons"),
                 "history": [str(h)[:200] for h in (u.get("history") or [])[-30:]],
                 "files": _file_library.public(user['id']),
-                "payments": await asyncio.to_thread(recent_payments, PAYMENTS_LOG_FILE, user["id"])}
+                "payments": [{k:v for k,v in r.items() if k in ("ts","credits","balance_after")} for r in legacy[:30]],
+                "transactions": public_history(u,legacy), "tariffs": public_tariffs()}
     async def studio_settings(user, values):
         u = miniapp_user_record(user)
         u['studio_ui_lang'] = values['ui_lang']
         u['studio_content_lang'] = values['content_lang']
         save_users()
+    async def studio_transactions(request):
+        from wallet import public_history
+        from studio_menu import recent_payments
+        user = studio.authorized(request)['user']
+        try: offset=max(0,int(request.query.get('offset','0')))
+        except ValueError: raise _aiohttp_web.HTTPBadRequest(text='Invalid offset')
+        legacy=await asyncio.to_thread(recent_payments,PAYMENTS_LOG_FILE,user['id'],ledger=True)
+        return _aiohttp_web.json_response(dict(ok=True,**public_history(get_user(user['id']),legacy,offset)),headers={'Cache-Control':'no-store'})
+    app.router.add_get('/studio/transactions',studio_transactions)
     from constructor_billing import ConstructorBilling
     constructor_billing = ConstructorBilling(get_user, save_users_now, start_job, finish_job, ADMIN_IDS)
     studio = Studio(miniapp_verified_user, studio_send_file, studio_action, WEB_BASE_URL, billing=constructor_billing,

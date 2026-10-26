@@ -9,6 +9,7 @@ import secrets
 import shutil
 import tempfile
 import time
+from service_pricing import VERSION
 from aiohttp import web
 from studio_word_catalog import catalog, normalize, price, SPECS
 
@@ -131,7 +132,7 @@ class WordWorkflow:
         uid=self.studio.authorized(request)['user']['id'];self.studio.check_write(request)
         try:payload=normalize(await self.studio.body(request,64000))
         except ValueError as e:raise web.HTTPBadRequest(text=str(e))
-        fingerprint=hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest()
+        fingerprint=hashlib.sha256((VERSION+json.dumps(payload,sort_keys=True)).encode()).hexdigest()
         # Small pilot: bounded persisted order cache; no personal data in public assets.
         rows=[]
         for path in self.root.glob('*/order.json'):

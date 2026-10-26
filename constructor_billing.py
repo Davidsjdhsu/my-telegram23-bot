@@ -5,6 +5,7 @@ avoids duplicate debits after a timeout/restart; support can reconcile pending
 deliveries. Admin accounts preserve their existing unlimited entitlement.
 """
 from aiohttp import web
+from wallet import apply
 
 
 class ConstructorBilling:
@@ -18,13 +19,15 @@ class ConstructorBilling:
         old = orders.get(fingerprint)
         if old:
             if old['status'] == 'paid':
+                if not await self.persist():
+                    raise web.HTTPServiceUnavailable(text='Не удалось сохранить оплату. Повторного списания нет.')
                 return {'ok': True, 'duplicate': True, 'cost': old['cost'], 'charged': old['charged']}
             raise web.HTTPConflict(text='Статус предыдущей отправки уточняется. Проверьте чат и обратитесь в поддержку; повторного списания нет.')
         ok, reason = self.start(uid)
         if not ok:
             raise web.HTTPConflict(text=reason)
         try:
-            if uid not in self.admins and int(user.get('credits') or 0) < cost:
+            if uid not in self.admins and (user.get('credits') or 0) < cost:
                 raise web.HTTPPaymentRequired(text=f'Недостаточно кредитов. Нужно {cost}.')
             # Do not accumulate unresolved attempts or allow spending held funds.
             if any(row.get('status') == 'pending' for row in orders.values()):
@@ -35,7 +38,7 @@ class ConstructorBilling:
                 raise web.HTTPServiceUnavailable(text='Не удалось сохранить заказ. Кредиты не списаны.')
             await send(uid, data)
             charged = 0 if uid in self.admins else cost
-            user['credits'] = int(user.get('credits') or 0) - charged
+            apply(user, 'constructor:'+fingerprint, -charged, 'Презентация из конструктора')
             orders[fingerprint] = {'status': 'paid', 'cost': cost, 'charged': charged}
             user.setdefault('history', []).append(f'Конструктор · {cost} кредитов · PPTX')
             if not await self.persist():

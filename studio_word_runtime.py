@@ -56,7 +56,7 @@ def attach(studio,app,api):
                     await api['run_heavy'](render_preview,docx,payload,api['build_word'])
                     job.stage('Проверяем Word и PDF')
                     await api['convert_word_pdf'](str(docx),str(pdf))
-                    await job.deliver(docx,pdf,api['word_cost'](min(2,len(PdfReader(pdf).pages))),SPECS[kind]['title'])
+                    await job.deliver(docx,pdf,job.row['cost'],SPECS[kind]['title'])
             finally:api['finish_job'](uid)
             return
         state=WordState(job)

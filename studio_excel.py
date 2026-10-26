@@ -9,6 +9,7 @@ import time
 from aiohttp import web
 from studio_word import atomic, WordJob, WordWorkflow
 from studio_excel_catalog import normalize, catalog
+from service_pricing import excel_price, VERSION
 
 class ExcelWorkflow(WordWorkflow):
     def __init__(self, studio, root, build, send, charge, afford, parse, cost):
@@ -75,7 +76,7 @@ class ExcelWorkflow(WordWorkflow):
         try: payload=normalize(await self.studio.body(request,64000))
         except ValueError as e: raise web.HTTPBadRequest(text=str(e))
         identity={k:v for k,v in payload.items() if k!='source' or payload['kind']!='expense_estimate'}
-        fingerprint=hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()
+        fingerprint=hashlib.sha256((VERSION+json.dumps(identity,sort_keys=True)).encode()).hexdigest()
         rows=[]
         for path in self.root.glob('*/order.json'):
             try: r=json.loads(path.read_text())
@@ -90,7 +91,7 @@ class ExcelWorkflow(WordWorkflow):
         if len(rows)>=40: raise web.HTTPTooManyRequests(text='Достигнут лимит сохранённых заявок. Попробуйте позже.')
         token=secrets.token_urlsafe(24); (self.root/token).mkdir(mode=0o700)
         job=WordJob(self,dict(id=token,uid=uid,created=time.time(),fingerprint=fingerprint,payload=payload,
-            cost=self.cost,actual_cost=self.cost,status='ready',stage='Проверьте таблицу и стоимость',title=payload['title'],sent=[]))
+            cost=excel_price(payload['kind']),actual_cost=excel_price(payload['kind']),status='ready',stage='Проверьте таблицу и стоимость',title=payload['title'],sent=[]))
         job.save(); return self.response(job)
 
     async def confirm(self, request):

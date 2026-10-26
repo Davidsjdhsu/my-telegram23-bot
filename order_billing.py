@@ -1,6 +1,7 @@
 """One durable balance mutation per order; pending intent is safe to resume."""
 from aiohttp import web
 import asyncio
+from wallet import apply as apply_wallet
 
 _locks = {}
 
@@ -22,7 +23,7 @@ def charge_callback(api, ledger_name, label):
             raise ValueError('Стоимость заказа не совпала.')
         if not old and not api['can_afford'](uid, cost):
             raise web.HTTPPaymentRequired(text='Недостаточно кредитов.')
-        if int(user.get('credits', 0)) < charged:
+        if user.get('credits', 0) < charged:
             raise web.HTTPPaymentRequired(text='Недостаточно кредитов.')
         ledger[order_id] = {'status': 'pending', 'charged': charged, 'cost': cost, 'version': 1}
         if not await api['save_users_now']():
@@ -31,7 +32,7 @@ def charge_callback(api, ledger_name, label):
             raise RuntimeError('Unable to persist payment intent')
         # No await between balance, receipt and history: every saved snapshot
         # contains either the old balance+pending or new balance+paid, never half.
-        user['credits'] = int(user.get('credits', 0)) - charged
+        apply_wallet(user, ledger_name+':'+str(order_id), -charged, label+' · '+title[:150])
         ledger[order_id] = {'status': 'paid', 'charged': charged, 'cost': cost, 'version': 1}
         user['generations'] = user.get('generations', 0) + 1
         user.setdefault('history', []).append(label + ' · ' + title[:180])

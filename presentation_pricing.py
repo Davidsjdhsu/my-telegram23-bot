@@ -1,8 +1,8 @@
 """Presentation prices shared by balance checks, quotes and final billing."""
 from presentation_designer import is_designer
 
-PRESENTATION_CREDITS_PER_SLIDE = 16
-DESIGNER_CREDITS_PER_SLIDE = 32
+PRESENTATION_CREDITS_PER_SLIDE = 10
+DESIGNER_CREDITS_PER_SLIDE = 20
 PRESENTATION_MIN_SLIDES = 3
 
 

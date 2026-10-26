@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-def recent_payments(path, uid):
+def recent_payments(path, uid, *, ledger=False):
     """Bounded tail read; never returns provider IDs or another user's payments."""
     result=[]
     try:
@@ -14,11 +14,11 @@ def recent_payments(path, uid):
             try:
                 row=json.loads(line)
                 if str(row.get('uid'))!=str(uid):continue
-                result.append({'ts':str(row.get('ts',''))[:30],'credits':int(row['credits'])})
-                if len(result)>=30:break
+                result.append({'id':str(row.get('provider','legacy'))+':'+str(row.get('payment_id') or row.get('ts')), 'ts':str(row.get('ts',''))[:30], 'credits':row['credits'], 'delta':row['credits'], 'balance_after':row.get('balance_after'), 'title':'Пополнение баланса','kind':'topup'})
+                if len(result)>=1000:break
             except (ValueError,TypeError,KeyError):continue
     except OSError:pass
-    return result
+    return result if ledger else [{"credits":r["credits"],"ts":r["ts"]} for r in result]
 
 def forms_html(base):
     source=(Path(base)/'index.html').read_text()

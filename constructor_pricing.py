@@ -1,7 +1,7 @@
 """Server-authoritative manual constructor tariff; no AI generation surcharge."""
-VERSION = 'constructor-16-5-2-v1'
-BASE = 16
-EXTRA_PHOTO = 5
+VERSION = 'constructor-10-3-2-cap20-v2'
+BASE = 10
+EXTRA_PHOTO = 3
 PATTERN = 2
 
 
@@ -26,5 +26,5 @@ def quote(project):
             raise ValueError(f'Слайд {i}: максимум 3 фотографии и 3 узора.')
         if counts['text'] > 6 or counts['diagram'] > 1:
             raise ValueError(f'Слайд {i}: максимум 6 текстовых блоков и 1 схема.')
-        prices.append(BASE + EXTRA_PHOTO * max(0, counts['photo'] - 1) + PATTERN * counts['pattern'])
+        prices.append(min(20, BASE + EXTRA_PHOTO * max(0, counts['photo'] - 1) + PATTERN * counts['pattern']))
     return {'version': VERSION, 'slides': prices, 'cost': sum(prices)}
