@@ -23,6 +23,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from chat_support import (
     FORMAT_RULES, VISION_RULES, ChatGate, build_chat_messages, chat_notice,
     local_math_answer, memory_excerpt, render_reply, prefers_chat_reply, may_request_document,
+    is_retry_request, photo_failure_notice,
 )
 from presentation_support import (
     PresentationValidationError, total_slides, plan_key, validate_plan,
@@ -3216,12 +3217,13 @@ IMAGE_UPLOAD_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", 
 
 def _prepare_vision_image(path: str, max_side: int = 1600) -> tuple[str, str]:
     """Сжимает фото перед отправкой в vision, чтобы не упираться в лимит payload."""
-    from PIL import Image
+    from PIL import Image, ImageOps
     ext = (path.rsplit(".", 1)[-1] if "." in path else "jpg").lower()
     mime = {"png": "image/png", "webp": "image/webp", "gif": "image/gif"}.get(ext, "image/jpeg")
     out = path
     try:
-        im = Image.open(path)
+        with Image.open(path) as original:
+            im = ImageOps.exif_transpose(original).copy()
         if im.mode not in ("RGB", "L"):
             im = im.convert("RGB")
             mime = "image/jpeg"
@@ -3245,40 +3247,51 @@ def _prepare_vision_image(path: str, max_side: int = 1600) -> tuple[str, str]:
     return b64, mime
 
 
-async def ask_grok_vision(image_path: str, prompt: str, max_tokens: int = 2500) -> str:
-    """Распознаёт печатный и рукописный текст на фото и отвечает по задаче."""
-    last_err = None
+async def ask_grok_vision(image_path: str, prompt: str, max_tokens: int = 4096) -> str:
+    """Bounded photo analysis: one explicit fallback, never SDK retry multiplication."""
     try:
-        b64, mime = (await run_heavy(_prepare_vision_image, image_path))
-    except Exception as e:
-        return f"{GROK_ERROR_PREFIX}{e}"
-    models = [VISION_MODEL, "grok-4.6"]  # запасной вариант тоже актуальный, не устаревший grok-2-vision-1212/grok-4
-    seen = []
-    for model in models:
-        if model in seen:
-            continue
-        seen.append(model)
+        b64, mime = await run_heavy(_prepare_vision_image, image_path)
+    except Exception as error:
+        print("chat_vision reason=image_prepare_" + type(error).__name__, flush=True)
+        return f"{GROK_ERROR_PREFIX}image_prepare"
+    # A different fallback also works if the configured model is unavailable.
+    models = [VISION_MODEL, "grok-4.3" if VISION_MODEL != "grok-4.3" else "grok-4.6"]
+    last_error = "unavailable"
+    for attempt, model in enumerate(models):
+        options = {}
+        if model.startswith(("grok-4.3", "grok-4.5", "grok-4.6", "grok-4.7")):
+            options["extra_body"] = {"reasoning_effort": "low"}
+        started = time.monotonic()
         try:
-            r = await client.chat.completions.create(
-                model=model,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+            response = await asyncio.wait_for(
+                client.with_options(timeout=40.0, max_retries=0).chat.completions.create(
+                    model=model,
+                    messages=[{"role": "system", "content": VISION_SOLVE_PROMPT},
+                              {"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}", "detail": "high"}},
                         {"type": "text", "text": prompt},
-                    ],
-                }],
-                temperature=0.2,
-                max_tokens=max_tokens,
+                    ]}],
+                    temperature=0.2,
+                    max_tokens=min(6000, max(4096, max_tokens) + attempt * 1904),
+                    **options,
+                ), timeout=43.0,
             )
-            content = (r.choices[0].message.content or "").strip()
-            if content:
+            choice = response.choices[0] if response.choices else None
+            content = (choice.message.content or "").strip() if choice else ""
+            finish = getattr(choice, "finish_reason", None)
+            if content and finish != "length":
+                print(f"chat_vision attempt={attempt+1} status=ok elapsed={time.monotonic()-started:.1f}", flush=True)
                 return content
-            last_err = "empty vision content"
-        except Exception as e:
-            last_err = e
-            print(f"Grok vision error ({model}):", e)
-    return f"{GROK_ERROR_PREFIX}{last_err}"
+            last_error = "incomplete" if finish == "length" else "empty"
+        except Exception as error:
+            last_error = type(error).__name__
+            # Do not leak provider request bodies, photo data or credentials into logs.
+            status = getattr(error, "status_code", None)
+            if status in (401, 403):
+                print(f"chat_vision reason=authentication status={status}", flush=True)
+                break
+        print(f"chat_vision attempt={attempt+1} reason={last_error} elapsed={time.monotonic()-started:.1f}", flush=True)
+    return f"{GROK_ERROR_PREFIX}{last_error}"
 
 
 async def ask_presentation_vision(image_path: str, prompt: str, max_tokens: int = 2048) -> str:
@@ -3356,11 +3369,7 @@ async def _handle_vision_upload_impl(m: Message, state: FSMContext, local_path: 
         if get_user(uid).get("_chat_memory_epoch", 0) != memory_epoch:
             return
         if grok_failed(result) or not (result or "").strip():
-            fail = {
-                "ru": "Не получилось разобрать фото. Пришлите снимок крупнее и без сильного размытия.",
-                "en": "Could not read the photo. Send a sharper, closer shot.",
-            }.get(lang, "Не получилось разобрать фото.")
-            await m.answer(fail)
+            await m.answer(photo_failure_notice(lang))
             return
         readable = await send_chat_reply(
             uid, result, reply_markup=main_kb(lang, uid=uid),
@@ -3381,10 +3390,8 @@ async def _handle_vision_upload_impl(m: Message, state: FSMContext, local_path: 
         append_chat_turn(uid, "assistant", readable)
     except Exception as e:
         print("Ошибка разбора фото:", type(e).__name__)
-        await m.answer({
-            "ru": "Не получилось разобрать фото. Попробуйте ещё раз.",
-            "en": "Could not read the photo. Try again.",
-        }.get(lang, "Не получилось разобрать фото."))
+        if get_user(uid).get("_chat_memory_epoch", 0) == memory_epoch:
+            await m.answer(photo_failure_notice(lang))
     finally:
         finish_job(uid)
 
@@ -3971,22 +3978,27 @@ async def ask_grok_chat(user_text: str, lang: str = "ru", history: list = None,
                          summary: str = "", facts: list = None, recent_generations: list = None) -> str | None:
     messages = build_chat_messages(user_text, lang, history, summary, facts, recent_generations)
     detailed = bool(re.search(r"подроб|объясни|реши|задач|докажи|explain|detail|step|proof", user_text, re.I))
-    try:
-        response = await asyncio.wait_for(
-            client.with_options(max_retries=1, timeout=40.0).chat.completions.create(
-                model="grok-4.3", messages=messages, temperature=0.5,
-                max_tokens=2800 if detailed else 1800,
-            ), timeout=85.0,
-        )
-        choice = response.choices[0]
-        content = (choice.message.content or "").strip()
-        if content and getattr(choice, "finish_reason", None) == "length":
-            content += "\n\n" + chat_notice("incomplete", lang)
-        return content or None
-    except Exception as e:
-        # Do not expose provider responses, prompts or credentials in user-facing messages/logs.
-        print("Chat request failed:", type(e).__name__)
-        return None
+    for attempt, model in enumerate(("grok-4.3", "grok-4.6")):
+        try:
+            response = await asyncio.wait_for(
+                client.with_options(max_retries=0, timeout=38.0).chat.completions.create(
+                    model=model, messages=messages, temperature=0.5,
+                    max_tokens=(4096 if detailed else 2800) + attempt * 1024,
+                    extra_body={"reasoning_effort": "low"},
+                ), timeout=40.0,
+            )
+            choice = response.choices[0] if response.choices else None
+            content = (choice.message.content or "").strip() if choice else ""
+            if content:
+                if getattr(choice, "finish_reason", None) == "length":
+                    content += "\n\n" + chat_notice("incomplete", lang)
+                return content
+            print(f"chat_reply attempt={attempt+1} reason=empty", flush=True)
+        except Exception as error:
+            print(f"chat_reply attempt={attempt+1} reason={type(error).__name__}", flush=True)
+            if getattr(error, "status_code", None) in (401, 403):
+                break
+    return None
 
 
 
@@ -6060,8 +6072,21 @@ async def waiting_confirm_fallback(m: Message, state: FSMContext):
     """Ловит любой текст, не совпавший с кнопками выше, чтобы диалог никогда
     не зависал без ответа."""
     lang = user_lang(m.from_user.id)
+    if is_retry_request(m.text):
+        data = await state.get_data()
+        if data.get("pres_plan") and data.get("photo_mode") in ("ai", "own"):
+            # Reuse saved content, accepted images and delivery/billing receipts.
+            # Never opt in to missing images on behalf of the user.
+            await _build_presentation(m, state)
+        else:
+            await ask_photo_source(m, state)
+        return
     await m.answer(
-        tr("msg_didnt_understand", lang),
+        ("План сохранён. Напиши «повтори», чтобы продолжить сборку, или выбери действие ниже. "
+         "Чтобы изменить содержание, нажми «Добавить или изменить информацию»."
+         if lang == "ru" else
+         "Your plan is saved. Say ‘retry’ to continue, or choose an action below. "
+         "Use the edit button to change the content."),
         reply_markup=confirm_kb(lang)
     )
 
