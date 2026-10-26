@@ -27,7 +27,7 @@ el('excelKind').value='startup_model';el('excelKind').click();el('excelSubmit').
 assert.equal(el('excelAppearanceBlock').hidden,false);assert.equal(sent.at(-1).payload.excel_style,'designer');
 assert.equal(sent.at(-1).payload.mode,'user');assert.equal(el('excelModeBlock').hidden,true);assert.equal(el('excelStartupHint').hidden,false);
 el('excelKind').value='calc_table';el('excelKind').click();assert.equal(el('excelModeBlock').hidden,false);assert.equal(el('excelStartupHint').hidden,true);
-assert.match(html,/data-cost="5"/);
+assert.match(html,/data-cost="20"/);
 console.log('PASS: estimate layout selection, palette visibility, standard fixed green, outgoing payload.');
 
 assert.match(html, /id="excelProtect" type="checkbox" role="switch"/);
@@ -35,7 +35,7 @@ assert.doesNotMatch(html, /id="excelProtect"[^>]*\schecked[\s>]/);
 for (const kind of ['expense_estimate','family_budget','project_budget','price_list','calc_table','startup_model']) {
  el('excelKind').value=kind;
  for (const enabled of [false,true,false]) {
-  el('excelProtect').checked=enabled;el('excelSubmit').click();
+  el('excelProtect').checked=enabled;el('excelPassword').value=enabled?'test-only-password':'';el('excelSubmit').click();
   assert.equal(sent.at(-1).payload.excel_protect,enabled);
  }
 }

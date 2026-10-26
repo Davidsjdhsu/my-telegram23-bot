@@ -34,5 +34,7 @@ element('wordKind').value = 'services'; element('wordKind').click();
 assert.equal(element('wordPagesBlock').style.display, 'none');
 element('wordSubmit').click();
 assert.equal(sent.at(-1).payload.pages, 2);
-assert.equal(element('wordCostLabel').textContent, '10');
-console.log('PASS: academic cover/body labels, totals, unchanged credits and submitted body pages; other documents unaffected.');
+assert.equal(element('wordCostLabel').textContent, '40');
+console.log('PASS: academic cover/body labels, totals, approved prices and submitted body pages; fixed contract price.');
+
+element('wordKind').value='statement';element('wordKind').click();assert.equal(element('wordCostLabel').textContent,'20');
