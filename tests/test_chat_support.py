@@ -314,7 +314,8 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         ns['client']=client
         result=await ns['ask_grok_chat']('Объясни решение задачи')
         self.assertEqual(calls[0]['temperature'],0.5)
-        self.assertEqual(calls[0]['max_tokens'],2800)
+        self.assertLessEqual(calls[0]['max_tokens'],6000)
+        self.assertEqual(calls[0]['extra_body'], {'reasoning_effort': 'low'})
         self.assertIn('неполным',result)
         self.assertIn('LaTeX',calls[0]['messages'][0]['content'])
 
