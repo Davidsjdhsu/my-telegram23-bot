@@ -68,7 +68,7 @@ class PhotoTests(unittest.IsolatedAsyncioTestCase):
         user = {}; charges = Mock(); answer = AsyncMock()
         ns.update(user_lang=lambda uid: 'ru', get_user=lambda uid: user,
                   can_afford=lambda *a: True, CREDIT_COSTS={'vision': 3},
-                  start_job=lambda uid: (True, None), finish_job=Mock(), chat_typing=typing,
+                  start_job=lambda uid,**kw: (True, None), finish_job=Mock(), chat_typing=typing,
                   analyze_user_image=AsyncMock(return_value='ERROR:TimeoutError'),
                   grok_failed=lambda s: s.startswith('ERROR:'), spend_credits=charges)
         await ns['_handle_vision_upload_impl'](NS(from_user=NS(id=1), answer=answer), None, 'photo.jpg', '')

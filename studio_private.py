@@ -31,7 +31,7 @@ def menu_url(base, uid, fallback):
 # generation endpoints retain the signed Telegram tester session requirement.
 PUBLIC_SHELL = {
     'home/style.css', 'home/app.js', 'shared/mobile.css', 'shared/mobile.js',
-    'templates/fonts.css', 'shared/preferences.js', 'shared/en.json',
+    'templates/fonts.css', 'shared/preferences.js', 'shared/en.json', 'shared/billing.js', 'shared/billing.css',
 }
 PUBLIC_SHELL.update('templates/' + name for name in re.findall(
     r'url\((fonts/[a-f0-9]+\.woff2)\)',
@@ -40,11 +40,12 @@ PUBLIC_SHELL.update('templates/' + name for name in re.findall(
 
 
 class Studio:
-    def __init__(self, verify, send_file, action, origin, profile=None, menu_action=None, outline_planner=None, outline_submit=None, settings=None, billing=None, state_root=None, presentation_orders=None):
+    def __init__(self, verify, send_file, action, origin, profile=None, menu_action=None, outline_planner=None, outline_submit=None, settings=None, billing=None, state_root=None, presentation_orders=None, available=None):
         self.verify, self.send_file, self.action = verify, send_file, action
         self.profile_callback, self.menu_action = profile, menu_action
         self.settings_callback = settings
         self.billing = billing
+        self.available = available or (lambda uid: billing.get_user(uid).get('credits', 0) if billing else 0)
         self.state_root = Path(state_root) if state_root else None
         self.presentation_orders = presentation_orders
         if self.state_root:
@@ -60,6 +61,10 @@ class Studio:
         self.import_busy = False
         self.receipts = {}
         self.archives = [zipfile.ZipFile(p) for p in sorted(BASE.glob('studio-assets-*.zip'))]
+
+    def shortage(self, uid, required):
+        from credit_shortage import error
+        return error(required, self.available(uid))
 
     def authorized(self, request):
         s = self.sessions.get(request.cookies.get(COOKIE, ''))
@@ -273,6 +278,8 @@ class Studio:
         except TimeoutError:
             return web.json_response({'ok':False,'error':'Истекло время ожидания. Проверьте чат перед повторной отправкой.'},status=504)
         except web.HTTPException as exc:
+            if exc.status == 402 and exc.content_type == 'application/json':
+                return web.json_response(json.loads(exc.text), status=402)
             return web.json_response({"ok":False,"error":exc.text}, status=exc.status)
         except Exception as exc:
             print('studio_export_error', type(exc).__name__, flush=True)

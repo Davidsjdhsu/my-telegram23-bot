@@ -239,6 +239,7 @@ def main_namespace(*names):
             nodes.append(node)
     namespace = {name: getattr(support, name) for name in dir(support) if not name.startswith('__')}
     from unittest.mock import Mock, AsyncMock
+    namespace.update(chat_allowance=__import__('chat_allowance'),chat_billing_flow=__import__('chat_billing_flow'),ADMIN_IDS=set())
     namespace.update(PRICE_VERSION=__import__('service_pricing').VERSION,can_afford=lambda *a:True,CREDIT_COSTS={'chat':.5,'voice':3,'vision':3},spend_credits=Mock(),billing_saved=AsyncMock())
     from wallet import BillingPersistenceError, persistence_notice
     namespace.update(BillingPersistenceError=BillingPersistenceError,persistence_notice=persistence_notice)
@@ -397,7 +398,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         async def answer(text,**kwargs): events.append('progress')
         async def analyze(*args): return r'**Ответ:** \(\frac{118^\circ}{2}=59^\circ\)'
         ns.update(bot=bot,user_lang=lambda uid:'ru',get_user=lambda uid:user,
-                  can_afford=lambda *a:True,CREDIT_COSTS={'vision':3},start_job=lambda uid:(True,None),
+                  can_afford=lambda *a:True,CREDIT_COSTS={'vision':3},start_job=lambda uid,**kw:(True,None),
                   finish_job=lambda uid:events.append('finish'),analyze_user_image=analyze,grok_failed=lambda x:False,
                   main_kb=lambda *a,**kw:'menu',spend_credits=lambda *a,**kw:events.append('charged'),
                   save_users=lambda:None,note_success=lambda uid:None,append_chat_turn=lambda *a:None,
@@ -405,14 +406,16 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         m=types.SimpleNamespace(from_user=types.SimpleNamespace(id=1),answer=answer)
         await ns['handle_vision_upload'](m,None,'test.jpg','')
         self.assertIn('118° / 2=59°',bot.sent[0][1])
-        self.assertEqual(events,['progress','charged','finish'])
+        self.assertEqual(events,['progress','finish'])
+        self.assertEqual(user['credits'],10)
+        self.assertEqual(__import__('chat_allowance').status(user)['remaining'],9)
         self.assertEqual(ns['_chat_gate'].active,set())
 
     async def test_photo_progress_failure_releases_both_guards(self):
         ns=main_namespace('handle_vision_upload','_handle_vision_upload_impl');events=[]
         async def fail(*a,**kw): raise ConnectionError()
         ns.update(user_lang=lambda uid:'ru',get_user=lambda uid:{},can_afford=lambda *a:True,
-                  CREDIT_COSTS={'vision':3},start_job=lambda uid:(True,None),finish_job=lambda uid:events.append('finish'))
+                  CREDIT_COSTS={'vision':3},start_job=lambda uid,**kw:(True,None),finish_job=lambda uid:events.append('finish'))
         with self.assertRaises(ConnectionError):
             await ns['handle_vision_upload'](types.SimpleNamespace(from_user=types.SimpleNamespace(id=1),answer=fail),None,'path','')
         self.assertEqual(events,['finish'])

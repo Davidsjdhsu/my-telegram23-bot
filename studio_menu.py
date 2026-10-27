@@ -26,10 +26,12 @@ def forms_html(base):
     source=source.replace("const miniSession = createMiniAppSession({ getTg, apiBase });",'''const miniSession = (()=>{
       let pending=false,retry=null;
       async function request(path,body){const r=await fetch('/studio/'+path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json','X-Studio-Request':'1'}:{},body:body?JSON.stringify(body):undefined,cache:'no-store'});const b=await r.json();if(!r.ok||!b.ok)throw Error(b.error||'request_failed');return b}
-      return {loadProfile:()=>request('profile'),async send(action,payload={}){if(pending)return false;pending=true;if(action==='gen_word'||action==='gen_excel'){const field=document.querySelector('.screen.active [data-content-language]');payload={...payload,content_lang:field?.value||window.AlixPreferences?.content()||'ru'}}const key=JSON.stringify({action,payload});if(!retry||retry.key!==key)retry={key,id:crypto.randomUUID()};try{await request('action',{action,payload,requestId:retry.id});retry=null;return true}finally{pending=false}}};
+      return {async authorized(){try{await request('profile');return true}catch{return false}},loadProfile:()=>request('profile'),async send(action,payload={}){if(pending)return false;pending=true;if(action==='gen_word'||action==='gen_excel'){const field=document.querySelector('.screen.active [data-content-language]');payload={...payload,content_lang:field?.value||window.AlixPreferences?.content()||'ru'}}const key=JSON.stringify({action,payload});if(!retry||retry.key!==key)retry={key,id:crypto.randomUUID()};try{await request('action',{action,payload,requestId:retry.id});retry=null;return true}finally{pending=false}}};
     })();''')
     source=source.replace('new URL(relativePath, window.location.href)', "new URL(relativePath, window.location.origin + '/')")
-    source=source.replace('if (tg.initData) {','if (true) {').replace("if (!getTg()?.initData) return;",'')
+    # Legacy forms use the server-verified, HttpOnly Studio session.
+    # Confirm it explicitly before submitting or refreshing profile data.
+    source=source.replace('if (tg.initData) {', "if (!(await miniSession.authorized())) { tg.showAlert?.('Откройте меню заново в Telegram.'); return; } {").replace("if (!getTg()?.initData) return;", "if (!(await miniSession.authorized())) return;")
     # Match existing theme while preserving every form, price and validation rule.
     theme='''<link rel="stylesheet" href="/studio/templates/fonts.css"><style>
     html,body{background:#191b20!important;color:#e7e2d9;font-family:Manrope,sans-serif!important}.display{font-family:'Cormorant Garamond',Georgia,serif!important}.orb,.glow,.glow-1,.glow-2,.bg-glow{display:none!important}input,textarea,select{background:#252830!important;color:#e7e2d9!important;border-color:#514b45!important}.btn-primary,.form-submit,.field-chip.active,.credits-topup,.gauge-topup{background:linear-gradient(110deg,#b59a6b,#d1bb93)!important;color:#211e19!important;box-shadow:none!important}.tabs,.tabbar-float{display:none!important}.form-label,.form-hint,.form-cost{color:#b7b3ad!important}.wrap{max-width:600px;padding-bottom:30px}.studio-return{display:block;padding:18px 22px;color:#c4aa7d;text-decoration:none;font:14px Manrope,sans-serif}body{padding-bottom:24px!important}</style>'''
@@ -46,7 +48,7 @@ def forms_html(base):
     
     window.addEventListener('pagehide',()=>{studioBack?.offClick(studioReturn);studioBack?.hide()});
     '''
-    source=source.replace('</head>', '<script defer src="/studio/shared/preferences.js"></script></head>')
+    source=source.replace('</head>', '<link rel="stylesheet" href="/studio/shared/billing.css"><script defer src="/studio/shared/billing.js"></script><script defer src="/studio/shared/preferences.js"></script></head>')
     initialization += '''
     for(const id of ['form-word','form-excel','form-resume']){
         const screen=document.getElementById('screen-'+id);if(!screen)continue;

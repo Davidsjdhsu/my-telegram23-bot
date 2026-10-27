@@ -9,9 +9,10 @@ from wallet import apply
 
 
 class ConstructorBilling:
-    def __init__(self, get_user, persist, start, finish, admins):
+    def __init__(self, get_user, persist, start, finish, admins, available=None):
         self.get_user, self.persist = get_user, persist
         self.start, self.finish, self.admins = start, finish, admins
+        self.available = available or (lambda uid: get_user(uid).get("credits", 0))
 
     async def deliver(self, uid, fingerprint, cost, data, send):
         user = self.get_user(uid)
@@ -27,8 +28,9 @@ class ConstructorBilling:
         if not ok:
             raise web.HTTPConflict(text=reason)
         try:
-            if uid not in self.admins and (user.get('credits') or 0) < cost:
-                raise web.HTTPPaymentRequired(text=f'Недостаточно кредитов. Нужно {cost}.')
+            if uid not in self.admins and self.available(uid) < cost:
+                from credit_shortage import error
+                raise error(cost, self.available(uid))
             # Do not accumulate unresolved attempts or allow spending held funds.
             if any(row.get('status') == 'pending' for row in orders.values()):
                 raise web.HTTPConflict(text='Сначала уточните статус предыдущей отправки в поддержке.')

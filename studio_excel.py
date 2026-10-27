@@ -103,7 +103,7 @@ class ExcelWorkflow(WordWorkflow):
         if r['status'] not in ('ready','interrupted','failed'): raise web.HTTPConflict()
         if type(body.get('confirmedCost')) is not int or body['confirmedCost']!=r['cost']:
             raise web.HTTPConflict(text='Подтвердите актуальную стоимость.')
-        if not r.get('billing_pending') and not self.afford(user['id'],r['cost']): raise web.HTTPPaymentRequired(text='Недостаточно кредитов. Пополните баланс в профиле.')
+        if not r.get('billing_pending') and not self.afford(user['id'],r['cost']): raise self.studio.shortage(user['id'],r['cost'])
         if any(v[0]==user['id'] for v in self.tasks.values()): raise web.HTTPConflict(text='Предыдущая таблица ещё собирается.')
         r.update(status='building',stage='Собираем таблицу с формулами',notice=None); job.save()
         task=asyncio.create_task(self.run(user,job)); self.tasks[r['id']]=(user['id'],task)

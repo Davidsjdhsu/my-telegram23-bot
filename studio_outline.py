@@ -103,6 +103,11 @@ class OutlinePreview:
                 raise web.HTTPTooManyRequests(text='Дождитесь завершения текущих сборок.')
             oldest = min(finished, key=lambda k: self.rows[k]['created'])
             del self.rows[oldest]
+        cost = presentation_cost(count, 'designer_'+style if kind == 'designer' else key)
+        if self.studio.profile_callback:
+            profile = await self.studio.profile_callback(user)
+            if not profile.get('unlimited') and profile.get('available', profile.get('credits', 0)) < cost:
+                raise self.studio.shortage(user['id'], cost)
         token = secrets.token_urlsafe(24)
         row = dict(id=token, uid=user['id'], fingerprint=fingerprint, created=now, expires=now+86400,
                    status='planning', cost=presentation_cost(count, 'designer_'+style if kind == 'designer' else key), error=None)

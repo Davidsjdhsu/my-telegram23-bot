@@ -111,6 +111,15 @@ class OutlineTests(unittest.IsolatedAsyncioTestCase):
   token=await self.create();r=await self.client.get('/studio/outline/'+token);body=await r.json()
   self.assertEqual(body['status'],'failed');self.assertNotIn('private provider',json.dumps(body));self.submit.assert_not_awaited()
 
+class OutlineCreditTests(OutlineTests):
+ async def test_shortage_is_structured_before_planning(self):
+  self.studio.profile_callback=AsyncMock(return_value={'credits':9.5,'available':9.5})
+  self.studio.available=lambda uid:9.5
+  r=await self.client.post('/studio/outline',json=PAYLOAD,headers=HEADERS)
+  self.assertEqual(r.status,402)
+  body=await r.json();self.assertEqual(body['required'],40);self.assertEqual(body['missing'],30.5)
+  self.assertEqual(body['topup'],60);self.assertFalse(self.studio.outline.rows)
+
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
  async def test_real_builder_receives_saved_outline_without_replanning(self):
   state=SimpleNamespace(set_data=AsyncMock(),set_state=AsyncMock());builder=AsyncMock(return_value={'delivered':True});tasks={PILOT_UID:object()}
@@ -142,7 +151,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
    fn=load_functions(['studio_plan_preview'],env)['studio_plan_preview']
    data,palette=await fn({'id':909828109},{**PAYLOAD,'kind':'designer','style':style,'key':'d16','slides':6})
    self.assertEqual(data['theme_name'],'designer_'+style);self.assertEqual(choose_design(data)['template_id'],'d16')
-   afford.assert_called_once_with(909828109,120);self.assertEqual(data['pres_plan_key'],plan_key(data))
+   self.assertEqual(presentation_cost(data['slides'], data),120);self.assertEqual(data['pres_plan_key'],plan_key(data))
 
 class DesignerChoiceDeliveryTests(OutlineTests):
  async def test_choices_reach_submission_and_final_plan_at_same_price(self):

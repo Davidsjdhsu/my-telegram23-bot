@@ -53,6 +53,7 @@ def load_functions(names, env=None):
     ns.update(PRICE_VERSION=VERSION, excel_price=excel_price, billing_saved=AsyncMock(),can_afford=lambda *a:True)
     from wallet import BillingPersistenceError, persistence_notice, request_key
     ns.update(BillingPersistenceError=BillingPersistenceError,persistence_notice=persistence_notice,request_key=request_key)
+    ns.update(available_credits=lambda uid:0,chat_billing_flow=__import__('chat_billing_flow'),chat_allowance=__import__('chat_allowance'),credit_shortage_error=__import__('credit_shortage').error)
     ns.update(env or {})
     module = ast.Module(body=[ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')],level=0)] + nodes, type_ignores=[])
     exec(compile(ast.fix_missing_locations(module),'main.py','exec'),ns)

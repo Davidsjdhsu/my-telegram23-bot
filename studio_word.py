@@ -165,7 +165,7 @@ class WordWorkflow:
         elif action!='build' or r['status'] not in ('ready','failed','interrupted'):raise web.HTTPBadRequest()
         expected=r.get('actual_cost') if action=='accept' else r['cost']
         if type(body.get('confirmedCost')) is not int or body['confirmedCost']!=expected:raise web.HTTPConflict(text='Подтвердите актуальную стоимость.')
-        if not r.get('billing_pending') and not self.afford(user['id'],expected):raise web.HTTPPaymentRequired(text='Недостаточно кредитов. Пополните баланс в профиле.')
+        if not r.get('billing_pending') and not self.afford(user['id'],expected):raise self.studio.shortage(user['id'],expected)
         if any(value[0]==user['id'] for value in self.tasks.values()):raise web.HTTPConflict(text='Предыдущий документ ещё собирается.')
         r.update(status='building',stage='Готовим содержание',notice=None);job.save()
         task=asyncio.create_task(self.run(user,job,action));self.tasks[r['id']]=(user['id'],task)

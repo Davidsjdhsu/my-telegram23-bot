@@ -74,7 +74,7 @@ class PaymentTests(unittest.IsolatedAsyncioTestCase):
    self.assertEqual(bot.answer_pre_checkout_query.await_args.kwargs['ok'],ok)
  async def test_verified_telegram_payment_duplicate_keeps_fraction(self):
   u={'credits':99.5};save=AsyncMock(return_value=True)
-  ns=load_functions(['successful_payment_handler','billing_saved'],dict(user_lang=lambda _:'ru',get_user=lambda _:u,_processed_tg_charge_ids=set(),save_users_now=save,_notify_admins=AsyncMock(),log_payment=Mock(),PAYMENT_NOTIFY_IDS=set(),tr=lambda *a,**kw:'ok',asyncio=asyncio))
+  ns=load_functions(['successful_payment_handler','billing_saved'],dict(user_lang=lambda _:'ru',get_user=lambda _:u,_processed_tg_charge_ids=set(),save_users_now=save,_notify_admins=AsyncMock(),log_payment=Mock(),chat_billing_flow=NS(after_payment=AsyncMock()),PAYMENT_NOTIFY_IDS=set(),tr=lambda *a,**kw:'ok',asyncio=asyncio))
   m=NS(from_user=NS(id=1,username='test'),answer=AsyncMock(),successful_payment=NS(invoice_payload='credits:custom:100',telegram_payment_charge_id='receipt',currency='RUB',total_amount=10000))
   await ns['successful_payment_handler'](m);await ns['successful_payment_handler'](m)
   self.assertEqual(u['credits'],199.5);self.assertEqual(len(u['wallet_transactions']),1)
@@ -83,7 +83,7 @@ class PaymentTests(unittest.IsolatedAsyncioTestCase):
  async def test_chat_voice_success_failure_and_repeat(self):
   for voice,cost in ((False,.5),(True,3)):
    ns,users=chat_tests.IntegrationTests().chat_ns()
-   u=users[1];ns['CREDIT_COSTS']={'chat':.5,'voice':3}
+   u=users[1];u['chat_allowance']={'day':__import__('chat_allowance').day(),'receipts':{str(i):'chat' for i in range(10)}};__import__('chat_allowance').consent(u,True);ns['CREDIT_COSTS']={'chat':.5,'voice':3}
    ns['spend_credits']=lambda uid,action,operation_id:wallet.apply(u,operation_id,-cost,action)
    ns['maybe_send_voice_reply']=AsyncMock()
    m=NS(from_user=NS(id=1),chat=NS(id=1),message_id=987,voice=NS() if voice else None)

@@ -9,7 +9,7 @@ import copy
 
 PERSISTED = ('wallet_transactions','constructor_orders','studio_word_payments',
              'studio_excel_payments','presentation_payments','fixed_word_completed_orders',
-             'car_sale_completed_orders','chat_price_notice','delivery_payments','studio_ui_lang','studio_content_lang')
+             'car_sale_completed_orders','chat_allowance','chat_paid_day','billing_resume','studio_topups','chat_price_notice','delivery_payments','studio_ui_lang','studio_content_lang')
 
 def units(value):
     try: n=Decimal(str(value if value is not None else 0))*2

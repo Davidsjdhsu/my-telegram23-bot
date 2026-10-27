@@ -21,7 +21,7 @@ def excel_price(kind):
     return EXCEL.get(kind,20)
 
 def public_tariffs():
-    return dict(version=VERSION,standard=STANDARD,designer=DESIGNER,chat=CHAT,vision=VISION,voice=VOICE,
+    return dict(free_daily=10,free_reset_timezone="Europe/Moscow",version=VERSION,standard=STANDARD,designer=DESIGNER,chat=CHAT,vision=VISION,voice=VOICE,
                 word_page=WORD_PAGE,word_minimum=WORD_MINIMUM,word_detailed=sorted(DETAILED_WORD),
                 word_generated=sorted(GENERATED_WORD),excel=EXCEL,
                 constructor=dict(base=10,extra_photo=3,pattern=2,maximum=20))
