@@ -1,3 +1,4 @@
+from response_outcomes import GenerationStopped, generation_notice
 """Bounded private outline cache. Content/images/billing start only on confirm."""
 import asyncio
 import copy
@@ -129,6 +130,8 @@ class OutlinePreview:
                 data['pres_plan_key'] = plan_key(data)
                 palette = {**palette, **chosen}
             row.update(data=copy.deepcopy(data), palette=palette, status='ready')
+        except GenerationStopped as error:
+            row.update(status='failed', error=generation_notice(error))
         except web.HTTPException as error:
             row.update(status='failed', error=error.text)
         except Exception:

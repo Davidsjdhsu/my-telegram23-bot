@@ -20,7 +20,7 @@ function update(inspector=true){
  let bill;try{bill=S.quote(deck);}catch(error){bill={slides:deck.slides.map(()=> '—'),cost:'—'};status(error.message);}
  $('#slide-label').textContent=`Слайд ${slideIndex+1} из ${deck.slides.length} · ${bill.slides[slideIndex]} кредитов`;
  $('#total-price').textContent=`Всего: ${bill.cost} кредитов`;
- $('#export').textContent=`Получить · ${bill.cost} кредитов`;
+ $('#export').textContent=`Создать за ${bill.cost} кредитов`;
  const overflow=current().elements.filter(hasOverflow);
  $('#warning').textContent=overflow.length?'Текст не помещается в рамку. Увеличьте рамку или уменьшите шрифт.':'';
  $('#delete-slide').disabled=deck.slides.length===1;$('#slide-up').disabled=slideIndex===0;$('#slide-down').disabled=slideIndex===deck.slides.length-1;$('#add-slide').disabled=deck.slides.length>=20;

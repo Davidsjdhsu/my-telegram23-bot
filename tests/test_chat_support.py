@@ -239,6 +239,9 @@ def main_namespace(*names):
             nodes.append(node)
     namespace = {name: getattr(support, name) for name in dir(support) if not name.startswith('__')}
     from unittest.mock import Mock, AsyncMock
+    import response_outcomes, chat_background
+    namespace.update({k: getattr(response_outcomes, k) for k in ('OUTCOME_RULES', 'CONTENT_POLICY', 'parse_reply', 'billable', 'usable_chat_reply')})
+    namespace['schedule_memory'] = chat_background.schedule_memory
     namespace.update(chat_allowance=__import__('chat_allowance'),chat_billing_flow=__import__('chat_billing_flow'),ADMIN_IDS=set())
     namespace.update(PRICE_VERSION=__import__('service_pricing').VERSION,can_afford=lambda *a:True,CREDIT_COSTS={'chat':.5,'voice':3,'vision':3},spend_credits=Mock(),billing_saved=AsyncMock())
     from wallet import BillingPersistenceError, persistence_notice
@@ -321,7 +324,8 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0]['temperature'],0.5)
         self.assertLessEqual(calls[0]['max_tokens'],6000)
         self.assertEqual(calls[0]['extra_body'], {'reasoning_effort': 'low'})
-        self.assertIn('неполным',result)
+        self.assertIsNone(result)
+        self.assertEqual(len(calls),2)
         self.assertIn('LaTeX',calls[0]['messages'][0]['content'])
 
     async def test_request_failure_returns_no_provider_details(self):

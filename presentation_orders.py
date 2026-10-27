@@ -1,3 +1,4 @@
+from response_outcomes import GenerationStopped, ensure_generation, ensure_pptx, generation_notice
 """Durable presentation delivery journal shared by chat and Mini App.
 
 Telegram has no idempotency key for sendDocument. An interrupted send is
@@ -121,7 +122,7 @@ class PresentationOrders:
         for path in self.root.glob('*/order.json'):
             try:
                 row = json.loads(path.read_text())
-                if row['uid'] == uid and row['status'] not in ('completed', 'expired'):
+                if row['uid'] == uid and row['status'] not in ('completed', 'expired', 'rejected'):
                     rows.append(row)
             except (OSError, ValueError, KeyError):
                 continue
@@ -153,6 +154,8 @@ class PresentationOrders:
             row.update(status='delivery_unknown', stage='Нужно уточнить отправку в поддержке.')
             job.save()
             return {'delivered': False, 'status': 'delivery_unknown'}
+        ensure_generation(row.get('data', {}).get('pres_plan'))
+        ensure_pptx(job.directory / 'document.pptx')
         if not row.get('billing_pending') and not self.afford(row['uid'], row['cost']):
             raise ValueError('Недостаточно кредитов. Пополните баланс и продолжите этот заказ.')
         for ext in ('pptx', 'pdf'):
@@ -177,7 +180,7 @@ class PresentationOrders:
         job = self.get(uid, data, cost)
         if job.row['status'] == 'completed':
             return {'delivered': True, 'charged': job.row.get('charged', 0)}
-        if job.row['status'] in ('expired', 'delivery_unknown'):
+        if job.row['status'] in ('expired', 'delivery_unknown', 'rejected'):
             return {'delivered': False, 'status': job.row['status']}
         if uid in self.running:
             return {'delivered': False, 'status': 'building'}
@@ -194,6 +197,12 @@ class PresentationOrders:
                                stage='Сборка не завершена. Готовые этапы сохранены.')
                 job.save()
             return result if job.row['status'] == 'completed' else {'delivered': False, 'status': job.row['status']}
+        except GenerationStopped as error:
+            row = job.row
+            row.update(status='rejected', stage=generation_notice(error), restart_notice=False)
+            job.save()
+            await self.notify(uid, generation_notice(error))
+            return {'delivered': False, 'status': 'rejected'}
         except (Exception, asyncio.CancelledError):
             job.row.update(status='delivery_unknown' if job.row.get('sending') else 'interrupted',
                            stage='Сборка прервалась. Заказ сохранён.')

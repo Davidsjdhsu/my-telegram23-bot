@@ -1,4 +1,5 @@
 import asyncio
+import json
 import tempfile
 import time
 import unittest
@@ -11,7 +12,7 @@ from chat_support import is_retry_request
 
 
 def response(text='Ответ: 1000 шариков.', finish='stop'):
-    return NS(choices=[NS(message=NS(content=text), finish_reason=finish)])
+    return NS(choices=[NS(message=NS(content=json.dumps({"status":"answer","text":text}, ensure_ascii=False) if text else ""), finish_reason=finish)])
 
 
 class PhotoTests(unittest.IsolatedAsyncioTestCase):

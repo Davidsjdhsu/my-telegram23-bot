@@ -35,7 +35,10 @@ class Recovery(unittest.IsolatedAsyncioTestCase):
         return PresentationOrders(self.root,self.send,charge_callback(self.api,'presentation_payments','Презентация'),self.api['can_afford'],self.notify)
     async def asyncTearDown(self):self.tmp.cleanup()
     def files(self,job):
-        for ext in ('pptx','pdf'):(job.directory/('document.'+ext)).write_bytes(b'fixture')
+        from pptx import Presentation
+        deck=Presentation();slide=deck.slides.add_slide(deck.slide_layouts[0]);slide.shapes.title.text='Тест'
+        deck.save(job.directory/'document.pptx')
+        (job.directory/'document.pdf').write_bytes(b'fixture')
         job.row.update(files_ready=True,title='Тест');job.save()
     async def test_restart_retains_request_and_completed_stage_no_regeneration(self):
         job=self.service.get(1,self.data,96);self.files(job);job.row.update(status='building',sent=['pptx']);job.save()
