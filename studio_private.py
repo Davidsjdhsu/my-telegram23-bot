@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import mimetypes
+import os
 import re
 import secrets
 import time
@@ -13,7 +14,17 @@ from urllib.parse import parse_qsl
 from aiohttp import web
 
 PILOT_UID = 465823470
-PILOT_UIDS = frozenset({PILOT_UID, 909828109})
+def pilot_ids(extra):
+    """Additional testers get Studio access only, never admin privileges."""
+    ids = {PILOT_UID, 909828109}
+    for value in extra.split(','):
+        value = value.strip()
+        if re.fullmatch(r"[0-9]{1,16}", value) and int(value) > 0:
+            ids.add(int(value))
+    return frozenset(ids)
+
+
+PILOT_UIDS = pilot_ids(os.getenv("STUDIO_ADDITIONAL_TESTER_IDS", ""))
 VERSION = "studio-mobile-pilot-3"
 COOKIE = "alix_studio"
 BASE = Path(__file__).resolve().parent
