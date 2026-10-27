@@ -10,6 +10,9 @@ from word_quality import (
 from excel_styles import normalize_excel_appearance, STYLE_LABELS as EXCEL_STYLES, PALETTE_LABELS as EXCEL_PALETTES
 import os
 from wallet import BillingPersistenceError, persistence_notice, request_key
+import chat_allowance
+import chat_billing_flow
+from credit_shortage import error as credit_shortage_error
 from service_pricing import word_price, excel_price, public_tariffs, VERSION as PRICE_VERSION
 import asyncio
 import tempfile
@@ -1078,14 +1081,7 @@ CREDIT_TO_RUB_RATE = 1  # 1 рубль = 1 кредит - без пакетов,
 
 
 async def send_no_credits_notice(m: Message, state: FSMContext, lang: str):
-    """Единая точка для "кредитов не хватает" по всему боту - вместо того чтобы просто
-    сказать об этом и отправить человека самого искать, где пополнить, сразу же
-    предлагаем это сделать: текст + готовые суммы кнопками (тот же topup_offer_kb, что
-    и у "Мой тариф" - см. my_plan) вместо того чтобы сразу принудительно спрашивать сумму
-    текстом. Одно место вместо копирования одной и той же пары строк в 18+ местах кода,
-    где идёт проверка can_afford()."""
-    await m.answer(tr("msg_limit", lang))
-    await m.answer(tr("msg_topup_offer", lang), reply_markup=topup_offer_kb(lang))
+    await chat_billing_flow.shortage(globals(), m, state)
 
 
 async def show_topup_packages(m: Message, lang: str, state: FSMContext, amount_rub=None):
@@ -1306,6 +1302,10 @@ async def successful_payment_handler(m: Message):
         return
     from wallet import apply
     apply(u, 'telegram:'+charge_id, credits_bought, 'Пополнение баланса', 'topup')
+    if payload.startswith('credits:studio:'):
+        topup = u.get('studio_topups', {}).get(payload.split(':')[2])
+        if topup and topup['amount'] == credits_bought:
+            topup['paid'] = True
     if charge_id:
         _processed_tg_charge_ids.add(charge_id)
     # Ждём реальной записи на диск: баланс и отметка о платеже уходят одним файлом.
@@ -1325,6 +1325,7 @@ async def successful_payment_handler(m: Message):
         await m.answer("Оплата получена. Сохранение баланса задерживается; повторно оплачивать не нужно. Поддержка уведомлена: @AlixDocSupport.")
         return
     await m.answer(tr("msg_payment_success", lang, credits=credits_bought, balance=u["credits"]))
+    await chat_billing_flow.after_payment(globals(), m.from_user.id)
     if PAYMENT_NOTIFY_IDS:
         uname = f"@{m.from_user.username}" if m.from_user.username else str(m.from_user.id)
         note = (
@@ -2100,7 +2101,7 @@ TR = {
                              "zh": "没能理解。请用下方按钮选择操作，或输入 /cancel 重新开始。",
                              "es": "No entendí. Elige una acción con el botón de abajo, o escribe /cancel para empezar de nuevo.",
                              "fr": "Je n'ai pas compris. Choisis une action avec le bouton ci-dessous, ou tape /cancel pour recommencer."},
-    "msg_plan_info": {"ru": "💳 Баланс: {credits} кредитов\nПрезентация: обычная — 10, дизайнерская — 20 за слайд. Конструктор — 10–20 за слайд (основа 10, фото сверх первого +3, узор +2, максимум 20). Word: простые документы — 20, подробные договоры — 40 за файл; учебные работы и обычный текст — 5 за страницу, минимум 20. Excel — 20, бюджет проекта и финансовая модель — 40. Чат — 0,5 за ответ, фото — 3, голос — 3. Пустые шаблоны и навигация бесплатны.", "en": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. Chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "de": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. Chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "ar": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. Chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "zh": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. Chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "es": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. Chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "fr": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. Chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free."},
+    "msg_plan_info": {"ru": "💳 Баланс: {credits} кредитов\nПрезентация: обычная — 10, дизайнерская — 20 за слайд. Конструктор — 10–20 за слайд (основа 10, фото сверх первого +3, узор +2, максимум 20). Word: простые документы — 20, подробные договоры — 40 за файл; учебные работы и обычный текст — 5 за страницу, минимум 20. Excel — 20, бюджет проекта и финансовая модель — 40. 10 бесплатных обращений в день общим лимитом для текста, фото и голоса. После согласия: чат — 0,5 за ответ, фото — 3, голос — 3. Пустые шаблоны и навигация бесплатны.", "en": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. 10 free daily requests shared across text, photos and voice. After consent: chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "de": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. 10 free daily requests shared across text, photos and voice. After consent: chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "ar": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. 10 free daily requests shared across text, photos and voice. After consent: chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "zh": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. 10 free daily requests shared across text, photos and voice. After consent: chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "es": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. 10 free daily requests shared across text, photos and voice. After consent: chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free.", "fr": "💳 Balance: {credits} credits\nStandard slides: 10; designer: 20. Constructor: base 10, extra photo +3, pattern +2, maximum 20/slide. Word: simple forms 20, detailed contracts 40/file; generated text 5/body page, minimum 20. Excel 20; project budget and financial model 40. 10 free daily requests shared across text, photos and voice. After consent: chat 0.5/reply; photo 3; voice 3 including reply. Blank templates and navigation are free."},
     "msg_pptx_ready": {
         "ru": "Готово ✅\n\nPDF — для просмотра: все слайды с фотографиями и оформлением. Открывай его прямо в Telegram. PPTX — для редактирования в PowerPoint, Keynote или Google Презентациях.",
         "en": "Done ✅\n\nPDF contains all slides, photographs and design for viewing in Telegram. Use PPTX for editing in PowerPoint, Keynote or Google Slides.",
@@ -2179,6 +2180,15 @@ ALL_BTN_TEMPLATE_LABELS = set(TR["btn_template"].values())
 # только по состоянию (совпадает с любым текстом), так что без этих хендлеров выше него
 # любая другая кнопка в этом состоянии перехватывалась бы как "невалидная сумма" - именно
 # так пользователь застревал в бесконечном "Не понял сумму" после "Мой тариф" -> "Передумал".
+@dp.message(Command("free"))
+async def chat_free_command(m: Message):
+    u = get_user(m.from_user.id)
+    chat_allowance.consent(u, False)
+    await billing_saved()
+    remaining = chat_allowance.status(u)['remaining']
+    await m.answer(f'Платные ответы отключены. Бесплатных обращений сегодня осталось: {remaining} из 10. Уже запущенный и подтверждённый ответ завершится по прежним условиям.')
+
+
 @dp.message(Form.waiting_topup_amount, F.text.in_(ALL_MAIN_MENU_LABELS))
 async def topup_amount_escape_main_menu(m: Message, state: FSMContext):
     lang = user_lang(m.from_user.id)
@@ -2865,31 +2875,72 @@ class VoiceToTextMiddleware(BaseMiddleware):
     успевает произойти раньше, чем aiogram решает, какой хендлер вызывать."""
 
     async def __call__(self, handler, event, data):
-        if isinstance(event, Message) and event.voice and not event.text:
-            uid = event.from_user.id
-            lang = user_lang(uid)
-            if not can_afford(uid, CREDIT_COSTS["voice"]):
-                await event.answer("Недостаточно кредитов. Голосовое сообщение — 3 кредита.")
-                return
-            if voice_rate_limited(uid):
-                await event.answer(tr("msg_chat_rate_limited", lang))
-                return
-            listening_msg = await event.answer(tr("msg_voice_transcribing", lang))
-            transcript = await transcribe_voice(event.voice, uid)
-            try:
-                await listening_msg.delete()
-            except Exception:
-                pass
-            if not transcript:
-                dur = getattr(event.voice, "duration", 0) or 0
-                key = "msg_voice_too_long" if dur > MAX_VOICE_SECONDS else "msg_voice_failed"
-                await event.answer(tr(key, lang))
-                return
-            event = event.model_copy(update={"text": transcript})
-        return await handler(event, data)
+        ticket = None
+        uid = getattr(getattr(event, 'from_user', None), 'id', None)
+        try:
+            if isinstance(event, Message) and event.voice and not event.text:
+                lang = user_lang(uid)
+                if voice_rate_limited(uid):
+                    await event.answer(tr("msg_chat_rate_limited", lang))
+                    return
+                state = data.get('state')
+                # Voice replies inside an order are input, not a paid chat turn.
+                if not state or not await state.get_state():
+                    ticket = await chat_billing_flow.begin(globals(), event, 'voice', state=state)
+                    if ticket is None:
+                        return
+                listening_msg = await event.answer(tr("msg_voice_transcribing", lang))
+                transcript = await transcribe_voice(event.voice, uid)
+                try:
+                    await listening_msg.delete()
+                except Exception:
+                    pass
+                if not transcript:
+                    dur = getattr(event.voice, "duration", 0) or 0
+                    await event.answer(tr("msg_voice_too_long" if dur > MAX_VOICE_SECONDS else "msg_voice_failed", lang))
+                    return
+                event = event.model_copy(update={"text": transcript})
+                if ticket is not None:
+                    chat_allowance.release(get_user(uid), ticket)
+                    ticket = None
+            return await handler(event, data)
+        finally:
+            if ticket is not None:
+                chat_allowance.release(get_user(uid), ticket)
 
 
 dp.message.outer_middleware(VoiceToTextMiddleware())
+
+
+@dp.callback_query(F.data.startswith("chat_paid:"))
+async def chat_paid_callback(cq: CallbackQuery):
+    await cq.answer()
+    parts = cq.data.split(':')
+    u = get_user(cq.from_user.id)
+    record = u.get('billing_resume')
+    if len(parts) != 3 or not record or record['token'] != parts[2] or record['expires'] <= time.time():
+        await bot.send_message(cq.from_user.id, 'Предложение устарело. Отправьте запрос ещё раз.')
+        return
+    enabled = parts[1] == 'yes'
+    previous = u.get('chat_paid_day')
+    chat_allowance.consent(u, enabled)
+    try:
+        await billing_saved()
+    except BillingPersistenceError:
+        u['chat_paid_day'] = previous
+        await bot.send_message(cq.from_user.id, 'Не удалось сохранить выбор. Платный запрос не запущен. Попробуйте позже.')
+        return
+    if enabled:
+        await bot.send_message(cq.from_user.id, 'Платные ответы включены до 00:00 по Москве. Текст — 0,5 кредита, голос и фото — по 3. Отключить: /free.')
+        await chat_billing_flow.resume(globals(), cq.from_user.id, parts[2])
+    else:
+        await bot.send_message(cq.from_user.id, 'Списаний не будет. 10 бесплатных обращений станут доступны в 00:00 по Москве. Меню, ваши файлы и создание документов остаются доступны.')
+
+
+@dp.callback_query(F.data.startswith("billing_resume:"))
+async def billing_resume_callback(cq: CallbackQuery):
+    await cq.answer()
+    await chat_billing_flow.resume(globals(), cq.from_user.id, cq.data.split(':', 1)[1])
 
 
 class SyncUserNameMiddleware(BaseMiddleware):
@@ -2932,7 +2983,18 @@ def can_afford(uid, cost):
     held += sum(r.get("charged", 0) for r in u.get("studio_word_payments", {}).values() if r.get("status") == "pending")
     held += sum(r.get("charged", 0) for r in u.get("studio_excel_payments", {}).values() if r.get("status") == "pending")
     held += sum(r.get("charged", 0) for r in u.get("presentation_payments", {}).values() if r.get("status") == "pending")
-    return u.get("credits", 0) - held >= cost
+    enough = u.get("credits", 0) - held >= cost
+    if not enough:
+        u['_last_shortage'] = cost
+    return enough
+
+
+def available_credits(uid):
+    u = get_user(uid)
+    held = u.get('_chat_reserved', 0)
+    for name in ('constructor_orders', 'studio_word_payments', 'studio_excel_payments', 'presentation_payments'):
+        held += sum(r.get('charged', r.get('cost', 0)) for r in u.get(name, {}).values() if r.get('status') == 'pending')
+    return max(0, u.get('credits', 0)-held)
 
 
 def spend_credits(uid, action, amount=None, *, operation_id=None, title=None):
@@ -3033,7 +3095,7 @@ def _get_photo_lock(uid) -> asyncio.Lock:
 _jobs_lock = threading.Lock()
 
 
-def start_job(uid):
+def start_job(uid, *, chat_interaction=False):
     """Помечает пользователя как занятого дорогой генерацией и проверяет
     защиту от флуда/DDoS (rate-limit + глобальный потолок).
     Возвращает (True, None) при успехе, иначе (False, "текст для пользователя").
@@ -3043,7 +3105,7 @@ def start_job(uid):
     если в будущем сюда добавится вызов из ThreadPoolExecutor/run_in_executor."""
     global _active_generations
     u = get_user(uid)
-    if u.get("_chat_reserved"):
+    if u.get("_chat_reserved") and not chat_interaction:
         return False, "Дождитесь ответа на предыдущее сообщение."
 
     with _jobs_lock:
@@ -3363,9 +3425,14 @@ async def handle_vision_upload(m: Message, state: FSMContext, local_path: str, c
     if denied:
         await m.answer(chat_notice(denied, user_lang(uid)))
         return
+    ticket = None
     try:
-        await _handle_vision_upload_impl(m, state, local_path, caption)
+        ticket = await chat_billing_flow.begin(globals(), m, 'vision', state=state)
+        if ticket is not None:
+            await _handle_vision_upload_impl(m, state, local_path, caption)
     finally:
+        if ticket is not None:
+            chat_allowance.release(get_user(uid), ticket)
         _chat_gate.leave(uid)
 
 
@@ -3375,15 +3442,12 @@ async def _handle_vision_upload_impl(m: Message, state: FSMContext, local_path: 
     lang = user_lang(m.from_user.id)
     uid = m.from_user.id
     memory_epoch = get_user(uid).get("_chat_memory_epoch", 0)
-    if not can_afford(uid, CREDIT_COSTS["vision"]):
-        await send_no_credits_notice(m, state, lang)
-        return
-    ok, reason = start_job(uid)
+    ok, reason = start_job(uid, chat_interaction=True)
     if not ok:
         await m.answer(reason)
         return
     wait_text = {
-        "ru": "Смотрю фото: распознаю текст и разберу задание… Стоимость успешного разбора — 3 кредита.",
+        "ru": "Смотрю фото: распознаю текст и разберу задание…",
         "en": "Looking at the photo: reading the text and solving it…",
         "de": "Ich schaue mir das Foto an…",
         "es": "Estoy leyendo la foto…",
@@ -3406,7 +3470,7 @@ async def _handle_vision_upload_impl(m: Message, state: FSMContext, local_path: 
         )
         if readable is None:
             return
-        spend_credits(uid, "vision", operation_id=request_key(m,"vision"))
+        chat_allowance.settle(get_user(uid), get_user(uid)['_chat_access_active'])
         await billing_saved()
         u = get_user(uid)
         u["generations"] += 1
@@ -9270,7 +9334,8 @@ async def my_plan(m: Message, state: FSMContext):
     if m.from_user.id in ADMIN_IDS:
         await m.answer(tr("msg_plan_info", lang, credits="∞"))
         return
-    await m.answer(tr("msg_plan_info", lang, credits=u.get("credits", STARTING_CREDITS)))
+    remaining = chat_allowance.status(u)['remaining']
+    await m.answer(tr("msg_plan_info", lang, credits=u.get("credits", STARTING_CREDITS)) + f'\n\nБесплатных обращений сегодня осталось: {remaining} из 10. Платные ответы можно отключить: /free.')
     # Раньше здесь безусловно вызывался show_topup_packages(), который СРАЗУ переводил
     # пользователя в режим ожидания суммы пополнения (Form.waiting_topup_amount) - то есть
     # "Мой тариф" молча навязывал пополнение, даже если человек просто хотел посмотреть
@@ -9380,9 +9445,6 @@ async def respond_in_chat(m, text, lang):
     uid = m.from_user.id
     voice = bool(getattr(m, 'voice', None))
     cost = CREDIT_COSTS['voice' if voice else 'chat']
-    if not can_afford(uid, cost):
-        await bot.send_message(uid, 'Недостаточно кредитов. Ответ в чате — 0,5 кредита; голосовое — 3 кредита. Пополните баланс в меню.')
-        return
     if get_user(uid).get('busy'):
         await bot.send_message(uid, 'Сначала дождитесь завершения текущей работы.')
         return
@@ -9391,12 +9453,11 @@ async def respond_in_chat(m, text, lang):
         await bot.send_message(uid, chat_notice(denied, lang))
         return
     u = get_user(uid)
-    u["_chat_reserved"] = cost
+    ticket = None
     try:
-        if u.get('chat_price_notice') != PRICE_VERSION:
-            await bot.send_message(uid, 'Тарифы чата: текстовый ответ — 0,5 кредита; фото — 3; голосовой запрос с ответом — 3. Списание после успешного ответа, операция появится в профиле.' if lang == 'ru' else 'Chat rates: 0.5 credit per text reply; photo 3; voice request including reply 3. Charged after a successful reply; see your profile history.')
-            u['chat_price_notice'] = PRICE_VERSION
-        u = get_user(uid)
+        ticket = await chat_billing_flow.begin(globals(), m, 'voice' if voice else 'chat', text=text)
+        if ticket is None:
+            return
         memory_epoch = u.get("_chat_memory_epoch", 0)
         local_reply = (try_local_time_answer(text) if lang == "ru" else None) or try_local_math_answer(text, lang)
         note_chat_message(uid)
@@ -9415,7 +9476,7 @@ async def respond_in_chat(m, text, lang):
         )
         if readable is None:
             return
-        spend_credits(uid, 'voice' if voice else 'chat', operation_id=request_key(m,'voice' if voice else 'chat'))
+        chat_allowance.settle(u, ticket)
         await billing_saved()
         # Failed model calls and undelivered replies must not become conversation history.
         append_chat_turn(uid, "user", text)
@@ -9428,7 +9489,8 @@ async def respond_in_chat(m, text, lang):
     except asyncio.TimeoutError:
         print("Chat memory update timed out")
     finally:
-        u.pop("_chat_reserved", None)
+        if ticket is not None:
+            chat_allowance.release(u, ticket)
         _chat_gate.leave(uid)
 
 
@@ -9750,6 +9812,7 @@ def ensure_answerable(m: Message):
 
 async def _handle_miniapp_payload(m: Message, state: FSMContext, payload: dict, action: str):
     m = ensure_answerable(m)
+    m._billing_payload = (action, payload)
     lang = user_lang(m.from_user.id)
     u = get_user(m.from_user.id)
     from studio_private import is_pilot_user
@@ -10172,10 +10235,10 @@ async def image_prompt_handler(m: Message, state: FSMContext):
     if not prompt:
         await m.answer(tr("msg_didnt_understand", lang), reply_markup=main_kb(lang, uid=uid))
         return
-    await state.clear()
     if not can_afford(uid, CREDIT_COSTS["image"]):
         await send_no_credits_notice(m, state, lang)
         return
+    await state.clear()
     ok, reason = start_job(uid)
     if not ok:
         await m.answer(reason)
@@ -10389,7 +10452,6 @@ async def pres_clarify_handler(m: Message, state: FSMContext):
     photo_mode = extract_photo_mode(reply_text) or data.get("photo_mode") or extract_photo_mode(topic) or "ai"
 
     if not can_afford(m.from_user.id, presentation_cost(slides, {**data, "theme_name": style})):
-        await state.clear()
         await send_no_credits_notice(m, state, lang)
         return
 
@@ -10577,7 +10639,7 @@ async def accept_miniapp_action(user, action, payload, request_id):
     return _aiohttp_web.json_response({"ok": True, "accepted": True}, status=202, headers=headers)
 
 
-async def create_yookassa_payment(uid: int, amount_rub: int, credits: int, payment_method: str | None = None) -> str | None:
+async def create_yookassa_payment(uid: int, amount_rub: int, credits: int, payment_method: str | None = None, *, request_id=None) -> str | None:
     """Создаёт платёж напрямую через API ЮKassa (не через Telegram Payments) - так
     доступны все включённые в личном кабинете способы оплаты, включая СБП, а не
     только карта/ЮMoney/SberPay из ограниченного протокола Telegram Bot Payments.
@@ -10607,6 +10669,8 @@ async def create_yookassa_payment(uid: int, amount_rub: int, credits: int, payme
             }],
         },
     }
+    if request_id:
+        payload['metadata']['studio_request'] = request_id
     if payment_method:
         payload["payment_method_data"] = {"type": payment_method}
     try:
@@ -10615,7 +10679,7 @@ async def create_yookassa_payment(uid: int, amount_rub: int, credits: int, payme
                 "https://api.yookassa.ru/v3/payments",
                 json=payload,
                 auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
-                headers={"Idempotence-Key": str(uuid.uuid4()), "Content-Type": "application/json"},
+                headers={"Idempotence-Key": hashlib.sha256(f'studio:{uid}:{request_id}'.encode()).hexdigest() if request_id else str(uuid.uuid4()), "Content-Type": "application/json"},
             )
             r.raise_for_status()
             return r.json().get("confirmation", {}).get("confirmation_url")
@@ -10695,6 +10759,10 @@ async def yookassa_webhook_handler(request):
                 u = get_user(uid)
                 from wallet import apply
                 apply(u, 'yookassa:'+payment_id, credits, 'Пополнение баланса', 'topup')
+                topup_id = (verified.get('metadata') or {}).get('studio_request')
+                topup = u.get('studio_topups', {}).get(topup_id)
+                if topup and topup['amount'] == credits:
+                    topup['paid'] = True
                 _processed_yookassa_payment_ids.add(payment_id)
                 credited = True
                 # Ждём реальной записи на диск: баланс и отметка о платеже уходят одним файлом,
@@ -10712,6 +10780,7 @@ async def yookassa_webhook_handler(request):
                 lang = user_lang(uid)
                 try:
                     await bot.send_message(uid, tr("msg_payment_success", lang, credits=credits, balance=u["credits"]))
+                    await chat_billing_flow.after_payment(globals(), uid)
                 except Exception as e:
                     print("Не удалось уведомить об оплате:", uid, e)
                 for admin_id in PAYMENT_NOTIFY_IDS:
@@ -10808,8 +10877,6 @@ async def studio_plan_preview(user, payload):
             'photo_album_only': False, 'pres_request_id': str(uuid.uuid4())}
     if designer and payload.get('palette') in PALETTES:
         data['studio_palette'] = payload['palette']
-    if not can_afford(uid, presentation_cost(data['slides'], data)):
-        raise _aiohttp_web.HTTPPaymentRequired(text='Недостаточно кредитов. Пополните баланс в профиле.')
     plan = await _create_presentation_plan(data, lang)
     data.update(pres_plan=plan, pres_plan_key=plan_key(data), sample=format_plan(plan, lang))
     colors = apply_design(THEMES.get(data['theme_name'], THEMES['default']), plan)
@@ -10828,7 +10895,7 @@ async def studio_submit_preview(user, data):
     journal = globals().get('_presentation_orders')
     pending = journal.get(uid, data, presentation_cost(data['slides'], data)).row.get('billing_pending') if journal else False
     if not pending and not can_afford(uid, presentation_cost(data['slides'], data)):
-        raise _aiohttp_web.HTTPPaymentRequired(text='Недостаточно кредитов. Пополните баланс в профиле.')
+        raise credit_shortage_error(presentation_cost(data['slides'], data), available_credits(uid))
     # Reserve the existing per-user Mini App slot before yielding. The builder
     # retains the shared generation limit, image checks and post-delivery billing.
     _miniapp_action_tasks[uid] = asyncio.create_task(run_studio_preview(user, data))
@@ -10900,7 +10967,8 @@ async def start_web_server():
                 "history": [str(h)[:200] for h in (u.get("history") or [])[-30:]],
                 "files": _file_library.public(user['id']),
                 "payments": [{k:v for k,v in r.items() if k in ("ts","credits","balance_after")} for r in legacy[:30]],
-                "transactions": public_history(u,legacy), "tariffs": public_tariffs()}
+                "transactions": public_history(u,legacy), "tariffs": public_tariffs(),
+                "available": available_credits(user['id']), "chat_allowance": chat_allowance.status(u)}
     async def studio_settings(user, values):
         u = miniapp_user_record(user)
         u['studio_ui_lang'] = values['ui_lang']
@@ -10916,9 +10984,9 @@ async def start_web_server():
         return _aiohttp_web.json_response(dict(ok=True,**public_history(get_user(user['id']),legacy,offset)),headers={'Cache-Control':'no-store'})
     app.router.add_get('/studio/transactions',studio_transactions)
     from constructor_billing import ConstructorBilling
-    constructor_billing = ConstructorBilling(get_user, save_users_now, start_job, finish_job, ADMIN_IDS)
+    constructor_billing = ConstructorBilling(get_user, save_users_now, start_job, finish_job, ADMIN_IDS, available=available_credits)
     studio = Studio(miniapp_verified_user, studio_send_file, studio_action, WEB_BASE_URL, billing=constructor_billing,
-           profile=studio_profile, settings=studio_settings, menu_action=accept_miniapp_action,
+           profile=studio_profile, settings=studio_settings, menu_action=accept_miniapp_action, available=available_credits,
            outline_planner=studio_plan_preview, outline_submit=studio_submit_preview, state_root=os.path.join(os.path.dirname(USERS_FILE), 'studio-state'), presentation_orders=_presentation_orders)
     from studio_word_runtime import attach as attach_studio_word
     word_service = attach_studio_word(studio, app, globals())
@@ -10926,6 +10994,8 @@ async def start_web_server():
     excel_service = attach_studio_excel(studio, app, globals())
     _file_library.attach(studio, app, bot)
     studio.register(app)
+    from studio_topup import attach as attach_topups
+    attach_topups(studio, app, globals())
     app.router.add_get("/", _health_handler)
     app.router.add_get("/health", _health_handler)
     app.router.add_get("/index.html", _miniapp_static_handler)
