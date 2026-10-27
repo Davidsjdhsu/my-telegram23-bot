@@ -1,4 +1,4 @@
-"""Allowlisted Mini App pilot. Paid constructor; no public feature switch."""
+"""Telegram-authenticated Mini App with reversible public rollout."""
 import asyncio
 import hashlib
 import json
@@ -25,21 +25,27 @@ def pilot_ids(extra):
 
 
 PILOT_UIDS = pilot_ids(os.getenv("STUDIO_ADDITIONAL_TESTER_IDS", ""))
-VERSION = "studio-mobile-pilot-3"
+PUBLIC_ACCESS = os.getenv("STUDIO_PUBLIC_ACCESS", "0").strip().lower() in {"1", "true", "yes"}
+VERSION = "studio-public-1"
+SESSION_CACHE_LIMIT = 2048
+SESSION_STORE_LIMIT = 4096
 COOKIE = "alix_studio"
 BASE = Path(__file__).resolve().parent
 
 
 def is_pilot_user(uid):
-    return type(uid) is int and uid in PILOT_UIDS
+    # Compatibility name used by existing menu/template integrations. This is
+    # access to Studio only: billing administrator privileges remain separate.
+    return type(uid) is int and uid > 0 and (PUBLIC_ACCESS or uid in PILOT_UIDS)
 
 
 def menu_url(base, uid, fallback):
-    return base.rstrip('/') + '/studio/' if is_pilot_user(uid) and base.startswith('https://') else fallback
+    enabled = is_pilot_user(uid) or (PUBLIC_ACCESS and uid is None)
+    return base.rstrip('/') + '/studio/' if enabled and base.startswith('https://') else fallback
 
 
 # Only the generic entry shell is public. Account data, forms, catalog and
-# generation endpoints retain the signed Telegram tester session requirement.
+# generation endpoints retain the signed Telegram session requirement.
 PUBLIC_SHELL = {
     'home/style.css', 'home/app.js', 'shared/mobile.css', 'shared/mobile.js',
     'templates/fonts.css', 'shared/preferences.js', 'shared/en.json', 'shared/billing.js', 'shared/billing.css',
@@ -90,7 +96,7 @@ class Studio:
                         self.sessions[token] = s
                 except (OSError, ValueError, KeyError, TypeError):
                     pass
-        if not s or s['expires'] < time.monotonic():
+        if not s or s['expires'] < time.monotonic() or not is_pilot_user(s['user'].get('id')):
             raise web.HTTPUnauthorized(text='Откройте «Меню» заново в Telegram.')
         return s
 
@@ -121,7 +127,7 @@ class Studio:
         init = body.get('initData', '')
         if not isinstance(init, str):
             raise web.HTTPForbidden()
-        # The shared verifier authenticates Telegram's signature; this pilot also
+        # The shared verifier authenticates Telegram's signature; Studio also
         # requires an explicit, recent auth_date (never trusts query user IDs).
         try:
             pairs = dict(parse_qsl(init, strict_parsing=True))
@@ -133,7 +139,7 @@ class Studio:
             raise web.HTTPForbidden()
         now = time.monotonic()
         self.sessions = {k: v for k, v in self.sessions.items() if v['expires'] > now}
-        if len(self.sessions) >= 16:
+        if len(self.sessions) >= SESSION_CACHE_LIMIT:
             self.sessions.pop(next(iter(self.sessions)))
         token = secrets.token_urlsafe(32)
         self.sessions[token] = {'expires': now + 7200, 'user': user}
@@ -144,7 +150,7 @@ class Studio:
             except (OSError, ValueError): saved = {}
             saved = {k:v for k,v in saved.items() if v['expires'] > time.time()}
             saved[hashlib.sha256(token.encode()).hexdigest()] = {'expires': time.time()+7200, 'user': user}
-            saved = dict(sorted(saved.items(), key=lambda item:item[1]['expires'])[-32:])
+            saved = dict(sorted(saved.items(), key=lambda item:item[1]['expires'])[-SESSION_STORE_LIMIT:])
             atomic(path, saved)
         response = web.json_response({'ok': True, 'version': VERSION}, headers={'Cache-Control':'no-store'})
         response.set_cookie(COOKIE, token, max_age=7200, secure=True, httponly=True, samesite='Strict', path='/studio/')
@@ -299,6 +305,16 @@ class Studio:
             self.busy = False
 
     def register(self, app):
+        # Existing per-chat menu buttons can retain the legacy /index.html URL.
+        # Redirect only the entry, preserving query parameters and Telegram's
+        # fragment (inherited by browsers across this relative redirect).
+        @web.middleware
+        async def public_entry(request, handler):
+            if PUBLIC_ACCESS and request.method in {'GET', 'HEAD'} and request.path == '/index.html':
+                target = '/studio/' + ('?' + request.query_string if request.query_string else '')
+                raise web.HTTPFound(location=target, headers={'Cache-Control': 'no-store'})
+            return await handler(request)
+        app.middlewares.append(public_entry)
         from studio_palette_preview import register as register_palette_preview
         register_palette_preview(self, app)
         if self.outline:
