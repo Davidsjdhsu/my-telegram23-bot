@@ -4937,9 +4937,9 @@ def word_kind_kb(category, more=False, lang="ru"):
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def word_size_kb(lang="ru", kind="doc", academic=False):
+def word_size_kb(lang="ru", kind="doc", academic=False, include_title=True):
     def label(pages):
-        text = f"Титульный + {pages} стр." if academic else f"{pages} стр."
+        text = f"Титульный + {pages} стр." if academic and include_title else f"{pages} стр."
         return f"{text} · {word_cost(pages)} кр."
     rows = [[KeyboardButton(text=label(a)), KeyboardButton(text=label(b))]
             for a, b in ((2, 4), (6, 8), (10, 15), (20, 30))]
@@ -6639,7 +6639,8 @@ def build_word(path, title, sections, kind="doc", meta=None, extra_data=None):
     from academic_templates import KINDS as ACADEMIC_KINDS, render as render_academic
     if kind in ACADEMIC_KINDS and extra_data.get("academic", True) and not extra_data.get("template"):
         return render_academic(path, title or "Документ", sections, kind, clean_word_meta(meta, kind),
-                               add_table=_add_table, requested_pages=extra_data.get("requested_pages"))
+                               add_table=_add_table, requested_pages=extra_data.get("requested_pages"),
+                               include_title=extra_data.get("include_title", True))
     meta = dict(meta or {}) if extra_data.get("template") else clean_word_meta(meta, kind)
     if extra_data.get("template"):
         meta["_template"] = True
@@ -7703,6 +7704,7 @@ async def excel_topic(m: Message, state: FSMContext):
     await state.update_data(excel_topic=m.text or "")
     if is_thin_input(m.text):
         await m.answer(tr("msg_thin_input", lang))
+    await state.update_data(price_version=PRICE_VERSION)
     await m.answer(tr("msg_build_table_q", lang) + f"\nСтоимость: {excel_price((await state.get_data()).get('excel_kind'))} кредитов.", reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
@@ -7713,6 +7715,7 @@ async def excel_data(m: Message, state: FSMContext):
     await state.update_data(excel_topic=m.text or "")
     if is_thin_input(m.text):
         await m.answer(tr("msg_thin_input", lang))
+    await state.update_data(price_version=PRICE_VERSION)
     await m.answer(tr("msg_build_table_q", lang) + f"\nСтоимость: {excel_price((await state.get_data()).get('excel_kind'))} кредитов.", reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
@@ -7723,6 +7726,7 @@ async def excel_startup_data(m: Message, state: FSMContext):
     await state.update_data(excel_topic=m.text or "")
     if is_thin_input(m.text):
         await m.answer(tr("msg_thin_input", lang))
+    await state.update_data(price_version=PRICE_VERSION)
     await m.answer(tr("msg_build_model_q", lang) + f"\nСтоимость: {excel_price('startup_model')} кредитов.", reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
@@ -7755,6 +7759,7 @@ async def excel_extra(m: Message, state: FSMContext):
     data = await state.get_data()
     extra = (data.get("extra", "") + "\n" + (m.text or "")).strip()
     await state.update_data(extra=extra)
+    await state.update_data(price_version=PRICE_VERSION)
     await m.answer(tr("msg_build_table_q", lang) + f"\nСтоимость: {excel_price((await state.get_data()).get('excel_kind'))} кредитов.", reply_markup=excel_confirm_kb(lang))
     await state.set_state(Form.waiting_excel_confirm)
 
@@ -8685,10 +8690,10 @@ async def word_after_input(m: Message, state: FSMContext):
         data = await state.get_data()
         await word_build_draft(m, state, data, "short")
         return
-    from academic_templates import KINDS as ACADEMIC_KINDS, volume_hint
+    from academic_templates import KINDS as ACADEMIC_KINDS, volume_hint, wants_title_page
     academic = kind in ACADEMIC_KINDS and (content_gen_lang(data, lang) or "ru") == "ru"
-    await m.answer(volume_hint(kind) if academic else tr("msg_which_size", lang),
-                   reply_markup=word_size_kb(lang, kind, academic))
+    await m.answer(volume_hint(kind, wants_title_page(data)) if academic else tr("msg_which_size", lang),
+                   reply_markup=word_size_kb(lang, kind, academic, wants_title_page(data)))
     await state.set_state(Form.waiting_word_size)
 
 
@@ -8741,13 +8746,15 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
     }
     kind = data.get("word_kind", "doc")
     kind_name = WORD_KIND_DESC.get(kind, "документ")
-    from academic_templates import KINDS as ACADEMIC_KINDS, guidance as academic_guidance
+    from academic_templates import KINDS as ACADEMIC_KINDS, guidance as academic_guidance, wants_title_page
+    include_title = wants_title_page(data)
     academic = kind in ACADEMIC_KINDS and (content_gen_lang(data, lang) or "ru") == "ru"
     if academic:
         from academic_templates import page_guidance, volume_label
-        kind_name = WORD_KIND_LABELS[kind]["ru"] + academic_guidance(kind)
-        size_map[size] = page_guidance(kind, pages)
-        await m.answer(volume_label(kind, pages) + f". Стоимость — {word_cost(pages, kind)} кредитов; титульный и оглавление без доплаты.")
+        kind_name = WORD_KIND_LABELS[kind]["ru"] + academic_guidance(kind, include_title)
+        size_map[size] = page_guidance(kind, pages, include_title)
+        await m.answer(volume_label(kind, pages, include_title) + f". Стоимость — {word_cost(pages, kind)} кредитов."
+                       + (" Титульный и оглавление без доплаты." if include_title else " Без титульного листа."))
     lang_instr = grok_lang_instruction(content_gen_lang(data, lang) or "ru")
     prompt = f"""Собери черновик-план (не полный текст): {kind_name}.
 Тема/данные: {data.get('topic')}
@@ -8767,7 +8774,7 @@ async def word_build_draft(m: Message, state: FSMContext, data: dict, size: str)
     if grok_failed(sample):
         await m.answer(
             tr("msg_grok_error", lang),
-            reply_markup=word_size_kb(lang, kind, academic) if kind in WORD_PAGE_CHOICE_KINDS else word_confirm_kb(lang)
+            reply_markup=word_size_kb(lang, kind, academic, include_title) if kind in WORD_PAGE_CHOICE_KINDS else word_confirm_kb(lang)
         )
         return
     await state.update_data(sample=sample)
@@ -9053,15 +9060,16 @@ async def word_build(m: Message, state: FSMContext, quality_action=None, studio_
                 "сравнение без вымышленных цифр. Учебные расчёты на условных данных допустимы только с явной "
                 "подписью «Условный пример, не результаты исследования». Не выдавай выдуманный опрос за реальный."
             )
-        from academic_templates import KINDS as ACADEMIC_KINDS, guidance as academic_guidance, META_LABELS
+        from academic_templates import KINDS as ACADEMIC_KINDS, guidance as academic_guidance, META_LABELS, wants_title_page
+        include_title = wants_title_page(data)
         academic = kind in ACADEMIC_KINDS and (studio_job is not None or (content_gen_lang(data, lang) or "ru") == "ru")
         from academic_reference import reference_guidance
         topic_reference_hint = reference_guidance(data) if academic else ""
         if academic:
-            structure_hint = academic_guidance(kind)
+            structure_hint = academic_guidance(kind, include_title)
             from academic_templates import page_guidance
-            length_hint = page_guidance(kind, pages)
-            size_map[size] = f"{pages} страниц основного текста, титульный и оглавление отдельно"
+            length_hint = page_guidance(kind, pages, include_title)
+            size_map[size] = length_hint
             meta_schema = json.dumps({key: "" for key in META_LABELS}, ensure_ascii=False)
             kind_name = WORD_KIND_LABELS[kind]["ru"]
         # Схема примера JSON в конце промпта - для резюме отдельная (с skills/languages
@@ -9142,14 +9150,14 @@ async def word_build(m: Message, state: FSMContext, quality_action=None, studio_
                 await run_heavy(build_word, path, value.get("title", "Документ"),
                     value.get("sections", []), kind, value.get("meta") or {},
                     extra_data={"skills": value.get("skills"), "languages": value.get("languages"),
-                                "academic": academic, "requested_pages": pages})
+                                "academic": academic, "requested_pages": pages, "include_title": include_title})
 
             async def expand_content(value, actual, requested, findings):
                 await m.answer(word_revision_notice(lang))
                 needs_depth = actual <= requested and (findings['short_pages'] or findings['sparse_last_page']
                                                        or findings['sparse_body_pages'])
                 from academic_templates import front_matter_pages
-                front = front_matter_pages(kind) if academic else 0
+                front = front_matter_pages(kind, include_title) if academic else 0
                 target = expansion_word_target(value, actual, requested, front_matter_pages=front,
                                                layout=findings) if needs_depth or findings['excess_pages'] else sum(
                     len((s.get('content') or '').split()) for s in value.get('sections', []))
@@ -9161,7 +9169,7 @@ async def word_build(m: Message, state: FSMContext, quality_action=None, studio_
                     if not targets:
                         return value
                     growth_prompt = f"""Дополни сохранённую учебную работу после редакторской проверки.
-Жанр: {kind_name}. {academic_guidance(kind)}
+Жанр: {kind_name}. {academic_guidance(kind, include_title)}
 {topic_reference_hint}
 Задача: {data.get('topic') or ''}
 Текст и требования пользователя: {data.get('user_text') or ''}\n{data.get('extra') or ''}
@@ -9197,7 +9205,7 @@ section_index — index из задания, after_paragraph — номер су
                     selected = [{**value['sections'][t['index']], 'index': t['index'],
                                  'target_words': t['target_words']} for t in targets]
                     focused_prompt = f"""Доработай только указанные разделы сохранённого документа.
-    Жанр: {kind_name}. {academic_guidance(kind)}
+    Жанр: {kind_name}. {academic_guidance(kind, include_title)}
     {topic_reference_hint}
     Задача пользователя: {data.get('topic') or ''}
     Дополнительные данные: {data.get('user_text') or ''}\n{data.get('extra') or ''}
@@ -9217,7 +9225,7 @@ section_index — index из задания, after_paragraph — номер су
                         temperature=0.2))
                     return apply_word_section_patch(value, patch, targets)
                 prompt = f"""Отредактируй документ за один проход, объединив все замечания.
-    Жанр: {kind_name}. {academic_guidance(kind) if academic else ""}
+    Жанр: {kind_name}. {academic_guidance(kind, include_title) if academic else ""}
     {topic_reference_hint}
     Сейчас {actual} стр., выбрано {requested}; диагностические признаки: {json.dumps(findings, ensure_ascii=False)}.
     {'Нужно раскрыть тему глубже: содержательные страницы недозаполнены или страниц недостаточно. Дополни основную часть пояснениями условий, отличий и практическим примером с объяснением выбора.' if needs_depth else 'Не увеличивай объём. Убери повторы и общие фразы, сохрани существенные объяснения. Исправь длинные абзацы и проверь категоричные утверждения.'}
@@ -9246,9 +9254,9 @@ section_index — index из задания, after_paragraph — номер су
                     system_prompt=WORD_REVIEW_SYSTEM, temperature=0.15))
 
             from academic_templates import inspect_layout as academic_inspect_layout, front_matter_pages, delivery_notice
-            front_pages = front_matter_pages(kind) if academic else 0
+            front_pages = front_matter_pages(kind, include_title) if academic else 0
             requested_total = pages + front_pages
-            inspect_pages = (lambda path: academic_inspect_layout(path, kind)) if academic else word_pdf_layout
+            inspect_pages = (lambda path: academic_inspect_layout(path, kind, include_title)) if academic else word_pdf_layout
             content, actual_pages = await prepare_word_files(content, requested_total, docx_path, pdf_path,
                 build=render_content, convert=convert_word_pdf,
                 expand=expand_content if kind in INFORMATIONAL_WORD_KINDS and quality_action != "accept" else None,
@@ -9282,7 +9290,7 @@ section_index — index из задания, after_paragraph — номер су
                 await m.answer("Недостаточно кредитов для выдачи документа. Пополни баланс и повтори получение.")
                 return
             if academic:
-                await m.answer(delivery_notice(kind, pages, actual_body_pages, actual_pages, word_cost(charged_pages, kind)))
+                await m.answer(delivery_notice(kind, pages, actual_body_pages, actual_pages, word_cost(charged_pages, kind), include_title))
             elif actual_pages != pages:
                 await m.answer(word_page_notice(lang, pages, actual_pages, word_cost(charged_pages, kind)))
 
@@ -9631,7 +9639,7 @@ async def advance_document_intake(m, state, draft, lang):
     palette = palette if style=='designer' else 'green'
     protect = bool(re.search(r'(?<!не )защити\w*\s+формул',text,re.I))
     await state.update_data(document_intake=None, excel_kind=kind, excel_topic=text, extra='', excel_mode=mode,
-        excel_style=style, excel_palette=palette, excel_protect=protect, content_lang=lang)
+        excel_style=style, excel_palette=palette, excel_protect=protect, content_lang=lang, price_version=PRICE_VERSION)
     await state.set_state(Form.waiting_excel_confirm)
     await m.answer(
         f'План таблицы: {EXCEL_KIND_DESC.get(kind,"таблица")}.\n'
@@ -10111,7 +10119,8 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
         kind_name = WORD_KIND_DESC.get(kind, "документ")
         meta_schema = META_SCHEMAS.get(kind, META_SCHEMAS["doc"])
         meta_schema = word_generation_schema(kind, meta_schema)
-        from academic_templates import guidance as academic_guidance, KINDS as ACADEMIC_KINDS, META_LABELS, page_guidance
+        from academic_templates import guidance as academic_guidance, KINDS as ACADEMIC_KINDS, META_LABELS, page_guidance, wants_title_page
+        include_title = wants_title_page({"extra": instruction})
         academic = kind in ACADEMIC_KINDS and lang == "ru"
         if academic:
             meta_schema = json.dumps({key: "" for key in META_LABELS}, ensure_ascii=False)
@@ -10126,7 +10135,7 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
     Не выдумывай факты, которых нет в материале и не следуют из него логично.
     Неизвестные необязательные поля meta оставь пустыми, без заглушек.
     {WORD_EDITORIAL_GUIDANCE}
-    {academic_guidance(kind) + page_guidance(kind, pages) if academic else ""}
+    {academic_guidance(kind, include_title) + page_guidance(kind, pages, include_title) if academic else ""}
     Только JSON:
     {{"title":"...","meta":{meta_schema},"sections":[{{"title":"Введение","content":"абзац1\\n\\nабзац2"}},{{"title":"...","content":"..."}}]}}{lang_instr}""",
             max_tokens=8000, system_prompt=WORD_SYSTEM, temperature=0.25)
@@ -10147,7 +10156,7 @@ async def build_word_from_upload(m: Message, state: FSMContext, source_text: str
         u = get_user(uid)
         docx_path = f"/tmp/upload_result_{uid}_{random.randint(1000, 9999)}.docx"
         try:
-            (await run_heavy(build_word, docx_path, content.get("title") or kind_name, content["sections"], kind, content.get("meta") or {}, extra_data={"academic": academic, "requested_pages": pages}))
+            (await run_heavy(build_word, docx_path, content.get("title") or kind_name, content["sections"], kind, content.get("meta") or {}, extra_data={"academic": academic, "requested_pages": pages, "include_title": include_title}))
             fname = safe_filename(content.get("title"), fallback=kind_name)
             await m.answer_document(FSInputFile(docx_path, filename=f"{fname}.docx"), caption=tr("msg_word_caption", lang))
             u["generations"] += 1
