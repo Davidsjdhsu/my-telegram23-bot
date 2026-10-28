@@ -81,3 +81,6 @@
 @media(max-width:740px){.studio-editor footer{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 10px}.studio-editor footer>span:nth-of-type(2){display:none}.studio-editor footer #status{font-size:11px;line-height:1.4;min-width:0}.studio-editor footer #open-ready:not([hidden]){grid-column:1/-1}}
 
 #import-dialog{max-width:560px;width:calc(100% - 32px);max-height:80dvh;overflow:auto;background:#1a1b20;color:#e8e2d8;border:1px solid #9f895e;border-radius:20px;padding:22px}#import-dialog p,#import-dialog li{line-height:1.5}#import-warnings{padding-left:22px;color:#ddbd8d}#import-dialog::backdrop{background:#000a}
+
+/* Keep slide deletion reachable in the compact Mini App editor. */
+@media(max-width:740px){.studio-editor .slide-actions{display:flex;flex:none;margin:0}.studio-editor .slide-actions button:not(#delete-slide){display:none}.studio-editor #delete-slide{flex:none;min-height:44px;padding:8px;font-size:12px;white-space:nowrap}.studio-editor #add-slide{min-height:44px}}
