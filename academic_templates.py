@@ -59,6 +59,17 @@ TITLE_FIELDS_BY_KIND = {
 LEAVE_TITLE_BLANKS = 'Оставить пустые поля'
 
 
+def wants_title_page(data):
+    """Honor explicit formatting instructions; later clarifications take precedence."""
+    source = '\n'.join(str(data.get(k) or '') for k in ('topic', 'user_text', 'extra'))
+    title = r'(?:титульн\w*(?:\s+лист\w*)?|title\s+page|cover\s+page)'
+    negative = rf'(?:без\s+|не\s+(?:нужен|нужна|нужно|добавляй|делай|создавай)\s+|убери\s+|without\s+(?:a\s+)?|no\s+){title}|{title}\s+не\s+(?:нужен|нужна|нужно)'
+    positive = rf'(?<!не )\bс\s+{title}|(?:добавь|включи|include|add)\s+(?:a\s+)?{title}'
+    choices = [(m.start(), False) for m in re.finditer(negative, source, re.I)]
+    choices += [(m.start(), True) for m in re.finditer(positive, source, re.I)]
+    return max(choices)[1] if choices else True
+
+
 def request_meta(data):
     return explicit_meta({}, '\n'.join(str(data.get(k) or '') for k in ('topic', 'user_text', 'extra')))
 
@@ -71,6 +82,8 @@ def title_request_key(data):
 
 
 def missing_title_fields(data):
+    if not wants_title_page(data):
+        return []
     meta = request_meta(data)
     return [key for key in TITLE_FIELDS_BY_KIND.get(data.get('word_kind'), TITLE_FIELDS)
             if not meta.get(key)]
@@ -107,7 +120,7 @@ def explicit_meta(meta, source):
     return result
 
 
-def guidance(kind):
+def guidance(kind, include_title=True):
     if kind not in KINDS:
         return ''
     common = ('\nУчебная структура: титульный лист, оглавление и номера страниц создаёт программа. '
@@ -116,6 +129,9 @@ def guidance(kind):
               'подписи, результаты экспериментов, источники или цитаты. Не требуй определённого числа источников: '
               'в список включай только источники, предоставленные пользователем или проверенные по доступному тексту. '
               'При отсутствии источников не создавай фиктивную библиографию. ')
+    if not include_title:
+        common = common.replace('титульный лист, оглавление и номера страниц создаёт программа',
+                                'титульный лист НЕ нужен; оглавление по жанру и номера страниц создаёт программа')
     return common + {
         'referat':'Разделы: Введение (цель и задачи), 2–3 тематических раздела, Заключение, источники при наличии. Главы обозначай 1, 2, подразделы 1.1, 1.2. Введение и заключение не нумеруй.',
         'coursework':'Разделы: Введение (проблема, цель, задачи, объект и предмет), теоретическая глава, практическая/аналитическая глава, Заключение, источники при наличии. Главы 1, 2; подразделы 1.1, 1.2. Никаких вымышленных результатов исследования; если данных нет, опиши методику предполагаемого исследования.',
@@ -315,39 +331,43 @@ def _level(title):
     return 2 if re.match(r'^\d+\.\d+',title) else 1
 
 
-def front_matter_pages(kind):
-    return 2 if kind in ('referat', 'coursework') else 1 if kind in KINDS else 0
+def front_matter_pages(kind, include_title=True):
+    return int(kind in KINDS and include_title) + int(kind in ('referat', 'coursework'))
 
 
-def volume_label(kind, pages):
+def volume_label(kind, pages, include_title=True):
     """Selected pages always mean body pages; front matter is additional and free."""
-    prefix = 'Титульный + оглавление + ' if kind in ('referat', 'coursework') else 'Титульный + '
+    prefix = ('Титульный + ' if include_title else '') + ('оглавление + ' if kind in ('referat', 'coursework') else '')
     return prefix + f'{pages} стр. текста'
 
 
-def volume_hint(kind):
+def volume_hint(kind, include_title=True):
+    if not include_title:
+        return 'Выбери число страниц основного текста. Документ будет без титульного листа.'
     extra = ' и оглавление' if kind in ('referat', 'coursework') else ''
     return (f'Выбери число страниц основного текста. Титульный лист{extra} — отдельно, '
             'без доплаты. Данные для титульного можно указать вместе с темой: '
             'учебное заведение, дисциплина, ФИО, группа, преподаватель, город и год.')
 
 
-def delivery_notice(kind, requested, actual, total, credits):
-    return (f'В документе: {volume_label(kind, actual)}. Всего в файле {total} стр.\n'
+def delivery_notice(kind, requested, actual, total, credits, include_title=True):
+    return (f'В документе: {volume_label(kind, actual, include_title)}. Всего в файле {total} стр.\n'
             + (f'Было выбрано {requested} стр. текста; фактически получилось {actual}.\n'
                if actual != requested else '')
-            + f'Стоимость — {credits} кредитов. Титульный лист и оглавление без доплаты; '
-              'дополнительные страницы текста не увеличивают цену.')
+            + f'Стоимость — {credits} кредитов. '
+            + ('Титульный лист и оглавление без доплаты; ' if include_title else 'Документ без титульного листа; ')
+            + 'дополнительные страницы текста не увеличивают цену.')
 
 
-def page_guidance(kind, pages):
-    front = front_matter_pages(kind)
+def page_guidance(kind, pages, include_title=True):
+    front = front_matter_pages(kind, include_title)
     body = max(1, pages)
     words_per_page = 250 if kind == 'essay' else 220 if kind == 'notes' else 200
     compact = kind == 'referat' and pages <= 10
+    front_label = 'титульный лист и оглавление по жанру' if include_title else 'оглавление по жанру, без титульного листа'
     return (
         f'\nВыбранный объём — {body} страниц основного текста. Дополнительно программа создаст '
-        f'{front} служебных стр. (титульный лист и оглавление по жанру); они НЕ входят в выбранный объём. '
+        f'{front} служебных стр. ({front_label}); они НЕ входят в выбранный объём. '
         f'Ожидаемый общий объём — {body + front} стр. На основной текст — {body} страниц, '
         f'ориентир {body * words_per_page} слов, включая таблицы, без реквизитов и оглавления. '
         'До ответа посчитай слова по разделам. Распредели объём между содержательными вопросами; '
@@ -359,15 +379,15 @@ def page_guidance(kind, pages):
     )
 
 
-def inspect_layout(path, kind):
+def inspect_layout(path, kind, include_title=True):
     from word_quality import word_pdf_layout
-    return word_pdf_layout(path, front_matter_pages=front_matter_pages(kind))
+    return word_pdf_layout(path, front_matter_pages=front_matter_pages(kind, include_title))
 
 
-def render(path, title, sections, kind, meta=None, add_table=None, requested_pages=None):
+def render(path, title, sections, kind, meta=None, add_table=None, requested_pages=None, include_title=True):
     if kind not in KINDS: raise ValueError('unknown_academic_kind')
     meta={k:str(v) for k,v in (meta or {}).items() if isinstance(v,(str,int)) and v}
-    covered=kind in KINDS
+    covered=bool(include_title)
     # The genre is already printed by the cover. Strip only the redundant
     # generated prefix, preserving the substantive topic and all user fields.
     title = re.sub(r'^\s*(?:Конспект|Реферат|Эссе|Доклад|Курсовая работа)\s+(?:по теме|на тему)\s*[:—-]?\s*',
@@ -388,7 +408,7 @@ def render(path, title, sections, kind, meta=None, add_table=None, requested_pag
     compact = kind == 'referat' and requested_pages is not None and requested_pages <= 10
     if toc:
         p=d.add_paragraph('ОГЛАВЛЕНИЕ');p.alignment=WD_ALIGN_PARAGRAPH.CENTER
-        p.paragraph_format.page_break_before = True
+        p.paragraph_format.page_break_before = covered
         p.paragraph_format.first_line_indent=Cm(0);p.paragraph_format.space_after=Pt(14)
         p.runs[0].bold=True
         for i,b in enumerate(blocks):
